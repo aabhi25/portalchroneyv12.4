@@ -3,6 +3,12 @@ import OpenAI from 'openai';
 import { toFile } from 'openai';
 import { GoogleGenAI } from '@google/genai';
 
+/**
+ * The OpenAI image model for Virtual Try-On and Vista Studio. OpenAI retires these models now and
+ * then (gpt-image-1 stopped on 23 Oct 2026): change it here, or set OPENAI_IMAGE_MODEL on the server.
+ */
+export const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL?.trim() || 'gpt-image-2.5-sunburst';
+
 export interface ImageGenerationResult {
   imageBuffer: Buffer;
   dataUrl: string;
@@ -33,19 +39,19 @@ export class OpenAIImageProvider implements ImageGenerationProvider {
     prompt: string,
     size: number = 1024
   ): Promise<ImageGenerationResult> {
-    console.log('[Vista Studio] Using OpenAI DALL-E (gpt-image-1)');
+    console.log(`[Vista Studio] Using OpenAI ${OPENAI_IMAGE_MODEL}`);
 
     const imageFile = await toFile(imageBuffer, 'jewelry.png', { type: 'image/png' });
 
     const response = await this.client.images.edit({
-      model: 'gpt-image-1',
+      model: OPENAI_IMAGE_MODEL,
       image: imageFile,
       prompt: prompt,
       size: '1024x1024',
     });
 
     if (!response.data || response.data.length === 0) {
-      throw new Error('No image returned from DALL-E');
+      throw new Error(`No image returned from ${OPENAI_IMAGE_MODEL}`);
     }
 
     const generatedImageData = response.data[0];
@@ -58,7 +64,7 @@ export class OpenAIImageProvider implements ImageGenerationProvider {
       const arrayBuffer = await imageResponse.arrayBuffer();
       finalBuffer = Buffer.from(arrayBuffer);
     } else {
-      throw new Error('No image data in DALL-E response');
+      throw new Error(`No image data in ${OPENAI_IMAGE_MODEL} response`);
     }
 
     const dataUrl = `data:image/png;base64,${finalBuffer.toString('base64')}`;

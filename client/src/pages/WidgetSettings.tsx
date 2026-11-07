@@ -4978,8 +4978,8 @@ export default function WidgetSettings({ initialTab = "appearance" }: { initialT
                   {tryOnEnabled && (
                     <CardContent className="border-t bg-pink-50/30 pt-4">
                       <p className="text-sm text-gray-600">
-                        Customers can upload a selfie and see AI-generated previews of jewelry on themselves. 
-                        Requires Nano Banana Pro API key configured in SuperAdmin settings.
+                        Customers can upload a photo and see an AI preview of the product on themselves.
+                        It uses the image provider and key set for this account in AI &amp; keys.
                       </p>
                     </CardContent>
                   )}

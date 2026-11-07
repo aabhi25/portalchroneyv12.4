@@ -139,6 +139,7 @@ import { createMetaWebhookSignatureGuard, describeMetaWebhookSignature, timingSa
 import { validatePhoneNumber } from "@shared/validation/phone";
 import { MAX_IMPORT_ROWS, normalizeColumnKeys } from "@shared/contactImport";
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
+import { friendlyTryOnError, generateOpenAiTryOn, tryOnPromptFor } from "./services/tryOn";
 import { runWithContext } from "./lib/requestContext";
 import { trackTimer, onShutdown } from "./lib/lifecycle";
 
@@ -21516,139 +21517,6 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
     },
   });
 
-  async function performOpenAITryOn(
-    openaiKey: string,
-    selfieBuffer: Buffer,
-    productBuffer: Buffer,
-    tryOnPrompt: string
-  ): Promise<string> {
-    const { toFile } = await import('openai');
-    const sharpModule = (await import('sharp')).default;
-
-    const MAX_DIM = 1024;
-    const resizedSelfie = await sharpModule(selfieBuffer)
-      .resize({ width: MAX_DIM, height: MAX_DIM, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toBuffer();
-    const resizedProduct = await sharpModule(productBuffer)
-      .resize({ width: MAX_DIM, height: MAX_DIM, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toBuffer();
-
-    console.log(`[Try-On][OpenAI] Selfie: ${(resizedSelfie.length / 1024).toFixed(1)} KB | Product: ${(resizedProduct.length / 1024).toFixed(1)} KB (resized to max ${MAX_DIM}px)`);
-
-    const client = createOpenAI({ apiKey: openaiKey, timeout: 120000 });
-    const tryOnStartTime = Date.now();
-
-    try {
-      console.log('[Try-On][OpenAI] Trying Responses API with 2 separate images | start time:', new Date().toISOString());
-
-      const selfieB64 = `data:image/jpeg;base64,${resizedSelfie.toString('base64')}`;
-      const productB64 = `data:image/jpeg;base64,${resizedProduct.toString('base64')}`;
-      const augmentedPrompt = `The first image is a photo of a person. The second image is a product item. ${tryOnPrompt}`;
-
-      const response = await client.responses.create({
-        model: 'gpt-image-1',
-        input: [
-          {
-            role: 'user',
-            content: [
-              { type: 'input_image', image_url: selfieB64, detail: 'high' },
-              { type: 'input_image', image_url: productB64, detail: 'high' },
-              { type: 'input_text', text: augmentedPrompt },
-            ],
-          },
-        ],
-        tools: [{ type: 'image_generation', quality: 'high', size: '1024x1024' }],
-      });
-
-      const elapsed = ((Date.now() - tryOnStartTime) / 1000).toFixed(1);
-      console.log(`[Try-On][OpenAI] Responses API succeeded in ${elapsed}s`);
-
-      const imageOutput = response.output.find(
-        (item: any) => item.type === 'image_generation_call' && item.result
-      );
-
-      if (!imageOutput || !(imageOutput as any).result) {
-        const outputTypes = response.output.map((item: any) => item.type);
-        console.error(`[Try-On][OpenAI] No image in Responses API output. Types: ${JSON.stringify(outputTypes)}`);
-        throw new Error('No image returned from Responses API');
-      }
-
-      const b64Image = (imageOutput as any).result;
-      const resultBuffer = Buffer.from(b64Image, 'base64');
-      return `data:image/png;base64,${resultBuffer.toString('base64')}`;
-
-    } catch (responsesErr: any) {
-      const errMsg = responsesErr?.message || '';
-      const isUnsupported = errMsg.includes('not supported') || responsesErr?.status === 400;
-
-      if (!isUnsupported) {
-        throw responsesErr;
-      }
-
-      console.log(`[Try-On][OpenAI] Responses API not supported for this key, falling back to images.edit composite approach`);
-
-      const selfiePng = await sharpModule(resizedSelfie).png().toBuffer();
-      const productPng = await sharpModule(resizedProduct).png().toBuffer();
-      const [selfieMeta, productMeta] = await Promise.all([
-        sharpModule(selfiePng).metadata(),
-        sharpModule(productPng).metadata(),
-      ]);
-
-      const targetH = Math.max(selfieMeta.height || 512, productMeta.height || 512);
-      const totalW = (selfieMeta.width || 512) + (productMeta.width || 512);
-
-      const compositeImage = await sharpModule({
-        create: { width: totalW, height: targetH, channels: 4 as const, background: { r: 255, g: 255, b: 255, alpha: 1 } },
-      })
-        .composite([
-          { input: selfiePng, left: 0, top: 0 },
-          { input: productPng, left: selfieMeta.width || 512, top: 0 },
-        ])
-        .png()
-        .toBuffer();
-
-      console.log(`[Try-On][OpenAI] Composite image: ${totalW}x${targetH} | ${(compositeImage.length / 1024).toFixed(1)} KB`);
-
-      const imageFile = await toFile(compositeImage, 'tryon_input.png', { type: 'image/png' });
-      const compositePrompt = `This image contains two photos side by side. The LEFT photo is a person (selfie). The RIGHT photo is a product/jewelry item. ${tryOnPrompt}`;
-
-      console.log('[Try-On][OpenAI] Calling gpt-image-1 via images.edit | start time:', new Date().toISOString());
-
-      const response = await client.images.edit({
-        model: 'gpt-image-1',
-        image: imageFile,
-        prompt: compositePrompt,
-        size: '1024x1024',
-      });
-
-      const elapsed = ((Date.now() - tryOnStartTime) / 1000).toFixed(1);
-      console.log(`[Try-On][OpenAI] images.edit responded in ${elapsed}s`);
-
-      if (!response.data || response.data.length === 0) {
-        throw new Error('No image returned from OpenAI gpt-image-1 images.edit');
-      }
-
-      const generatedData = response.data[0];
-      let resultBuffer: Buffer;
-
-      if (generatedData.b64_json) {
-        resultBuffer = Buffer.from(generatedData.b64_json, 'base64');
-      } else if (generatedData.url) {
-        const imgResp = await fetchWithTimeout(generatedData.url, undefined, LONG_FETCH_TIMEOUT_MS);
-        if (!imgResp.ok) {
-          throw new Error(`Failed to fetch generated image from URL (status ${imgResp.status})`);
-        }
-        resultBuffer = Buffer.from(await imgResp.arrayBuffer());
-      } else {
-        throw new Error('No image data in OpenAI images.edit response');
-      }
-
-      return `data:image/png;base64,${resultBuffer.toString('base64')}`;
-    }
-  }
-
   // Virtual Try-On endpoint - user uploads selfie + product image, AI generates try-on preview
   app.post("/api/chat/widget/try-on", upload.fields([
     { name: 'selfie', maxCount: 1 },
@@ -21676,7 +21544,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
 
       const widgetSettings = await storage.getWidgetSettings(businessAccountId);
       if (widgetSettings?.tryOnEnabled !== 'true') {
-        return res.status(403).json({ error: "Virtual try-on is not enabled for this business" });
+        return res.status(403).json({ error: "Try-on isn't available for this store." });
       }
 
       provider = (businessAccount.vistaImageProvider as 'openai' | 'google') || 'google';
@@ -21722,9 +21590,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
 
       if (!apiKey) {
         console.error(`[Try-On] No API key found for provider: ${provider} — checked business-account, master-settings, env-var`);
-        return res.status(400).json({ 
-          error: `${provider === 'google' ? 'Google Nano Banana Pro' : 'OpenAI'} API key is required for Try-On feature. Please configure it in settings.` 
-        });
+        return res.status(400).json({ error: friendlyTryOnError(null) });
       }
 
       console.log(`[Try-On] API key resolved from: ${apiKeySource} | provider: ${provider} | key length: ${apiKey.length}`);
@@ -21767,7 +21633,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         // Fetch product image from URL
         const productFetchResponse = await fetchWithTimeout(productImageUrl, undefined, LONG_FETCH_TIMEOUT_MS);
         if (!productFetchResponse.ok) {
-          return res.status(400).json({ error: "Failed to fetch product image" });
+          return res.status(400).json({ error: "We couldn't load this product's picture. Please try again." });
         }
         const contentType = productFetchResponse.headers.get('content-type');
         const arrayBuffer = await productFetchResponse.arrayBuffer();
@@ -21854,58 +21720,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
 
       console.log(`[Try-On] Final product type for prompt: ${jewelryType}`);
       
-      if (jewelryType.includes('necklace') || jewelryType.includes('chain') || jewelryType.includes('pendant')) {
-        tryOnPrompt = `Take the person in the first image and show them wearing the jewelry from the second image. 
-Place the necklace/pendant naturally around their neck, ensuring:
-- The necklace drapes realistically on their chest/neckline
-- The size and proportion match their body
-- The lighting on the jewelry matches the person's lighting
-- The jewelry's reflections and shadows look natural
-- Preserve the exact design of the jewelry without modification
-- Preserve the person's face, clothing, and background exactly as they appear`;
-      } else if (jewelryType.includes('earring')) {
-        tryOnPrompt = `Take the person in the first image and show them wearing the earrings from the second image.
-Place the earrings naturally on their ears, ensuring:
-- The earrings hang or attach to the ears realistically
-- The size and proportion match their face
-- The lighting on the earrings matches the person's lighting
-- Preserve the exact design of the earrings without modification
-- Preserve the person's face, hairstyle, and background exactly`;
-      } else if (jewelryType.includes('ring')) {
-        tryOnPrompt = `Take the person in the first image and show them wearing the ring from the second image.
-Place the ring naturally on their finger, ensuring:
-- The ring fits realistically on an appropriate finger
-- The size looks proportional to their hand
-- The lighting and reflections look natural
-- Preserve the exact design of the ring without modification
-- Preserve the rest of the image exactly`;
-      } else if (jewelryType.includes('bangle') || jewelryType.includes('bracelet')) {
-        tryOnPrompt = `Take the person in the first image and show them wearing the bangle/bracelet from the second image.
-Place the jewelry naturally on their wrist, ensuring:
-- The bangle/bracelet fits realistically around their wrist
-- The size looks proportional
-- The lighting and reflections look natural
-- Preserve the exact design of the jewelry without modification
-- Preserve the rest of the image exactly`;
-      } else {
-        // Generic jewelry/clothing try-on
-        tryOnPrompt = `Take the person from the first image and realistically apply the ${jewelryType} from the second image onto the correct anatomical position.
-
-Strict Requirements:
-- Detect the correct body region for ${jewelryType}.
-- Align the item according to body pose and perspective.
-- Adjust scale proportionally to the person's body dimensions.
-- Match lighting direction, intensity, and shadow softness.
-- Blend edges naturally with skin or clothing.
-- Apply realistic occlusion (hair, sleeves, folds).
-- Preserve the exact product design, texture, logo, and color without modification.
-- Do not change the person's face, expression, body shape, or background.
-- Ensure photorealistic output with no floating artifacts.`;
-      }
-
-      // Import and use the image provider
-      const { createImageProvider } = await import('./services/imageGenerationProviders');
-      const imageProvider = createImageProvider(provider, apiKey);
+      tryOnPrompt = tryOnPromptFor(jewelryType);
 
       // For multi-image prompts with Google, we need to modify the approach
       if (provider === 'google') {
@@ -22009,8 +21824,7 @@ Strict Requirements:
         });
 
       } else {
-        // OpenAI approach - use image editing with gpt-image-1
-        const openaiResult = await performOpenAITryOn(apiKey, selfieBuffer, productBuffer, tryOnPrompt);
+        const openaiResult = await generateOpenAiTryOn(apiKey, selfieBuffer, productBuffer, tryOnPrompt);
         console.log('[Try-On] Successfully generated try-on image via OpenAI');
         return res.json({
           success: true,
@@ -22052,7 +21866,7 @@ Strict Requirements:
           }
 
           console.log(`[Try-On] Fallback OpenAI key found (length: ${fallbackKey.length})`);
-          const fallbackResult = await performOpenAITryOn(fallbackKey, selfieBuffer, productBuffer, tryOnPrompt);
+          const fallbackResult = await generateOpenAiTryOn(fallbackKey, selfieBuffer, productBuffer, tryOnPrompt);
           console.log('[Try-On] Successfully generated try-on image via OpenAI fallback');
           return res.json({
             success: true,
@@ -22069,7 +21883,7 @@ Strict Requirements:
       console.error('[Try-On] Error status:', error?.status);
       console.error('[Try-On] Error details:', error?.details ? JSON.stringify(error.details) : 'none');
       console.error('[Try-On] Error stack:', error?.stack?.split('\n').slice(0, 5).join(' | '));
-      return res.status(500).json({ error: error.message || 'Try-on generation failed' });
+      return res.status(500).json({ error: friendlyTryOnError(error) });
     }
   });
 

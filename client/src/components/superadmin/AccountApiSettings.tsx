@@ -488,7 +488,7 @@ export default function AccountApiSettings({ businessAccountId, section }: { bus
                     <RadioGroupItem value="openai" id="openai" className="mt-0.5" />
                     <div className="flex-1">
                       <Label htmlFor="openai" className="cursor-pointer flex items-center gap-2">
-                        <span className="font-medium">OpenAI DALL-E</span>
+                        <span className="font-medium">OpenAI GPT Image</span>
                         {vistaSettings?.hasOpenaiApiKey && (
                           <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full">Configured</span>
                         )}
