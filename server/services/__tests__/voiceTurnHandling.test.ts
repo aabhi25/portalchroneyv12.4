@@ -544,6 +544,20 @@ async function main() {
     h.done();
   }
 
+  // Website voice and video calls talk freely; phone calls keep journeys.
+  {
+    const h = makeHarness();
+    const c: any = h.conversation;
+    expect(h.svc.buildVoiceChatContext(c).skipJourneys === true, 'website voice calls never run journeys');
+    c.avatar = { displayName: 'Maya' };
+    expect(h.svc.buildVoiceChatContext(c).skipJourneys === true, 'video calls never run journeys');
+    c.avatar = undefined;
+    c.phone = { chat: {} };
+    expect(h.svc.buildVoiceChatContext(c).skipJourneys === false, 'phone calls keep journeys');
+    c.phone = undefined;
+    h.done();
+  }
+
   out(`\n${passed} passed, ${failed} failed`);
   out(failed === 0 ? 'All voice turn-handling tests passed' : `${failed} test(s) FAILED`);
   process.exit(failed === 0 ? 0 : 1);

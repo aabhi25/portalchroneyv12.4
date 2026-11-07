@@ -105,7 +105,7 @@ export interface ChatContext {
   visitorToken?: string; // Unique token for conversation history filtering
   isInternalTest?: boolean; // True when business user is testing their own chatbot from dashboard
   skipLeadTraining?: boolean; // True for guidance chatbot - skip lead collection
-  /** Server-only (RealtimeVoiceService): video avatar calls talk freely and never run journeys. */
+  /** Server-only (RealtimeVoiceService): website voice and video calls talk freely and never run journeys. */
   skipJourneys?: boolean;
   starterQAContext?: string; // Pre-formatted Q&A context from guidance conversation starters
   supportsCalendarUI?: boolean; // True when client can render visual calendar for appointment slots
