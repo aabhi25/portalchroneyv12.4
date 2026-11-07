@@ -681,6 +681,7 @@ async function main() {
       expect(rec.audio.length > audioBefore && v.client.binary.length === 0, "answer audio → avatar provider only (local playback muted)", { provider: rec.audio.length - audioBefore, local: v.client.binary.length });
       const prod = v.client.ofType("products")[0];
       expect(prod && JSON.parse(prod.data).items[0].name === "Gold ring" && prod.responseId, "product cards from the same tool results are sent for display under the avatar", prod);
+      expect(v.chatContexts.slice(-1)[0]?.skipJourneys === true, "video calls never run journeys");
       expect(v.chatContexts.slice(-1)[0]?.assistantName === "Maya", "answers on a video call introduce the assistant by the avatar's name (not 'Chroney')", v.chatContexts.slice(-1)[0]?.assistantName);
       expect(v.chatContexts.slice(-1)[0]?.assistantGender === "female", "answers on a video call use the avatar's gender (feminine Hindi forms for a female avatar)", v.chatContexts.slice(-1)[0]?.assistantGender);
 

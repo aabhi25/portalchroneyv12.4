@@ -4534,6 +4534,7 @@ export class RealtimeVoiceService {
       jobPortalEnabled: conversation.jobPortalEnabled === true,
       demoOrdersEnabled: conversation.demoOrdersEnabled === true,
       skipLeadTraining: conversation.skipLeadTraining === true,
+      skipJourneys: !!conversation.avatar,
       topscholarCpId: scope?.cpId ?? null,
       topscholarStudentId: scope?.studentId ?? null,
       studentName: scope?.studentName ?? null,

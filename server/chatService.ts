@@ -105,6 +105,8 @@ export interface ChatContext {
   visitorToken?: string; // Unique token for conversation history filtering
   isInternalTest?: boolean; // True when business user is testing their own chatbot from dashboard
   skipLeadTraining?: boolean; // True for guidance chatbot - skip lead collection
+  /** Server-only (RealtimeVoiceService): video avatar calls talk freely and never run journeys. */
+  skipJourneys?: boolean;
   starterQAContext?: string; // Pre-formatted Q&A context from guidance conversation starters
   supportsCalendarUI?: boolean; // True when client can render visual calendar for appointment slots
   pageUrl?: string; // Parent page URL where the widget is embedded (for UTM tracking)
@@ -2196,13 +2198,13 @@ Response:`;
       
       // PERFORMANCE: Early check if business has any active journeys
       // Skip all journey processing if no journeys exist for this account
-      const hasActiveJourneys = !context.skipLeadTraining &&
+      const hasActiveJourneys = !context.skipLeadTraining && !context.skipJourneys &&
         await journeyService.hasActiveJourneys(context.businessAccountId);
       let isJourneyActive = false;
       
       if (hasActiveJourneys) {
         // Auto-inject journey conversational guidelines if not already provided and if journey is active
-        if (!context.journeyConversationalGuidelines) {
+        if (!context.journeyConversationalGuidelines && !context.skipJourneys) {
           const activeJourneyState = await journeyService.getJourneyState(conversationId);
           if (activeJourneyState && !activeJourneyState.completed) {
             const journey = await storage.getJourney(activeJourneyState.journeyId, context.businessAccountId);
@@ -3393,7 +3395,7 @@ Response:`;
         storage.getWidgetSettings(context.businessAccountId),
         storage.getAllProducts(context.businessAccountId),
       ]));
-      const hasActiveJourneysP = context.skipLeadTraining
+      const hasActiveJourneysP = context.skipLeadTraining || context.skipJourneys
         ? Promise.resolve(false)
         : quiet(journeyService.hasActiveJourneys(context.businessAccountId));
 
@@ -3755,7 +3757,7 @@ Response:`;
       // still persisted before any reply is stored.
       const loadJourneyGuidelines = async () => {
         // Auto-inject journey conversational guidelines if not already provided and if journey is active
-        if (!context.journeyConversationalGuidelines) {
+        if (!context.journeyConversationalGuidelines && !context.skipJourneys) {
           const activeJourneyState = await journeyService.getJourneyState(conversationId);
           if (activeJourneyState && !activeJourneyState.completed) {
             const journey = await storage.getJourney(activeJourneyState.journeyId, context.businessAccountId);
