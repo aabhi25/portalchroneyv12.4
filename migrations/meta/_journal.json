@@ -372,6 +372,13 @@
       "when": 1793902575312,
       "tag": "0052_settings_copy_log",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1794307408199,
+      "tag": "0053_hide_contacts_from_view",
+      "breakpoints": true
     }
   ]
 }

@@ -91,6 +91,7 @@ import topscholarAnalyticsRoutes from "./routes/topscholarAnalytics";
 import topscholarLmsApiRoutes from "./routes/topscholarLmsApi";
 import verificationRoutes from "./routes/verification";
 import unifiedLeadsRoutes from "./routes/unifiedLeads";
+import { contactViewMaskMiddleware } from "./lib/contactViewMask";
 import homeSummaryRoutes from "./routes/homeSummary";
 import whatsappHandoffRoutes from "./routes/whatsappHandoff";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone, maskPhonesInText } from "./lib/leadAccess";
@@ -632,6 +633,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   } catch (err) {
     console.error('[Migration] Failed to reset animated avatar types:', err);
   }
+
+  // "Hide from view": contact details in lead/chat responses shown hidden (before every route).
+  app.use(contactViewMaskMiddleware);
 
   // ERP Integration routes
   app.use(erpRoutes);

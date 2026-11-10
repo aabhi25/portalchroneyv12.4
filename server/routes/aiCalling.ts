@@ -25,6 +25,7 @@ import { Router, type Request, type Response } from "express";
 import { and, count, desc, eq, gte, ilike, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { db } from "../db";
 import { aiCallDoNotCall, aiCalls, businessAccounts, conversations, leads, messages, type AiCall } from "@shared/schema";
+import { isMaskedValue } from "@shared/contactMasking";
 import {
   CALL_OUTCOME_LABEL,
   normalizeCallPhone,
@@ -339,7 +340,8 @@ router.post("/api/calling/calls", ...requireAiCalling, async (req, res) => {
     if (!settings.enabled) return res.status(400).json({ error: "Turn on AI Calling in settings before calling someone." });
     let leadId: string | null = null;
     let leadName: string | null = null;
-    let rawPhone: unknown = body.phone;
+    // A number shown hidden in the portal ("hide from view") is never dialled as typed; the lead's real one is used.
+    let rawPhone: unknown = isMaskedValue(body.phone) ? undefined : body.phone;
     if (typeof body.leadId === "string" && body.leadId) {
       const [lead] = await db.select().from(leads).where(and(eq(leads.id, body.leadId), eq(leads.businessAccountId, businessAccountId))).limit(1);
       if (!lead) return res.status(404).json({ error: "Lead not found" });

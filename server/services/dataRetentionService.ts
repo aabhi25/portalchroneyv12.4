@@ -57,6 +57,7 @@ function toSettings(row: DataRetentionPolicy): RetentionPolicySettings & { scope
     deleteIdleChatsAfterMinutes: row.deleteIdleChatsAfterMinutes ?? null,
     keepAnonymousCounts: row.keepAnonymousCounts,
     maskContactsAfterSync: row.maskContactsAfterSync === true,
+    hideContactsFromView: row.hideContactsFromView === true,
   };
 }
 
@@ -82,6 +83,7 @@ export async function upsertRetentionPolicy(
     deleteIdleChatsAfterMinutes: settings.deleteIdleChatsAfterMinutes,
     keepAnonymousCounts: settings.keepAnonymousCounts,
     maskContactsAfterSync: settings.maskContactsAfterSync,
+    hideContactsFromView: settings.hideContactsFromView,
     updatedBy,
     updatedAt: new Date(),
   };
@@ -117,7 +119,7 @@ export async function getEffectivePolicy(accountId: string): Promise<EffectiveRe
 /** Every account that currently has an active policy (deleting or hiding), directly or via a group. */
 export async function getAccountsWithActivePolicy(): Promise<string[]> {
   const rows = await db.select().from(dataRetentionPolicies)
-    .where(sql`${dataRetentionPolicies.mode} <> 'off' OR ${dataRetentionPolicies.maskContactsAfterSync} = true`);
+    .where(sql`${dataRetentionPolicies.mode} <> 'off' OR ${dataRetentionPolicies.maskContactsAfterSync} = true OR ${dataRetentionPolicies.hideContactsFromView} = true`);
   const ids = new Set<string>(rows.filter(r => r.scopeType === 'account').map(r => r.scopeId));
   const groupIds = rows.filter(r => r.scopeType === 'group').map(r => r.scopeId);
   if (groupIds.length) {
@@ -415,6 +417,14 @@ function dueMaskWhere(accountId: string, crm: AccountCrmTargets, now: Date) {
 export async function countMaskDueForAccount(accountId: string, now = new Date()): Promise<number> {
   const crm = await getAccountCrmTargets(accountId);
   const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(leads).where(dueMaskWhere(accountId, crm, now));
+  return row?.n ?? 0;
+}
+
+/** Leads of an account whose phone or email would show hidden in the portal ("hide from view"). */
+export async function countLeadsWithContacts(accountId: string): Promise<number> {
+  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(leads).where(sql`${leads.businessAccountId} = ${accountId}
+    AND ${leads.contactsMaskedAt} IS NULL
+    AND (COALESCE(${leads.phone}, '') <> '' OR COALESCE(${leads.email}, '') <> '')`);
   return row?.n ?? 0;
 }
 

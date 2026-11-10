@@ -1,0 +1,1 @@
+ALTER TABLE "data_retention_policies" ADD COLUMN IF NOT EXISTS "hide_contacts_from_view" boolean DEFAULT false NOT NULL;

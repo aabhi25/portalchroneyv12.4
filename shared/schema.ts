@@ -385,6 +385,7 @@ export const dataRetentionPolicies = pgTable("data_retention_policies", {
   deleteIdleChatsAfterMinutes: integer("delete_idle_chats_after_minutes").default(1440), // chats with no lead; null = keep
   keepAnonymousCounts: boolean("keep_anonymous_counts").notNull().default(true), // count deleted records in dashboards
   maskContactsAfterSync: boolean("mask_contacts_after_sync").notNull().default(false), // hide phones/emails once synced (separate from deleting)
+  hideContactsFromView: boolean("hide_contacts_from_view").notNull().default(false), // show phones/emails hidden in the portal from capture; real values kept for CRM sync and calls
   updatedBy: varchar("updated_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

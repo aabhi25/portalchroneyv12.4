@@ -17,6 +17,11 @@ export interface RetentionPolicySettings {
    * (on the lead, in its chat, answers and summary) with masked versions. Works in any mode.
    */
   maskContactsAfterSync: boolean;
+  /**
+   * From the moment a lead comes in, its phone numbers and emails are shown hidden to everyone
+   * except super admins. Nothing is overwritten: CRM sync, retries and AI calls use the real values.
+   */
+  hideContactsFromView: boolean;
 }
 
 export interface EffectiveRetentionPolicy extends RetentionPolicySettings {
@@ -36,8 +41,8 @@ export const MASK_QUIET_MINUTES = 5;
 export const MASK_FALLBACK_QUIET_MINUTES = 30;
 
 /** A policy that does something: deletes (live or dry run) and/or hides contact details. */
-export function isPolicyActive(p: Pick<RetentionPolicySettings, 'mode' | 'maskContactsAfterSync'>): boolean {
-  return p.mode !== 'off' || p.maskContactsAfterSync === true;
+export function isPolicyActive(p: Pick<RetentionPolicySettings, 'mode' | 'maskContactsAfterSync' | 'hideContactsFromView'>): boolean {
+  return p.mode !== 'off' || p.maskContactsAfterSync === true || p.hideContactsFromView === true;
 }
 
 export const RETENTION_LIMITS = {
@@ -68,6 +73,7 @@ export function combineGroupPolicies(policies: (RetentionPolicySettings & { scop
     deleteIdleChatsAfterMinutes: minOrNull(deleting.map(p => p.deleteIdleChatsAfterMinutes)),
     keepAnonymousCounts: deleting.length ? deleting.some(p => p.keepAnonymousCounts) : true,
     maskContactsAfterSync: active.some(p => p.maskContactsAfterSync === true),
+    hideContactsFromView: active.some(p => p.hideContactsFromView === true),
     source: 'group',
     sourceIds: active.map(p => p.scopeId),
   };
@@ -149,6 +155,7 @@ export function decideLead(
 export function validateRetentionSettings(input: Partial<RetentionPolicySettings>): string | null {
   if (!input.mode || !['off', 'dry_run', 'live'].includes(input.mode)) return 'mode must be off, dry_run or live';
   if (input.maskContactsAfterSync !== undefined && typeof input.maskContactsAfterSync !== 'boolean') return 'maskContactsAfterSync must be true or false';
+  if (input.hideContactsFromView !== undefined && typeof input.hideContactsFromView !== 'boolean') return 'hideContactsFromView must be true or false';
   const inRange = (v: number) => Number.isInteger(v) && v >= RETENTION_LIMITS.minMinutes && v <= RETENTION_LIMITS.maxMinutes;
   if (typeof input.deleteSyncedAfterMinutes !== 'number' || !inRange(input.deleteSyncedAfterMinutes)) {
     return 'Delete-after-sync time must be between 15 minutes and 365 days';

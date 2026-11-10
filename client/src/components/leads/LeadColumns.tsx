@@ -91,7 +91,7 @@ export function WebsiteLeadColumnCell({ columnKey, lead }: { columnKey: LeadColu
   switch (columnKey) {
     case 'phone':
       return lead.phone && isMaskedValue(lead.phone) ? (
-        <span className="text-sm text-gray-500 font-mono" title="Hidden after sync. The CRM has the full number.">{lead.phone}</span>
+        <span className="text-sm text-gray-500 font-mono" title={lead.contactsHiddenFromView ? "Hidden from view. The full number is kept for CRM sync and calls." : "Hidden after sync. The CRM has the full number."}>{lead.phone}</span>
       ) : lead.phone ? (
         <a href={`tel:${lead.phone}`} onClick={(e) => e.stopPropagation()} className="text-sm text-green-600 hover:text-green-700 hover:underline transition-colors font-mono">{lead.phone}</a>
       ) : EMPTY;

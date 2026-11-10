@@ -231,7 +231,39 @@ interface PreviewResponse {
   totalIdleChats: number;
   totalHidden?: number;
   hides?: boolean;
-  accounts: { businessAccountId: string; name: string; overridden: boolean; leads: number; idleChats: number; hide?: number; crm?: { leadsquared: boolean; salesforce: boolean; meritto?: boolean } }[];
+  totalViewHidden?: number;
+  hidesFromView?: boolean;
+  accounts: { businessAccountId: string; name: string; overridden: boolean; leads: number; idleChats: number; hide?: number; viewHide?: number; crm?: { leadsquared: boolean; salesforce: boolean; meritto?: boolean } }[];
+}
+
+/** Either kind of hiding is switched on (then a preview with auto-delete off shows no "0 deleted"). */
+const hidesAny = (s: RetentionPolicySettings | null) => !!s && (s.maskContactsAfterSync || s.hideContactsFromView);
+
+/** "Hide from view": shown hidden in the portal from the start; nothing overwritten, so it can be switched off again. */
+function HideFromViewSection({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className={`rounded-lg border p-3 space-y-2 ${checked ? "border-emerald-300 bg-emerald-50/50" : ""}`} data-testid="retention-hide-view-section">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <Label htmlFor="ret-hide-view" className="flex items-center gap-1.5"><EyeOff className="w-4 h-4 text-emerald-700" /> Hide contact details from view</Label>
+          <p className="text-xs text-muted-foreground mt-1">
+            From the moment a lead comes in, its mobile numbers and emails show hidden in the portal, like{" "}
+            <span className="font-mono">******3210</span> and <span className="font-mono">ra***@gmail.com</span>. The real details are kept,
+            so leads still sync to the CRM (now or later), and AI calls and WhatsApp still work.
+          </p>
+        </div>
+        <Switch id="ret-hide-view" checked={checked} onCheckedChange={onChange} data-testid="switch-retention-hide-view" />
+      </div>
+      {checked && (
+        <ul className="text-[11px] text-muted-foreground list-disc pl-4 space-y-0.5">
+          <li>Hidden on the Leads page, chats, form/journey answers, summaries, lead downloads, the AI call list and the group admin pages. Super admins still see the real details.</li>
+          <li>Nothing is deleted or overwritten: switch this off and the details show again.</li>
+          <li>Accounts with no CRM: their team can't see numbers anywhere until a CRM is connected and the leads are sent to it.</li>
+          <li>Website chat leads only. Appointments, support tickets and WhatsApp/Instagram/Facebook leads keep showing their details.</li>
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** Auto-delete settings for an account or a group: a pop-up, or (bare) laid out on that account's or group's page. */
@@ -268,7 +300,8 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
       deleteIdleChatsAfterMinutes: p.deleteIdleChatsAfterMinutes,
       keepAnonymousCounts: p.keepAnonymousCounts,
       maskContactsAfterSync: p.maskContactsAfterSync === true,
-    } : { ...data.defaults, maskContactsAfterSync: data.defaults.maskContactsAfterSync === true });
+      hideContactsFromView: p.hideContactsFromView === true,
+    } : { ...data.defaults, maskContactsAfterSync: data.defaults.maskContactsAfterSync === true, hideContactsFromView: data.defaults.hideContactsFromView === true });
     setUseGroupPolicy(scopeType === 'account' && !p);
     setPreview(null);
   }, [data, scopeType]);
@@ -360,7 +393,8 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                             {g.policy && g.policy.mode !== 'off'
                               ? `${MODE_LABEL[g.policy.mode]} — synced leads deleted after ${formatMinutes(g.policy.deleteSyncedAfterMinutes)}`
                               : "auto-delete off"}
-                            {g.policy?.maskContactsAfterSync && "; contact details hidden after sync"}
+                            {g.policy?.hideContactsFromView && "; contact details hidden from view"}
+                            {g.policy?.maskContactsAfterSync && "; contact details removed after sync"}
                           </div>
                         )) : <div className="text-muted-foreground">This account is not in any group, so auto-delete is off.</div>}
                       </div>
@@ -421,10 +455,12 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                       <p>A conversation is never deleted while the visitor is still chatting (30 minutes idle required). Copies in the client's CRM are not touched.</p>
                     </div>
 
+                    <HideFromViewSection checked={settings.hideContactsFromView} onChange={(v) => set('hideContactsFromView', v)} />
+
                     <div className={`rounded-lg border p-3 space-y-2 ${settings.maskContactsAfterSync ? "border-emerald-300 bg-emerald-50/50" : ""}`} data-testid="retention-mask-section">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <Label htmlFor="ret-mask" className="flex items-center gap-1.5"><EyeOff className="w-4 h-4 text-emerald-700" /> Hide contact details after sync</Label>
+                          <Label htmlFor="ret-mask" className="flex items-center gap-1.5"><EyeOff className="w-4 h-4 text-emerald-700" /> Remove contact details after sync</Label>
                           <p className="text-xs text-muted-foreground mt-1">
                             Separate from auto-delete: leads and chats are kept, but once a lead has synced, its mobile numbers and
                             emails are hidden, like <span className="font-mono">******3210</span> and <span className="font-mono">ra***@gmail.com</span>.
@@ -446,9 +482,9 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                     <div className="space-y-2">
                       <Button type="button" variant="outline" size="sm" onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}>
                         {previewMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Search className="w-4 h-4 mr-1.5" />}
-                        {settings.maskContactsAfterSync ? "Check what these settings would delete or hide now" : "Check what these settings would delete now"}
+                        {hidesAny(settings) ? "Check what these settings would delete or hide now" : "Check what these settings would delete now"}
                       </Button>
-                      {preview && <PreviewSummary preview={preview} showDeletes={settings?.mode !== 'off' || !settings?.maskContactsAfterSync} />}
+                      {preview && <PreviewSummary preview={preview} showDeletes={settings?.mode !== 'off' || !hidesAny(settings)} />}
                     </div>
                   </>
                 )}
@@ -521,7 +557,8 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                             {g.policy && g.policy.mode !== 'off'
                               ? `${MODE_LABEL[g.policy.mode]} — synced leads deleted after ${formatMinutes(g.policy.deleteSyncedAfterMinutes)}`
                               : "auto-delete off"}
-                            {g.policy?.maskContactsAfterSync && "; contact details hidden after sync"}
+                            {g.policy?.hideContactsFromView && "; contact details hidden from view"}
+                            {g.policy?.maskContactsAfterSync && "; contact details removed after sync"}
                           </div>
                         )) : <div className="text-muted-foreground">This account is not in any group, so auto-delete is off.</div>}
                       </div>
@@ -582,10 +619,12 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                       <p>A conversation is never deleted while the visitor is still chatting (30 minutes idle required). Copies in the client's CRM are not touched.</p>
                     </div>
 
+                    <HideFromViewSection checked={settings.hideContactsFromView} onChange={(v) => set('hideContactsFromView', v)} />
+
                     <div className={`rounded-lg border p-3 space-y-2 ${settings.maskContactsAfterSync ? "border-emerald-300 bg-emerald-50/50" : ""}`} data-testid="retention-mask-section">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <Label htmlFor="ret-mask" className="flex items-center gap-1.5"><EyeOff className="w-4 h-4 text-emerald-700" /> Hide contact details after sync</Label>
+                          <Label htmlFor="ret-mask" className="flex items-center gap-1.5"><EyeOff className="w-4 h-4 text-emerald-700" /> Remove contact details after sync</Label>
                           <p className="text-xs text-muted-foreground mt-1">
                             Separate from auto-delete: leads and chats are kept, but once a lead has synced, its mobile numbers and
                             emails are hidden, like <span className="font-mono">******3210</span> and <span className="font-mono">ra***@gmail.com</span>.
@@ -607,9 +646,9 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                     <div className="space-y-2">
                       <Button type="button" variant="outline" size="sm" onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}>
                         {previewMutation.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Search className="w-4 h-4 mr-1.5" />}
-                        {settings.maskContactsAfterSync ? "Check what these settings would delete or hide now" : "Check what these settings would delete now"}
+                        {hidesAny(settings) ? "Check what these settings would delete or hide now" : "Check what these settings would delete now"}
                       </Button>
-                      {preview && <PreviewSummary preview={preview} showDeletes={settings?.mode !== 'off' || !settings?.maskContactsAfterSync} />}
+                      {preview && <PreviewSummary preview={preview} showDeletes={settings?.mode !== 'off' || !hidesAny(settings)} />}
                     </div>
                   </>
                 )}
@@ -657,7 +696,7 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
           {previewMutation.isPending || !preview ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground py-3"><Loader2 className="w-4 h-4 animate-spin" /> Counting what will change…</div>
           ) : (
-            <PreviewSummary preview={preview} showDeletes={settings?.mode !== 'off' || !settings?.maskContactsAfterSync} />
+            <PreviewSummary preview={preview} showDeletes={settings?.mode !== 'off' || !hidesAny(settings)} />
           )}
           <div className="space-y-1.5">
             <Label htmlFor="ret-confirm">Type <span className="font-mono font-semibold">CONFIRM</span> to continue</Label>
@@ -682,7 +721,7 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
 
 /** `showDeletes` is false when auto-delete is off and only hiding is on, so "0 deleted" isn't shown. */
 function PreviewSummary({ preview, showDeletes = true }: { preview: PreviewResponse; showDeletes?: boolean }) {
-  const affected = preview.accounts.filter(a => (showDeletes ? a.leads + a.idleChats : 0) + (a.hide ?? 0) > 0);
+  const affected = preview.accounts.filter(a => (showDeletes ? a.leads + a.idleChats : 0) + (a.hide ?? 0) + (preview.hidesFromView ? a.viewHide ?? 0 : 0) > 0);
   const overridden = preview.accounts.filter(a => a.overridden).length;
   const noCrm = preview.accounts.filter(a => a.crm && !a.crm.leadsquared && !a.crm.salesforce && !a.crm.meritto).length;
   return (
@@ -693,9 +732,14 @@ function PreviewSummary({ preview, showDeletes = true }: { preview: PreviewRespo
           {" "}and <span className="font-semibold text-red-600">{preview.totalIdleChats.toLocaleString()} chat(s) with no lead</span>.
         </div>
       )}
+      {preview.hidesFromView && (
+        <div>
+          Shown hidden from now on: <span className="font-semibold text-emerald-700">{(preview.totalViewHidden ?? 0).toLocaleString()} lead(s)</span> (real details kept).
+        </div>
+      )}
       {preview.hides && (
         <div>
-          Contact details hidden right away: <span className="font-semibold text-emerald-700">{(preview.totalHidden ?? 0).toLocaleString()} synced lead(s)</span>.
+          Contact details removed right away: <span className="font-semibold text-emerald-700">{(preview.totalHidden ?? 0).toLocaleString()} synced lead(s)</span>.
         </div>
       )}
       {affected.length > 0 && (
@@ -704,7 +748,7 @@ function PreviewSummary({ preview, showDeletes = true }: { preview: PreviewRespo
             <div key={a.businessAccountId} className="flex justify-between gap-2">
               <span className="truncate">{a.name}</span>
               <span className="tabular-nums text-muted-foreground shrink-0">
-                {[showDeletes && `${a.leads} leads · ${a.idleChats} chats`, preview.hides && `${a.hide ?? 0} hidden`].filter(Boolean).join(" · ")}
+                {[showDeletes && `${a.leads} leads · ${a.idleChats} chats`, preview.hidesFromView && `${a.viewHide ?? 0} shown hidden`, preview.hides && `${a.hide ?? 0} removed`].filter(Boolean).join(" · ")}
               </span>
             </div>
           ))}
@@ -715,7 +759,13 @@ function PreviewSummary({ preview, showDeletes = true }: { preview: PreviewRespo
         <div className="text-xs text-amber-700 flex items-start gap-1">
           <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
           {noCrm} account(s) have no CRM connected, so their leads never count as synced
-          {showDeletes ? ` and are only deleted by the "never sync" timer${preview.hides ? "; their details are never hidden" : ""}.` : " and their details are never hidden."}
+          {showDeletes ? ` and are only deleted by the "never sync" timer${preview.hides ? "; their details are never removed" : ""}.` : " and their details are never removed."}
+        </div>
+      )}
+      {noCrm > 0 && preview.hidesFromView && (
+        <div className="text-xs text-amber-700 flex items-start gap-1">
+          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          {noCrm} account(s) have no CRM connected: their team will see hidden numbers only, until a CRM is connected and the leads are sent to it.
         </div>
       )}
       <Badge variant="outline" className="text-[10px]">Counts are for right now; more become due over time.</Badge>
@@ -775,15 +825,19 @@ export function RetentionBanner({ policies, totalAccounts, onViewReport }: {
 }) {
   if (policies.length === 0) return null;
   const hiding = policies.filter(p => p.maskContactsAfterSync);
+  const hidingView = policies.filter(p => p.hideContactsFromView);
   const deleting = policies.filter(p => p.mode !== 'off');
   if (deleting.length === 0) {
+    const shown = hidingView.length > 0 ? hidingView : hiding;
     return (
       <div className="flex flex-wrap items-center gap-2 px-4 py-2 text-xs border-b bg-emerald-50 text-emerald-800 border-emerald-100" data-testid="banner-contacts-hidden">
         <EyeOff className="w-3.5 h-3.5 shrink-0" />
         <span>
-          <span className="font-semibold">Contact details are hidden after sync</span>
-          {totalAccounts !== undefined && totalAccounts > 1 ? ` for ${hiding.length} of ${totalAccounts} accounts` : ""}:
-          {" "}once a lead reaches your CRM, its mobile numbers and emails are hidden here. Your CRM keeps the real details.
+          <span className="font-semibold">{hidingView.length > 0 ? "Contact details are hidden" : "Contact details are hidden after sync"}</span>
+          {totalAccounts !== undefined && totalAccounts > 1 ? ` for ${shown.length} of ${totalAccounts} accounts` : ""}:
+          {hidingView.length > 0
+            ? <>{" "}mobile numbers and emails show hidden here. The real details are kept for your CRM and calls{hiding.length > 0 ? ", and removed from here once a lead reaches your CRM" : ""}.</>
+            : <>{" "}once a lead reaches your CRM, its mobile numbers and emails are hidden here. Your CRM keeps the real details.</>}
         </span>
         {onViewReport && (
           <button type="button" onClick={onViewReport} className="ml-auto underline font-medium">View retention report</button>
@@ -803,7 +857,8 @@ export function RetentionBanner({ policies, totalAccounts, onViewReport }: {
         {" "}leads are {live ? "" : "would be "}removed {synced.join(" / ")} after syncing to the CRM;
         {" "}leads that never sync are {unsynced.every(u => u === null) ? "kept" : `removed after ${unsynced.filter(Boolean).join(" / ")}`}.
         {!live && " Nothing is deleted yet."}
-        {hiding.length > 0 && " Contact details are hidden as soon as a lead syncs."}
+        {hidingView.length > 0 && " Contact details show hidden."}
+        {hiding.length > 0 && " Contact details are removed as soon as a lead syncs."}
       </span>
       {onViewReport && (
         <button type="button" onClick={onViewReport} className="ml-auto underline font-medium">View retention report</button>

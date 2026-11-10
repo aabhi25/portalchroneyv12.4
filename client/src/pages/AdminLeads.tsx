@@ -778,7 +778,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       }
       const mer = row.crm.meritto;
       if (isMerittoConfigured || mer?.status) {
-        out.push({ crm: 'meritto', label: 'Meritto', state: mer, canSync: !!isMerittoConfigured && mer?.status !== 'synced' && !contactsHidden({ phone: row.phone, email: row.email }) });
+        out.push({ crm: 'meritto', label: 'Meritto', state: mer, canSync: !!isMerittoConfigured && mer?.status !== 'synced' && !(contactsHidden({ phone: row.phone, email: row.email }) && !row.contactsHiddenFromView) });
       }
       const custom = row.crm.customCrm;
       if (crmConfig?.custom_crm.configured || custom?.status) {

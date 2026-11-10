@@ -41,6 +41,8 @@ export interface UnifiedLeadRow {
   linked?: UnifiedLeadRow[];
   /** Lead score (website / WhatsApp; null until scored). */
   score?: LeadScoreView | null;
+  /** Phone/email shown hidden by "hide from view"; the real details still exist (Sync stays possible). */
+  contactsHiddenFromView?: boolean;
 }
 
 export const TEMPERATURE_LOOK: Record<LeadScoreView["temperature"], { label: string; className: string; icon: typeof Flame }> = {

@@ -12,10 +12,12 @@ import {
 } from "../auth";
 import { storage } from "../storage";
 import { recordAuditEventSafely } from "../services/auditService";
+import { clearContactViewMaskCache } from "../lib/contactViewMask";
 import { validateRetentionSettings, type RetentionPolicySettings } from "@shared/dataRetentionPolicy";
 import {
   countDueForAccount,
   countMaskDueForAccount,
+  countLeadsWithContacts,
   deleteAccountOverride,
   getAccountCrmTargets,
   getEffectivePolicy,
@@ -40,6 +42,7 @@ const DEFAULT_SETTINGS: RetentionPolicySettings = {
   deleteIdleChatsAfterMinutes: 24 * 60,
   keepAnonymousCounts: true,
   maskContactsAfterSync: false,
+  hideContactsFromView: false,
 };
 
 function parseScope(req: Request, res: Response): { scopeType: 'group' | 'account'; scopeId: string } | null {
@@ -70,6 +73,7 @@ function readSettings(body: any): RetentionPolicySettings {
     deleteIdleChatsAfterMinutes: numOrNull(body?.deleteIdleChatsAfterMinutes),
     keepAnonymousCounts: body?.keepAnonymousCounts !== false,
     maskContactsAfterSync: body?.maskContactsAfterSync === true,
+    hideContactsFromView: body?.hideContactsFromView === true,
   };
 }
 
@@ -193,24 +197,30 @@ router.post("/api/super-admin/data-retention/:scopeType/:scopeId/preview", requi
     let totalLeads = 0;
     let totalChats = 0;
     let totalHidden = 0;
+    let totalViewHidden = 0;
     for (const id of accountIds) {
       // Accounts with their own override ignore the group policy.
       const override = scope.scopeType === 'group' ? await getRetentionPolicy('account', id) : null;
       const account = await storage.getBusinessAccount(id);
       if (override) {
-        accounts.push({ businessAccountId: id, name: account?.name || id, overridden: true, leads: 0, idleChats: 0, hide: 0 });
+        accounts.push({ businessAccountId: id, name: account?.name || id, overridden: true, leads: 0, idleChats: 0, hide: 0, viewHide: 0 });
         continue;
       }
       // Hiding is counted only when it is switched on in the proposed settings.
       const due = await countDueForAccount(id, settings);
       const hide = settings.maskContactsAfterSync ? await countMaskDueForAccount(id) : 0;
+      const viewHide = settings.hideContactsFromView ? await countLeadsWithContacts(id) : 0;
       const crm = await getAccountCrmTargets(id);
       totalLeads += due.leads;
       totalChats += due.idleChats;
       totalHidden += hide;
-      accounts.push({ businessAccountId: id, name: account?.name || id, overridden: false, crm, ...due, hide });
+      totalViewHidden += viewHide;
+      accounts.push({ businessAccountId: id, name: account?.name || id, overridden: false, crm, ...due, hide, viewHide });
     }
-    res.json({ totalLeads, totalIdleChats: totalChats, totalHidden, hides: settings.maskContactsAfterSync, accounts });
+    res.json({
+      totalLeads, totalIdleChats: totalChats, totalHidden, hides: settings.maskContactsAfterSync,
+      totalViewHidden, hidesFromView: settings.hideContactsFromView, accounts,
+    });
   } catch (error: any) {
     console.error('[Data Retention] Preview error:', error);
     res.status(500).json({ error: error.message });
@@ -253,8 +263,11 @@ router.put("/api/super-admin/data-retention/:scopeType/:scopeId", requireAuth, r
         keepAnonymousCounts: settings.keepAnonymousCounts,
         previousMaskContactsAfterSync: previous?.maskContactsAfterSync ?? false,
         maskContactsAfterSync: settings.maskContactsAfterSync,
+        previousHideContactsFromView: previous?.hideContactsFromView ?? false,
+        hideContactsFromView: settings.hideContactsFromView,
       },
     });
+    clearContactViewMaskCache();
     res.json({ policy: saved });
   } catch (error: any) {
     console.error('[Data Retention] Save policy error:', error);
@@ -267,6 +280,7 @@ router.delete("/api/super-admin/data-retention/account/:accountId", requireAuth,
   try {
     const previous = await getRetentionPolicy('account', req.params.accountId);
     await deleteAccountOverride(req.params.accountId);
+    clearContactViewMaskCache();
     await recordAuditEventSafely(req, {
       action: 'data_retention.override_removed',
       outcome: 'success',
