@@ -203,7 +203,7 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
   return (
     <div className="max-w-4xl space-y-5">
       <p className="text-sm text-gray-500">
-        Set something up on one account, then copy it to the others. Passwords, API keys, CRM logins, WhatsApp and phone settings, products, knowledge, leads and chats are never copied. Publishing from the Training tab can later overwrite what you copy here.
+        Set something up on one account, then copy it to the others. Passwords, WhatsApp and phone settings, products, knowledge, leads and chats are never copied. The LeadSquared connection is copied only when you tick it, and its keys are never shown. Publishing from the Training tab can later overwrite what you copy here.
       </p>
 
       <Card className="shadow-sm">

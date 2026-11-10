@@ -1,9 +1,10 @@
 /**
  * "Copy settings" on an account group's page: what can be copied from one account to others, and
- * the pure rules for comparing and merging. Passwords, API keys, CRM logins, WhatsApp and phone
- * numbers, products, knowledge, leads and chats are deliberately not in this list.
+ * the pure rules for comparing and merging. Passwords, WhatsApp and phone numbers, products,
+ * knowledge, leads and chats are deliberately not in this list. The one login that can be copied is
+ * the LeadSquared connection, only when ticked, and its keys are never shown.
  */
-export type CopyItemKind = "fields" | "avatar" | "lead" | "instructions" | "journeys" | "menu";
+export type CopyItemKind = "fields" | "avatar" | "lead" | "instructions" | "journeys" | "menu" | "lsq-connection" | "lsq-mappings";
 
 export interface CopyItem {
   key: string;
@@ -39,9 +40,59 @@ export const COPY_ITEMS: CopyItem[] = [
   { key: "instructions", group: "Training", label: "Instructions", description: "How the assistant should respond", kind: "instructions" },
   { key: "journeys", group: "Training", label: "Journeys", description: "Forms and guided conversations. Pick which ones below", kind: "journeys" },
   { key: "menu", group: "Training", label: "Chat menu & forms", description: "The menu start screen and its buttons", kind: "menu" },
+
+  { key: "leadsquared-connection", group: "CRM", label: "LeadSquared connection", description: "The UDS link and key (or API keys) and the sync switch. Keys are copied as stored and never shown", kind: "lsq-connection" },
+  { key: "leadsquared-mappings", group: "CRM", label: "LeadSquared field mappings", description: "Which details go into which LeadSquared field, including fixed values. Replaces each account's own mappings", kind: "lsq-mappings" },
 ];
 
-export const COPY_ITEM_GROUPS = ["Appearance", "Welcome & behaviour", "Nudges & banners", "Training"];
+export const COPY_ITEM_GROUPS = ["Appearance", "Welcome & behaviour", "Nudges & banners", "Training", "CRM"];
+
+/** LeadSquared connection fields whose values are never shown, only whether they are set. */
+export const SECRET_FIELDS = ["leadsquaredUdsKey", "leadsquaredAccessKey", "leadsquaredSecretKey"];
+
+/** "https://in-uds.leadsquared.com/x/y?ickey=…" → "in-uds.leadsquared.com/…": the link may hold the key. */
+export function maskedLink(url: unknown): string {
+  if (typeof url !== "string" || !url.trim()) return "(empty)";
+  try {
+    return `${new URL(url.trim()).host}/…`;
+  } catch {
+    return "Set";
+  }
+}
+
+/** The LeadSquared connection in words, without any key. */
+export function lsqConnectionRows(settings: Record<string, any>): DetailRow[] {
+  const uds = settings.leadsquaredConnectionType === "uds";
+  const set = (v: unknown) => (typeof v === "string" && v.trim() ? "Set" : "Not set");
+  const rows: DetailRow[] = [
+    { label: "Sync to LeadSquared", value: settings.leadsquaredEnabled === "true" ? "On" : "Off" },
+    { label: "Connection method", value: uds ? "Universal Data Sync (UDS)" : "LeadSquared API" },
+  ];
+  if (uds) {
+    rows.push({ label: "UDS webhook link", value: maskedLink(settings.leadsquaredUdsWebhookUrl) });
+    rows.push({ label: "UDS key", value: set(settings.leadsquaredUdsKey) });
+  } else {
+    rows.push({ label: "API host", value: settings.leadsquaredCustomHost || settings.leadsquaredRegion || "(empty)" });
+    rows.push({ label: "Access key", value: set(settings.leadsquaredAccessKey) });
+    rows.push({ label: "Secret key", value: set(settings.leadsquaredSecretKey) });
+  }
+  return rows;
+}
+
+/** The fields copied for a connection: the switch, the method, and that method's link/keys only. */
+export function lsqConnectionFields(settings: Record<string, any>): string[] {
+  return settings.leadsquaredConnectionType === "uds"
+    ? ["leadsquaredEnabled", "leadsquaredConnectionType", "leadsquaredUdsWebhookUrl", "leadsquaredUdsKey"]
+    : ["leadsquaredEnabled", "leadsquaredConnectionType", "leadsquaredRegion", "leadsquaredCustomHost", "leadsquaredAccessKey", "leadsquaredSecretKey"];
+}
+
+/** Whether the connection has what its method needs to send leads. */
+export function lsqConnectionReady(settings: Record<string, any>): boolean {
+  const has = (v: unknown) => typeof v === "string" && !!v.trim();
+  return settings.leadsquaredConnectionType === "uds"
+    ? has(settings.leadsquaredUdsWebhookUrl)
+    : has(settings.leadsquaredAccessKey) && has(settings.leadsquaredSecretKey);
+}
 
 export const copyItem = (key: string) => COPY_ITEMS.find((item) => item.key === key);
 
@@ -86,6 +137,14 @@ const FIELD_LABELS: Record<string, string> = {
   footerLabelText: "Footer text",
   avatarType: "Picture type",
   avatarUrl: "Picture",
+  leadsquaredEnabled: "Sync to LeadSquared",
+  leadsquaredConnectionType: "Connection method",
+  leadsquaredUdsWebhookUrl: "UDS webhook link",
+  leadsquaredUdsKey: "UDS key",
+  leadsquaredRegion: "API region",
+  leadsquaredCustomHost: "API host",
+  leadsquaredAccessKey: "Access key",
+  leadsquaredSecretKey: "Secret key",
   welcomeMessageType: "Welcome type",
   responseLength: "Reply length",
   autoOpenChat: "Opens by itself",

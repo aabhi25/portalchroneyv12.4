@@ -12,10 +12,12 @@ import {
   conversationJourneys,
   journeySessions,
   journeySteps,
+  leadsquaredFieldMappings,
   settingsCopyLog,
   widgetSettings,
 } from "@shared/schema";
 import { mergeGroupLeadConfigIntoAccount } from "@shared/leadTrainingConfig";
+import { decrypt } from "./encryptionService";
 import {
   COPY_ITEMS,
   copyItem,
@@ -23,10 +25,15 @@ import {
   fieldDetailRows,
   fieldLabel,
   humanizeField,
+  lsqConnectionFields,
+  lsqConnectionReady,
+  lsqConnectionRows,
+  maskedLink,
   mentionedNames,
   mergeInstructions,
   parseInstructionList,
   sameValue,
+  SECRET_FIELDS,
   stableStringify,
   websiteHost,
   type CopyChange,
@@ -49,6 +56,8 @@ export interface CopySnapshot {
   widget: Row;
   journeys: { created: string[]; updated: JourneyBundle[]; cleared: Row[] };
   menu: MenuBundle | null;
+  /** The account's LeadSquared field mappings before the copy (absent in copies made before this existed). */
+  lsqMappings?: Row[] | null;
 }
 
 const withoutKeys = (row: Row, keys: string[]) => {
@@ -60,6 +69,42 @@ const JOURNEY_OWN_KEYS = ["id", "businessAccountId", "totalStarts", "totalComple
 const STEP_OWN_KEYS = ["id", "journeyId", "createdAt", "updatedAt"];
 const MENU_OWN_KEYS = ["id", "businessAccountId", "createdAt", "updatedAt"];
 const DETAIL_OWN_KEYS = ["id", "menuItemId", "createdAt", "updatedAt"];
+const MAPPING_OWN_KEYS = ["id", "businessAccountId", "createdAt", "updatedAt"];
+
+async function loadLsqMappings(businessAccountId: string): Promise<Row[]> {
+  const rows = await db.select().from(leadsquaredFieldMappings).where(eq(leadsquaredFieldMappings.businessAccountId, businessAccountId));
+  return rows.sort((a, b) => a.sortOrder - b.sortOrder || a.leadsquaredField.localeCompare(b.leadsquaredField));
+}
+
+const mappingsShape = (rows: Row[]) => rows.map((row) => withoutKeys(row, MAPPING_OWN_KEYS));
+
+/** One mapping in words: "Fixed: MBA" or "Lead name (if empty: Unknown)". */
+function mappingValue(row: Row): string {
+  const value = row.sourceType === "custom"
+    ? `Fixed: ${row.customValue ?? "(empty)"}`
+    : [row.sourceField || "(nothing)", row.valueWhenPresent ? `sends "${row.valueWhenPresent}" when present` : "", row.fallbackValue ? `if empty: ${row.fallbackValue}` : ""].filter(Boolean).join(", ");
+  return row.isEnabled === "false" ? `${value} (off)` : value;
+}
+
+/** Secrets are stored encrypted with a fresh salt each time, so the same key can look different. */
+function sameSecret(a: unknown, b: unknown): boolean {
+  if (sameValue(a, b)) return true;
+  const encrypted = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/i.test(v);
+  if (!encrypted(a) || !encrypted(b)) return false;
+  try {
+    return decrypt(a) === decrypt(b);
+  } catch {
+    return false;
+  }
+}
+
+/** A LeadSquared connection value for the review screen; keys are never shown. */
+function describeLsqValue(field: string, value: unknown): string {
+  if (SECRET_FIELDS.includes(field)) return typeof value === "string" && value.trim() ? "Set" : "Not set";
+  if (field === "leadsquaredUdsWebhookUrl") return maskedLink(value);
+  if (field === "leadsquaredConnectionType") return value === "uds" ? "UDS" : "API";
+  return describeValue(value);
+}
 
 const byOrder = (a: Row, b: Row) => Number(a.stepOrder) - Number(b.stepOrder);
 const nameKey = (name: unknown) => String(name ?? "").trim().toLowerCase();
@@ -207,6 +252,7 @@ export async function describeSource(sourceAccountId: string) {
   const settings: Row = (await storage.getWidgetSettings(sourceAccountId)) ?? {};
   const journeys = await loadJourneys(sourceAccountId);
   const menu = await loadMenu(sourceAccountId);
+  const mappings = await loadLsqMappings(sourceAccountId);
   const items = COPY_ITEMS.map((item) => {
     let summary = "";
     let empty = false;
@@ -221,6 +267,10 @@ export async function describeSource(sourceAccountId: string) {
       sections = journeySections(journeys);
     } else if (item.kind === "menu") {
       sections = menuSections(menu, journeys);
+    } else if (item.kind === "lsq-connection") {
+      sections = [{ rows: lsqConnectionRows(settings) }];
+    } else if (item.kind === "lsq-mappings") {
+      sections = mappings.length ? [{ rows: mappings.map((row) => ({ label: `${row.displayName} (${row.leadsquaredField})`, value: mappingValue(row) })) }] : [];
     }
     if (item.kind === "fields") {
       summary = fieldsSummary(item, settings);
@@ -240,6 +290,12 @@ export async function describeSource(sourceAccountId: string) {
     } else if (item.kind === "menu") {
       empty = !menu.config && menu.items.length === 0;
       summary = empty ? "No menu" : `${menu.config?.enabled === "true" ? "On" : "Off"} · ${menu.items.length} button${menu.items.length === 1 ? "" : "s"}`;
+    } else if (item.kind === "lsq-connection") {
+      empty = !lsqConnectionReady(settings);
+      summary = empty ? "Not set up" : `${settings.leadsquaredConnectionType === "uds" ? "UDS" : "API"} · sync ${settings.leadsquaredEnabled === "true" ? "on" : "off"}`;
+    } else if (item.kind === "lsq-mappings") {
+      empty = mappings.length === 0;
+      summary = empty ? "None" : `${mappings.length} field${mappings.length === 1 ? "" : "s"}`;
     }
     return { key: item.key, group: item.group, label: item.label, description: item.description, summary, empty, sections };
   });
@@ -263,6 +319,7 @@ interface Source {
   journeys: JourneyBundle[];
   allJourneys: JourneyBundle[];
   menu: MenuBundle;
+  lsqMappings: Row[];
 }
 
 async function loadSource(request: CopyRequest): Promise<Source> {
@@ -279,6 +336,7 @@ async function loadSource(request: CopyRequest): Promise<Source> {
     allJourneys,
     journeys: request.items.includes("journeys") ? allJourneys.filter(({ journey }) => request.journeyIds.includes(journey.id)) : [],
     menu: request.items.includes("menu") ? await loadMenu(request.sourceAccountId) : { config: null, items: [], details: [] },
+    lsqMappings: request.items.includes("leadsquared-mappings") ? await loadLsqMappings(request.sourceAccountId) : [],
   };
 }
 
@@ -372,6 +430,8 @@ interface TargetPlan {
   journeys: { source: JourneyBundle; target: JourneyBundle | null }[];
   clearStartup: Row[];
   menuChanged: boolean;
+  /** The source's mappings to write, when they differ from the account's. */
+  lsqMappings: Row[] | null;
 }
 
 const INTRO_FIELDS = ["welcomeMessageType", "welcomeMessage", "personality", "responseLength", "customInstructions"];
@@ -381,7 +441,7 @@ async function planTarget(source: Source, request: CopyRequest, target: { busine
   // so "before" always holds real values and undo can put them back.
   const settings: Row = (await storage.getWidgetSettings(target.businessAccountId)) ?? (await storage.upsertWidgetSettings(target.businessAccountId, {}));
   const plan: TargetPlan = {
-    ...target, changes: [], warnings: [], widgetUpdate: {}, widgetBefore: {}, journeys: [], clearStartup: [], menuChanged: false,
+    ...target, changes: [], warnings: [], widgetUpdate: {}, widgetBefore: {}, journeys: [], clearStartup: [], menuChanged: false, lsqMappings: null,
   };
   const warnIfNamed = (item: CopyItem, text: string) => {
     const names = mentionedNames(text, source.names, target.name);
@@ -479,6 +539,51 @@ async function planTarget(source: Source, request: CopyRequest, target: { busine
       if (source.menu.items.some((i) => i.itemType === "phone" || i.itemType === "url") || ["phone", "url"].includes(source.menu.config?.persistentCtaAction)) {
         plan.warnings.push({ key, label: item.label, message: "Has phone numbers or web links. Check they are right for this account" });
       }
+    } else if (item.kind === "lsq-connection") {
+      if (!lsqConnectionReady(source.settings)) continue;
+      const fields = lsqConnectionFields(source.settings);
+      const same = (field: string) => (SECRET_FIELDS.includes(field)
+        ? sameSecret(source.settings[field], settings[field])
+        : sameValue(source.settings[field], settings[field]));
+      const changed = fields.filter((field) => !same(field));
+      if (changed.length === 0) continue;
+      // Keys travel as stored (encrypted); the server decrypts them with the same key for every account.
+      for (const field of changed) setField(field, source.settings[field]);
+      plan.changes.push({
+        key, label: item.label,
+        details: changed.map((field) => ({
+          field: fieldLabel(field),
+          from: describeLsqValue(field, settings[field]),
+          to: SECRET_FIELDS.includes(field) && settings[field] ? "Set (a different key)" : describeLsqValue(field, source.settings[field]),
+        })),
+      });
+      const wasSending = settings.leadsquaredEnabled === "true" && lsqConnectionReady(settings);
+      if (!wasSending && source.settings.leadsquaredEnabled === "true") {
+        plan.warnings.push({ key, label: item.label, message: "Leads this account already has are not sent by the copy. Use \"Sync all to CRM\" on its Leads page afterwards" });
+      }
+      if (!request.items.includes("leadsquared-mappings") && (await loadLsqMappings(target.businessAccountId)).length === 0) {
+        plan.warnings.push({ key, label: item.label, message: "This account has no LeadSquared field mappings. Tick \"LeadSquared field mappings\" too, or set them up on the account" });
+      }
+    } else if (item.kind === "lsq-mappings") {
+      if (source.lsqMappings.length === 0) continue;
+      const current = await loadLsqMappings(target.businessAccountId);
+      if (stableStringify(mappingsShape(source.lsqMappings)) === stableStringify(mappingsShape(current))) continue;
+      plan.lsqMappings = source.lsqMappings;
+      plan.changes.push({ key, label: item.label, details: [{ field: "Fields sent", from: `${current.length} mapping${current.length === 1 ? "" : "s"}`, to: `${source.lsqMappings.length} mapping${source.lsqMappings.length === 1 ? "" : "s"}` }] });
+      // Fixed values often name the programme or university, so changes to them are spelled out.
+      for (const own of current.filter((row) => row.sourceType === "custom")) {
+        const next = source.lsqMappings.find((row) => row.leadsquaredField === own.leadsquaredField);
+        if (!next) {
+          plan.warnings.push({ key, label: item.label, message: `Stops sending "${own.displayName}" (fixed value "${own.customValue ?? ""}")` });
+        } else if (next.sourceType !== "custom" || (next.customValue ?? "") !== (own.customValue ?? "")) {
+          plan.warnings.push({ key, label: item.label, message: `"${own.displayName}" changes from "${own.customValue ?? ""}" to ${next.sourceType === "custom" ? `"${next.customValue ?? ""}"` : "a detail from the chat"}` });
+        }
+      }
+      const dropped = current.filter((row) => row.sourceType !== "custom" && !source.lsqMappings.some((s) => s.leadsquaredField === row.leadsquaredField));
+      if (dropped.length) {
+        plan.warnings.push({ key, label: item.label, message: `Stops sending ${dropped.map((row) => `"${row.displayName}"`).join(", ")}` });
+      }
+      warnIfNamed(item, source.lsqMappings.map((row) => [row.customValue, row.fallbackValue, row.valueWhenPresent].filter(Boolean).join("\n")).join("\n"));
     }
   }
   return plan;
@@ -546,6 +651,16 @@ async function applyJourneys(businessAccountId: string, plan: TargetPlan, snapsh
   journeyService.invalidateJourneyCache(businessAccountId);
 }
 
+async function applyLsqMappings(businessAccountId: string, mappings: Row[], snapshot: CopySnapshot) {
+  snapshot.lsqMappings = await loadLsqMappings(businessAccountId);
+  await db.transaction(async (tx) => {
+    await tx.delete(leadsquaredFieldMappings).where(eq(leadsquaredFieldMappings.businessAccountId, businessAccountId));
+    for (const row of mappings) {
+      await tx.insert(leadsquaredFieldMappings).values({ ...withoutKeys(row, MAPPING_OWN_KEYS), businessAccountId } as any);
+    }
+  });
+}
+
 async function applyMenu(businessAccountId: string, source: Source, snapshot: CopySnapshot) {
   const before = await loadMenu(businessAccountId);
   snapshot.menu = before;
@@ -596,7 +711,7 @@ export async function runCopy(groupId: string, request: CopyRequest, user: { id?
   const snapshots: Record<string, CopySnapshot> = {};
 
   for (const target of targets) {
-    const snapshot: CopySnapshot = { widget: {}, journeys: { created: [], updated: [], cleared: [] }, menu: null };
+    const snapshot: CopySnapshot = { widget: {}, journeys: { created: [], updated: [], cleared: [] }, menu: null, lsqMappings: null };
     let warnings: CopyWarning[] = [];
     try {
       const plan = await planTarget(source, request, target);
@@ -609,6 +724,7 @@ export async function runCopy(groupId: string, request: CopyRequest, user: { id?
         await storage.upsertWidgetSettings(target.businessAccountId, update as any);
       }
       if (plan.menuChanged) await applyMenu(target.businessAccountId, source, snapshot);
+      if (plan.lsqMappings) await applyLsqMappings(target.businessAccountId, plan.lsqMappings, snapshot);
       if (plan.changes.length) businessContextCache.invalidateBusinessCache(target.businessAccountId);
       results.push({ ...target, ok: true, changed: plan.changes.map((c) => c.label), warnings });
     } catch (error: any) {
@@ -680,10 +796,21 @@ async function restoreMenu(businessAccountId: string, snapshot: CopySnapshot) {
   }
 }
 
+async function restoreLsqMappings(businessAccountId: string, snapshot: CopySnapshot) {
+  if (!snapshot.lsqMappings) return;
+  const rows = snapshot.lsqMappings;
+  await db.transaction(async (tx) => {
+    await tx.delete(leadsquaredFieldMappings).where(eq(leadsquaredFieldMappings.businessAccountId, businessAccountId));
+    for (const row of rows) {
+      await tx.insert(leadsquaredFieldMappings).values({ ...withoutKeys(row, ["createdAt", "updatedAt"]), businessAccountId } as any);
+    }
+  });
+}
+
 /** Every part gets its chance, so one failing doesn't leave the others uncopied back. */
 async function restoreTarget(businessAccountId: string, snapshot: CopySnapshot) {
   const problems: string[] = [];
-  for (const restore of [restoreJourneys, restoreWidget, restoreMenu]) {
+  for (const restore of [restoreJourneys, restoreWidget, restoreMenu, restoreLsqMappings]) {
     try {
       await restore(businessAccountId, snapshot);
     } catch (error: any) {

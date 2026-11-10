@@ -218,6 +218,66 @@ if (process.env.SETTINGS_COPY_TEST_DB) {
     assert.equal((await copyHistory(groupId)).find((h) => h.id === freshCopy.copyId)?.undoneAt !== null, true);
     fresh && await q("DELETE FROM business_accounts WHERE id = $1", [fresh]);
 
+    // LeadSquared: the UDS connection and the field mappings travel only when ticked; keys are never shown.
+    const { encrypt, decrypt } = await import("../encryptionService");
+    const { isLeadSquaredConfigured } = await import("../crmLeadSync");
+    const UDS_URL = "https://in-uds.leadsquared.com/hook/abc?ickey=SECRETICKEY";
+    const udsKey = encrypt("uds-secret-1");
+    await storage.upsertWidgetSettings(sourceId, {
+      leadsquaredEnabled: "true", leadsquaredConnectionType: "uds", leadsquaredUdsWebhookUrl: UDS_URL, leadsquaredUdsKey: udsKey,
+    } as any);
+    const mapping = (businessAccountId: string, field: string, type: string, value: string, order: number) =>
+      q(`INSERT INTO leadsquared_field_mappings (business_account_id, leadsquared_field, source_type, source_field, custom_value, display_name, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $2, $6)`, [businessAccountId, field, type, type === "dynamic" ? value : null, type === "custom" ? value : null, order]);
+    await mapping(sourceId, "FirstName", "dynamic", "lead.name", 1);
+    await mapping(sourceId, "mx_Course", "custom", "Online MBA", 2);
+    await mapping(targetA, "mx_Course", "custom", "Online MCA", 1);
+    const mappingsOf = async (id: string) => (await q("SELECT leadsquared_field, source_type, custom_value FROM leadsquared_field_mappings WHERE business_account_id = $1 ORDER BY sort_order", [id]));
+    const secrets = ["SECRETICKEY", "uds-secret-1", udsKey, "must-not-travel"];
+    const noSecrets = (value: unknown) => secrets.every((secret) => !JSON.stringify(value).includes(secret));
+
+    const lsqSource = await describeSource(sourceId);
+    const connection = lsqSource.items.find((i) => i.key === "leadsquared-connection")!;
+    assert.equal(connection.summary, "UDS · sync on");
+    assert.equal(lsqSource.items.find((i) => i.key === "leadsquared-mappings")!.summary, "2 fields");
+    assert.ok(noSecrets(lsqSource), "the source description shows no key or link secret");
+
+    const lsqRequest = { ...request, items: ["leadsquared-connection"], targetIds: [targetA, targetB] };
+    const connPreview = await previewCopy(groupId, lsqRequest);
+    assert.ok(noSecrets(connPreview), "the review shows no key or link secret");
+    const previewB = connPreview.find((p) => p.businessAccountId === targetB)!;
+    assert.deepEqual(previewB.changes[0].details.map((d) => d.field), ["Sync to LeadSquared", "Connection method", "UDS webhook link", "UDS key"]);
+    assert.ok(previewB.warnings.some((w) => w.message.includes("no LeadSquared field mappings")));
+    assert.ok(previewB.warnings.some((w) => w.message.includes("Sync all to CRM")));
+    assert.ok(!connPreview.find((p) => p.businessAccountId === targetA)!.warnings.some((w) => w.message.includes("no LeadSquared field mappings")));
+
+    const mapPreview = await previewCopy(groupId, { ...lsqRequest, items: ["leadsquared-mappings"], targetIds: [targetA] });
+    assert.ok(mapPreview[0].warnings.some((w) => w.message.includes('changes from "Online MCA" to "Online MBA"')));
+
+    const lsqCopy = await runCopy(groupId, { ...lsqRequest, items: ["leadsquared-connection", "leadsquared-mappings"] }, { name: "tester" });
+    assert.ok(lsqCopy.results.every((r) => r.ok));
+    for (const id of [targetA, targetB]) {
+      const s = await settings(id);
+      assert.equal(s.leadsquaredConnectionType, "uds");
+      assert.equal(s.leadsquaredUdsWebhookUrl, UDS_URL);
+      assert.equal(decrypt(s.leadsquaredUdsKey), "uds-secret-1");
+      assert.ok(isLeadSquaredConfigured(s), "the account now sends leads to LeadSquared");
+      assert.deepEqual((await mappingsOf(id)).map((m: any) => m.custom_value ?? m.leadsquared_field), ["FirstName", "Online MBA"]);
+    }
+    assert.equal((await settings(targetA)).leadsquaredAccessKey, "alpha-key"); // A UDS copy leaves the API keys alone.
+    // The same key encrypted again counts as the same: nothing left to copy.
+    await storage.upsertWidgetSettings(targetB, { leadsquaredUdsKey: encrypt("uds-secret-1") } as any);
+    const lsqAgain = await previewCopy(groupId, { ...lsqRequest, items: ["leadsquared-connection", "leadsquared-mappings"] });
+    assert.ok(lsqAgain.every((p) => p.changes.length === 0));
+
+    await undoCopy(groupId, lsqCopy.copyId, "tester");
+    const undoneA = await settings(targetA);
+    assert.notEqual(undoneA.leadsquaredConnectionType, "uds");
+    assert.ok(!undoneA.leadsquaredUdsKey);
+    assert.deepEqual((await mappingsOf(targetA)).map((m: any) => m.custom_value), ["Online MCA"]);
+    assert.equal((await mappingsOf(targetB)).length, 0);
+    await storage.upsertWidgetSettings(sourceId, { leadsquaredEnabled: "false" } as any);
+
     // One account failing doesn't stop the others; its reason is kept, and trying it again works.
     await q(`CREATE FUNCTION copy_test_fail() RETURNS trigger AS $$ BEGIN IF NEW.chat_color = '#FA11ED' AND NEW.business_account_id = '${targetA}' THEN RAISE EXCEPTION 'Forced failure'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`);
     await q("CREATE TRIGGER copy_test_fail BEFORE UPDATE ON widget_settings FOR EACH ROW EXECUTE FUNCTION copy_test_fail()");
