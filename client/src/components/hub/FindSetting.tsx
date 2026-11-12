@@ -35,7 +35,7 @@ function buildEntries(access: HubAccess): Entry[] {
   if (access.isSuperAdminViewing) {
     out.push({ label: "Connected apps", place: "Settings", href: SETTINGS_PATHS.integrations, formerly: "CRM & integrations · LeadSquared · Salesforce · Custom CRM · Shopify · ERP" });
     out.push({ label: "AI usage & limits", place: "Settings", href: SETTINGS_PATHS.usage });
-    out.push({ label: "Features on this account", place: "Settings", href: SETTINGS_PATHS.features, formerly: "Manage modules · Product features · switch agents and add-ons on or off" });
+    out.push({ label: "Features on this account", place: "Settings", href: SETTINGS_PATHS.features, formerly: "Manage modules · Product features · Products · Jewelry Showcase · Vista · switch agents and add-ons on or off" });
   }
   return out;
 }

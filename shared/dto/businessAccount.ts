@@ -3,6 +3,13 @@ import type { BusinessAccount } from "../schema";
 // Product tier type
 export type ProductTier = 'chroney' | 'jewelry_showcase' | 'jewelry_showcase_chroney';
 
+export const isJewelryTier = (tier: ProductTier | string | null | undefined) =>
+  tier === 'jewelry_showcase' || tier === 'jewelry_showcase_chroney';
+
+/** Jewelry Showcase (Vista) is really on: a jewellery tier and, next to Website chat, the showcase switch on (same rule as the sidebar). */
+export const isVistaOn = (ba: { productTier: ProductTier | string | null | undefined; jewelryShowcaseEnabled: boolean }) =>
+  isJewelryTier(ba.productTier) && (ba.productTier === 'jewelry_showcase' || ba.jewelryShowcaseEnabled);
+
 // System mode type - controls visible features for business users
 export type SystemMode = 'full' | 'essential';
 

@@ -16,7 +16,7 @@ interface AccountLite { id: string; name: string; website: string | null }
 /** Things that live on every account's page, found by what they used to be called. */
 const ACCOUNT_ITEMS: { tab: typeof ACCOUNT_TABS[number]["key"]; formerly: string }[] = [
   { tab: "overview", formerly: "Insights · leads · conversations · last login" },
-  { tab: "features", formerly: "Features · product features · manage modules · agents · add-ons" },
+  { tab: "features", formerly: "Features · product features · products · manage modules · agents · add-ons · Jewelry Showcase · Vista" },
   { tab: "keys", formerly: "API Keys · OpenAI key · ElevenLabs · Vista Studio · image model · photo search key" },
   { tab: "avatar", formerly: "Live AI avatar · HeyGen · Anam · avatar minutes" },
   { tab: "usage", formerly: "Usage & Limits · monthly limit · spend" },

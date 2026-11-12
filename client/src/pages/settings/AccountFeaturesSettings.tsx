@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import { Briefcase, Calendar, Camera, CheckCircle2, GraduationCap, Headphones, LayoutGrid, Link2, Loader2, Megaphone, Mic, PackageOpen, School, ShoppingBag, TriangleAlert, Video } from "lucide-react";
-import type { BusinessAccountDto, ProductTier, SystemMode } from "@shared/dto";
+import { isJewelryTier, isVistaOn as vistaOn, type BusinessAccountDto, type ProductTier, type SystemMode } from "@shared/dto";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Switch } from "@/components/ui/switch";
@@ -40,18 +40,12 @@ type FlagField =
 const accountKey = (id: string) => ["/api/business-accounts", id];
 const avatarKey = (id: string) => ["/api/super-admin/avatar/accounts", id];
 
-const isJewelryTier = (tier: ProductTier) => tier === "jewelry_showcase" || tier === "jewelry_showcase_chroney";
-
 /** Which product tier the Website chat + Vista switches add up to. */
 function deriveProductTier(chroney: boolean, jewelry: boolean): ProductTier {
   if (chroney && jewelry) return "jewelry_showcase_chroney";
   if (jewelry) return "jewelry_showcase";
   return "chroney";
 }
-
-/** Vista shows in the sidebar only with a jewellery tier and, next to Website chat, the showcase switch on. */
-const vistaOn = (ba: BusinessAccountDto) =>
-  isJewelryTier(ba.productTier) && (ba.productTier === "jewelry_showcase" || ba.jewelryShowcaseEnabled);
 
 function Row({ icon: Icon, tint, label, description, hint, below, children }: {
   icon: LucideIcon; tint: string; label: string; description: string; hint?: string | null; below?: ReactNode; children: ReactNode;
@@ -184,7 +178,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
 
   const setVista = (on: boolean) =>
     save.mutate({
-      key: "vista", label: "Vista", on,
+      key: "vista", label: "Jewelry Showcase", on,
       run: async () => {
         const updated = await saveTier(ba.chroneyEnabled, on);
         // Next to Website chat, Vista also needs its showcase switch (Manage modules › Jewelry Showcase).
@@ -353,10 +347,10 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
             </>
           )}
         </Row>
-        <Row {...area("vista")} label="Vista" description="Visual search for jewellery: customers upload a photo and find matching designs" below={vistaOn(ba) ? photoStatusLine : null}>
+        <Row {...area("vista")} label="Jewelry Showcase (Vista)" description="Jewellery catalogue with visual search: customers upload a photo and find matching designs" below={vistaOn(ba) ? photoStatusLine : null}>
           {setUpButton("visualSearch")}
           {spinner("vista")}
-          <Switch checked={vistaOn(ba)} disabled={pending} onCheckedChange={setVista} aria-label="Vista" data-testid="switch-feature-vista" />
+          <Switch checked={vistaOn(ba)} disabled={pending} onCheckedChange={setVista} aria-label="Jewelry Showcase (Vista)" data-testid="switch-feature-vista" />
         </Row>
       </Group>
 
@@ -436,7 +430,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
         <Row
           icon={ShoppingBag} tint="bg-green-600" label="Shopify"
           description="Bring products in from a Shopify store"
-          hint={!hasProducts ? "Needs Website chat, WhatsApp or Vista switched on to show up." : null}
+          hint={!hasProducts ? "Needs Website chat, WhatsApp or Jewelry Showcase switched on to show up." : null}
           below={checklistLine("shopify")}
         >
           {setUpButton("shopify")}

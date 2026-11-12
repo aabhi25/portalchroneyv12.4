@@ -1,9 +1,9 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { format, startOfDay, endOfDay, subDays, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import { Building2, CalendarDays, Loader2, LogIn, Sparkles } from "lucide-react";
-import type { BusinessAccountDto } from "@shared/dto/businessAccount";
+import { isVistaOn, type BusinessAccountDto } from "@shared/dto/businessAccount";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -70,7 +70,7 @@ export function FeatureChips({ account }: { account: BusinessAccountDto }) {
       {account.instagramEnabled && pill("Instagram", "bg-pink-50 text-pink-700")}
       {account.facebookEnabled && pill("Facebook", "bg-blue-50 text-blue-700")}
       {account.aiCallingEnabled && pill("Calls", "bg-cyan-50 text-cyan-700")}
-      {(account.productTier === "jewelry_showcase" || account.productTier === "jewelry_showcase_chroney") && pill("Vista", "bg-amber-50 text-amber-700")}
+      {isVistaOn(account) && pill("Vista", "bg-amber-50 text-amber-700")}
       {account.k12EducationEnabled && pill("K12", "bg-indigo-50 text-indigo-700")}
       {account.jobPortalEnabled && pill("Jobs", "bg-cyan-50 text-cyan-800")}
       {addOns > 0 && pill(`+${addOns} add-on${addOns === 1 ? "" : "s"}`, "bg-gray-100 text-gray-600")}
@@ -426,16 +426,13 @@ export function AccountPage({ accountId, tab, account, isLoading, isError, actio
           <div className="max-w-3xl space-y-5">
             <SaCard title="Details">
               <SaRow label="Business name">{account.name}</SaRow>
-              <SaRow label="Website">{account.website || "—"}</SaRow>
-              <SaRow
-                label="Products"
-                help={[
-                  account.chroneyEnabled && "Chroney Chat",
-                  account.whatsappEnabled && "WhatsApp AI Agent",
-                  (account.productTier === "jewelry_showcase" || account.productTier === "jewelry_showcase_chroney") && "Jewelry Showcase",
-                ].filter(Boolean).join(" · ") || "None"}
-              >
+              <SaRow label="Website" help={account.website || "—"}>
                 <Button size="sm" variant="outline" onClick={actions.edit} data-testid="button-account-edit">Edit details</Button>
+              </SaRow>
+              <SaRow label="Agents & add-ons" help={<span className="mt-1 block"><FeatureChips account={account} /></span>}>
+                <Button size="sm" variant="outline" asChild data-testid="button-account-details-features">
+                  <Link href={accountHref(account.id, "features")}>Change in Features</Link>
+                </Button>
               </SaRow>
             </SaCard>
             <AccountApiSettings businessAccountId={account.id} section="currency" />

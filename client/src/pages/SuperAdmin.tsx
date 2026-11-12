@@ -24,7 +24,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import {
   DropdownMenu,
@@ -45,8 +44,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { DataRetentionDialog } from "@/components/DataRetentionDialog";
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
-import { Plus, Timer, Building2, Pencil, Copy, Check, Sparkles, MoreVertical, Eye, Search, Trash2, Gem, Power, LogIn, Play, MessageCircle, MessageSquare, Video } from "lucide-react";
-import type { BusinessAccountDto, ProductTier } from "@shared/dto/businessAccount";
+import { Plus, Timer, Building2, Pencil, Copy, Check, Sparkles, MoreVertical, Eye, Search, Trash2, Power, LogIn, Play, Video } from "lucide-react";
+import type { BusinessAccountDto } from "@shared/dto/businessAccount";
 import AccountFeaturesSettings from "@/pages/settings/AccountFeaturesSettings";
 
 /** Business accounts: the list, or (with accountId) one account's own page. Both share the dialogs below. */
@@ -58,19 +57,11 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
   const [newBusinessName, setNewBusinessName] = useState("");
   const [newBusinessWebsite, setNewBusinessWebsite] = useState("");
   const [newUsername, setNewUsername] = useState("");
-  const [newProductTier, setNewProductTier] = useState<ProductTier>("chroney");
-  const [newChroneyEnabled, setNewChroneyEnabled] = useState(true);
-  const [newWhatsappEnabled, setNewWhatsappEnabled] = useState(false);
-  const [newJewelryEnabled, setNewJewelryEnabled] = useState(false);
   const [isBusinessDialogOpen, setIsBusinessDialogOpen] = useState(false);
   
   const [editingBusiness, setEditingBusiness] = useState<BusinessAccountDto | null>(null);
   const [editBusinessName, setEditBusinessName] = useState("");
   const [editBusinessWebsite, setEditBusinessWebsite] = useState("");
-  const [editProductTier, setEditProductTier] = useState<ProductTier>("chroney");
-  const [editChroneyEnabled, setEditChroneyEnabled] = useState(true);
-  const [editWhatsappEnabled, setEditWhatsappEnabled] = useState(false);
-  const [editJewelryEnabled, setEditJewelryEnabled] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   
   const [credentialsDialogOpen, setCredentialsDialogOpen] = useState(false);
@@ -166,9 +157,10 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
-  // Create business account mutation
+  // Create business account mutation. Agents and add-ons are switched on afterwards in Features;
+  // the server starts every new account with Website chat on and everything else off.
   const createBusinessMutation = useMutation({
-    mutationFn: async (data: { name: string; website: string; username: string; productTier: ProductTier; chroneyEnabled: boolean; whatsappEnabled: boolean }) => {
+    mutationFn: async (data: { name: string; website: string; username: string }) => {
       return await apiRequest<{ businessAccount: BusinessAccountDto; user: any; credentials: { username: string; tempPassword: string } }>("POST", "/api/business-accounts", data);
     },
     onSuccess: (data) => {
@@ -176,10 +168,6 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
       setNewBusinessName("");
       setNewBusinessWebsite("");
       setNewUsername("");
-      setNewProductTier("chroney");
-      setNewChroneyEnabled(true);
-      setNewWhatsappEnabled(false);
-      setNewJewelryEnabled(false);
       setIsBusinessDialogOpen(false);
       setGeneratedCredentials(data.credentials);
       setCredentialsDialogOpen(true);
@@ -196,36 +184,20 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
   const handleCreateBusiness = (e: React.FormEvent) => {
     e.preventDefault();
     if (newBusinessName.trim() && newBusinessWebsite.trim() && newUsername.trim()) {
-      // Derive productTier from checkbox selections
-      let productTier: ProductTier = "chroney";
-      if (newChroneyEnabled && newJewelryEnabled) {
-        productTier = "jewelry_showcase_chroney";
-      } else if (newJewelryEnabled) {
-        productTier = "jewelry_showcase";
-      } else {
-        productTier = "chroney";
-      }
-      
-      createBusinessMutation.mutate({ 
+      createBusinessMutation.mutate({
         name: newBusinessName.trim(),
         website: newBusinessWebsite.trim(),
         username: newUsername.trim(),
-        productTier,
-        chroneyEnabled: newChroneyEnabled,
-        whatsappEnabled: newWhatsappEnabled,
       });
     }
   };
 
-  // Update business account mutation
+  // Update business account mutation (name and website only; agents and add-ons live in Features)
   const updateBusinessMutation = useMutation({
-    mutationFn: async (data: { id: string; name: string; website: string; productTier: ProductTier; chroneyEnabled: boolean; whatsappEnabled: boolean }) => {
+    mutationFn: async (data: { id: string; name: string; website: string }) => {
       return await apiRequest<BusinessAccountDto>("PUT", `/api/business-accounts/${data.id}`, {
         name: data.name,
         website: data.website,
-        productTier: data.productTier,
-        chroneyEnabled: data.chroneyEnabled,
-        whatsappEnabled: data.whatsappEnabled,
       });
     },
     onSuccess: () => {
@@ -250,34 +222,16 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
     setEditingBusiness(business);
     setEditBusinessName(business.name);
     setEditBusinessWebsite(business.website || "");
-    setEditProductTier(business.productTier || "chroney");
-    // Set checkbox values based on feature flags
-    setEditChroneyEnabled(business.chroneyEnabled ?? true);
-    setEditJewelryEnabled(business.productTier === "jewelry_showcase" || business.productTier === "jewelry_showcase_chroney");
-    setEditWhatsappEnabled(business.whatsappEnabled || false);
     setIsEditDialogOpen(true);
   };
 
   const handleUpdateBusiness = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingBusiness && editBusinessName.trim() && editBusinessWebsite.trim()) {
-      // Derive productTier from checkbox selections
-      let productTier: ProductTier = "chroney";
-      if (editChroneyEnabled && editJewelryEnabled) {
-        productTier = "jewelry_showcase_chroney";
-      } else if (editJewelryEnabled) {
-        productTier = "jewelry_showcase";
-      } else {
-        productTier = "chroney";
-      }
-      
       updateBusinessMutation.mutate({
         id: editingBusiness.id,
         name: editBusinessName.trim(),
         website: editBusinessWebsite.trim(),
-        productTier,
-        chroneyEnabled: editChroneyEnabled,
-        whatsappEnabled: editWhatsappEnabled,
       });
     }
   };
@@ -637,44 +591,6 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                       This website will be used to train the AI chatbot
                     </p>
                   </div>
-                  <div>
-                    <Label>Products</Label>
-                    <p className="text-xs text-gray-500 mt-1 mb-3">
-                      Select which products to enable for this account
-                    </p>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between p-2 border rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <MessageSquare className="w-4 h-4 text-blue-600" />
-                          <span className="text-sm font-medium">Chroney Chat</span>
-                        </div>
-                        <Switch
-                          checked={newChroneyEnabled}
-                          onCheckedChange={setNewChroneyEnabled}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between p-2 border rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <MessageCircle className="w-4 h-4 text-green-600" />
-                          <span className="text-sm font-medium">WhatsApp AI Agent</span>
-                        </div>
-                        <Switch
-                          checked={newWhatsappEnabled}
-                          onCheckedChange={setNewWhatsappEnabled}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between p-2 border rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <Gem className="w-4 h-4 text-amber-600" />
-                          <span className="text-sm font-medium">Jewelry Showcase</span>
-                        </div>
-                        <Switch
-                          checked={newJewelryEnabled}
-                          onCheckedChange={setNewJewelryEnabled}
-                        />
-                      </div>
-                    </div>
-                  </div>
                   <div className="border-t pt-4">
                     <h4 className="text-sm font-semibold text-gray-900 mb-3">Login Credentials</h4>
                     <div>
@@ -694,6 +610,9 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                       </p>
                     </div>
                   </div>
+                  <p className="text-xs text-gray-500" data-testid="text-create-features-hint">
+                    The account starts with Website chat on. Switch on WhatsApp, Jewelry Showcase and the rest in the account's Features.
+                  </p>
                   <Button type="submit" disabled={createBusinessMutation.isPending} data-testid="button-submit-business" className="w-full">
                     {createBusinessMutation.isPending ? "Creating..." : "Create Business Account"}
                   </Button>
@@ -709,7 +628,7 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
               <DialogHeader>
                 <DialogTitle>Edit Business Account</DialogTitle>
                 <DialogDescription>
-                  Update the business account details
+                  Update the business name and website. Agents and add-ons are switched on or off in Features.
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleUpdateBusiness} className="space-y-4">
@@ -738,44 +657,6 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                   <p className="text-xs text-gray-500 mt-1.5">
                     This website will be used to train the AI chatbot
                   </p>
-                </div>
-                <div>
-                  <Label>Products</Label>
-                  <p className="text-xs text-gray-500 mt-1 mb-3">
-                    Select which products to enable for this account
-                  </p>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between p-2 border rounded-lg">
-                      <div className="flex items-center gap-2">
-                        <MessageSquare className="w-4 h-4 text-blue-600" />
-                        <span className="text-sm font-medium">Chroney Chat</span>
-                      </div>
-                      <Switch
-                        checked={editChroneyEnabled}
-                        onCheckedChange={setEditChroneyEnabled}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between p-2 border rounded-lg">
-                      <div className="flex items-center gap-2">
-                        <MessageCircle className="w-4 h-4 text-green-600" />
-                        <span className="text-sm font-medium">WhatsApp AI Agent</span>
-                      </div>
-                      <Switch
-                        checked={editWhatsappEnabled}
-                        onCheckedChange={setEditWhatsappEnabled}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between p-2 border rounded-lg">
-                      <div className="flex items-center gap-2">
-                        <Gem className="w-4 h-4 text-amber-600" />
-                        <span className="text-sm font-medium">Jewelry Showcase</span>
-                      </div>
-                      <Switch
-                        checked={editJewelryEnabled}
-                        onCheckedChange={setEditJewelryEnabled}
-                      />
-                    </div>
-                  </div>
                 </div>
                 <Button type="submit" disabled={updateBusinessMutation.isPending} className="w-full">
                   {updateBusinessMutation.isPending ? "Updating..." : "Update Business Account"}
