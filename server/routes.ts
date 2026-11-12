@@ -9498,9 +9498,15 @@ Return ONLY the refined instruction, nothing else.`
   // SuperAdmin: Create business account (with user)
   app.post("/api/business-accounts", requireAuth, requireRole("super_admin"), async (req, res) => {
     try {
-      const { name, website, username, productTier, chroneyEnabled, whatsappEnabled, instagramEnabled, facebookEnabled } = req.body;
+      const { name, website, username, productTier, chroneyEnabled, whatsappEnabled, instagramEnabled, facebookEnabled, starter: starterKey } = req.body;
       if (!name) {
         return res.status(400).json({ error: "Business name required" });
+      }
+      // "What kind of business?" in the New account box; missing = Blank (today's defaults)
+      const { getBusinessStarter } = await import("@shared/businessStarters");
+      const starter = starterKey === undefined || starterKey === null ? undefined : getBusinessStarter(starterKey);
+      if (starterKey != null && !starter) {
+        return res.status(400).json({ error: "Unknown business type" });
       }
       if (!website) {
         return res.status(400).json({ error: "Website URL required" });
@@ -9556,14 +9562,29 @@ Return ONLY the refined instruction, nothing else.`
         role: "business_user",
         businessAccountId: businessAccount.id,
       });
-      
+
+      // The account and login exist either way; if the starter pack fails, say so rather than fail the whole create.
+      let starterResult: { key: string; label: string; summary: string[] } | null = null;
+      let starterError: string | null = null;
+      if (starter && starter.key !== "blank") {
+        try {
+          const { applyBusinessStarter } = await import("./services/businessStarters");
+          starterResult = await applyBusinessStarter(businessAccount.id, businessAccount.name, starter);
+        } catch (e: any) {
+          console.error(`[SuperAdmin] Starter pack "${starter.key}" failed for ${businessAccount.id}:`, e);
+          starterError = `The account was created, but the ${starter.label} setup didn't finish. Switch features on in Features instead.`;
+        }
+      }
+
       res.json({
         businessAccount,
         user,
         credentials: {
           username: user.username,
           tempPassword: password,
-        }
+        },
+        starter: starterResult,
+        starterError,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

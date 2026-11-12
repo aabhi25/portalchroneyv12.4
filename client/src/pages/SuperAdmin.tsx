@@ -46,6 +46,8 @@ import { DataRetentionDialog } from "@/components/DataRetentionDialog";
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
 import { Plus, Timer, Building2, Pencil, Copy, Check, Sparkles, MoreVertical, Eye, Search, Trash2, Power, LogIn, Play, Video } from "lucide-react";
 import type { BusinessAccountDto } from "@shared/dto/businessAccount";
+import type { BusinessStarterKey } from "@shared/businessStarters";
+import { BusinessStarterPicker } from "@/components/superadmin/BusinessStarterPicker";
 import AccountFeaturesSettings from "@/pages/settings/AccountFeaturesSettings";
 
 /** Business accounts: the list, or (with accountId) one account's own page. Both share the dialogs below. */
@@ -57,6 +59,9 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
   const [newBusinessName, setNewBusinessName] = useState("");
   const [newBusinessWebsite, setNewBusinessWebsite] = useState("");
   const [newUsername, setNewUsername] = useState("");
+  const [newStarter, setNewStarter] = useState<BusinessStarterKey>("blank");
+  // What the chosen business type set up, shown with the new login details
+  const [createdSetup, setCreatedSetup] = useState<{ accountId: string; label: string; summary: string[]; error: string | null } | null>(null);
   const [isBusinessDialogOpen, setIsBusinessDialogOpen] = useState(false);
   
   const [editingBusiness, setEditingBusiness] = useState<BusinessAccountDto | null>(null);
@@ -157,17 +162,24 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
-  // Create business account mutation. Agents and add-ons are switched on afterwards in Features;
-  // the server starts every new account with Website chat on and everything else off.
+  // Create business account mutation. Blank starts with Website chat on and everything else off;
+  // any other business type also switches on its features and fills in a starting setup (shared/businessStarters.ts).
   const createBusinessMutation = useMutation({
-    mutationFn: async (data: { name: string; website: string; username: string }) => {
-      return await apiRequest<{ businessAccount: BusinessAccountDto; user: any; credentials: { username: string; tempPassword: string } }>("POST", "/api/business-accounts", data);
+    mutationFn: async (data: { name: string; website: string; username: string; starter: BusinessStarterKey }) => {
+      return await apiRequest<{
+        businessAccount: BusinessAccountDto; user: any; credentials: { username: string; tempPassword: string };
+        starter: { key: string; label: string; summary: string[] } | null; starterError: string | null;
+      }>("POST", "/api/business-accounts", data);
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/business-accounts"] });
       setNewBusinessName("");
       setNewBusinessWebsite("");
       setNewUsername("");
+      setNewStarter("blank");
+      setCreatedSetup(data.starter || data.starterError
+        ? { accountId: data.businessAccount.id, label: data.starter?.label ?? "", summary: data.starter?.summary ?? [], error: data.starterError }
+        : null);
       setIsBusinessDialogOpen(false);
       setGeneratedCredentials(data.credentials);
       setCredentialsDialogOpen(true);
@@ -188,6 +200,7 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
         name: newBusinessName.trim(),
         website: newBusinessWebsite.trim(),
         username: newUsername.trim(),
+        starter: newStarter,
       });
     }
   };
@@ -381,6 +394,7 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
       queryClient.invalidateQueries({ queryKey: ["/api/business-accounts"] });
       setDuplicateDialogOpen(false);
       resetDuplicateForm();
+      setCreatedSetup(null);
       setGeneratedCredentials(data.credentials);
       setCredentialsDialogOpen(true);
       toast({
@@ -555,7 +569,7 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                     New account
                   </Button>
                 </DialogTrigger>
-              <DialogContent className="max-w-md">
+              <DialogContent className="max-w-md max-h-[92vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Create Business Account</DialogTitle>
                   <DialogDescription>
@@ -591,6 +605,7 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                       This website will be used to train the AI chatbot
                     </p>
                   </div>
+                  <BusinessStarterPicker value={newStarter} onChange={setNewStarter} />
                   <div className="border-t pt-4">
                     <h4 className="text-sm font-semibold text-gray-900 mb-3">Login Credentials</h4>
                     <div>
@@ -610,9 +625,6 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                       </p>
                     </div>
                   </div>
-                  <p className="text-xs text-gray-500" data-testid="text-create-features-hint">
-                    The account starts with Website chat on. Switch on WhatsApp, Jewelry Showcase and the rest in the account's Features.
-                  </p>
                   <Button type="submit" disabled={createBusinessMutation.isPending} data-testid="button-submit-business" className="w-full">
                     {createBusinessMutation.isPending ? "Creating..." : "Create Business Account"}
                   </Button>
@@ -698,10 +710,44 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                       The user will be required to change this password on their first login for security.
                     </p>
                   </div>
+                  {createdSetup && (
+                    <div className="rounded-lg border border-black/[0.08] p-3" data-testid="text-created-setup">
+                      {createdSetup.error ? (
+                        <p className="text-xs text-amber-800">{createdSetup.error}</p>
+                      ) : (
+                        <>
+                          <p className="text-sm font-medium text-gray-900">Set up as {createdSetup.label}</p>
+                          <ul className="mt-1.5 space-y-1 text-xs text-gray-600">
+                            {createdSetup.summary.map(line => (
+                              <li key={line} className="flex gap-1.5"><Check className="mt-0.5 h-3 w-3 shrink-0 text-green-600" />{line}</li>
+                            ))}
+                          </ul>
+                          {createdSetup.summary.some(line => line.startsWith("Opening hours")) && (
+                            <p className="mt-2 text-xs text-amber-800">Check the opening hours with the business: they're a starting guess.</p>
+                          )}
+                        </>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2.5"
+                        data-testid="button-created-open-features"
+                        onClick={() => {
+                          setCredentialsDialogOpen(false);
+                          setGeneratedCredentials(null);
+                          setLocation(accountHref(createdSetup.accountId, "features"));
+                          setCreatedSetup(null);
+                        }}
+                      >
+                        Open Features
+                      </Button>
+                    </div>
+                  )}
                   <Button 
                     onClick={() => {
                       setCredentialsDialogOpen(false);
                       setGeneratedCredentials(null);
+                      setCreatedSetup(null);
                     }} 
                     className="w-full"
                   >
