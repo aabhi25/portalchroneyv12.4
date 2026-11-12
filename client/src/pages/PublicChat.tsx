@@ -16,6 +16,7 @@ import { useUrgencyOffer } from "@/hooks/useUrgencyOffer";
 import { useToast } from "@/hooks/use-toast";
 import { ResumeUploadProgress } from "@/components/ResumeUploadProgress";
 import { ImageUploadProgress } from "@/components/ImageUploadProgress";
+import { isPhotoMessage, photoMessage, splitPhotoMessage, whenIdle } from "@/lib/k12PhotoSend";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CurriculumMarkdownImage } from '@/components/CurriculumMarkdownImage';
@@ -264,6 +265,14 @@ export default function PublicChat() {
   const sessionIdRef = useRef<string>(crypto.randomUUID());
   const conversationIdRef = useRef<string>('');
   const sendMessageRef = useRef<((msg?: string) => Promise<void>) | null>(null);
+  // A question photo and the note typed with it go out as ONE message. True from
+  // the moment a photo is picked until its message is sent (or the upload fails);
+  // while it is true, typed sends wait in the box and become the photo's note.
+  const k12PhotoPendingRef = useRef(false);
+  const messageRef = useRef(message);
+  messageRef.current = message;
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
   const menuModeInitializedRef = useRef(false);
 
   const [isPasswordVerified, setIsPasswordVerified] = useState(false);
@@ -715,6 +724,7 @@ export default function PublicChat() {
     if (k12ImageUploadStage !== 'idle' || isLoading) return;
 
     try {
+      k12PhotoPendingRef.current = true;
       setK12ImageUploadStage('uploading');
       // Reset stale pending state from any prior upload so a failed/retried
       // upload can never carry a previous image's URL onto a later message.
@@ -742,10 +752,30 @@ export default function PublicChat() {
         pendingK12ImageUrlRef.current = result.imageUrl;
       }
       setK12ImageUploadStage('ready');
+      const dropPendingPhoto = () => {
+        k12PhotoPendingRef.current = false;
+        setK12ImageUploadStage('idle');
+        pendingK12ImageUrlRef.current = null;
+        pendingImageContextIdRef.current = null;
+        pendingK12ImagePreviewRef.current = null;
+      };
       setTimeout(() => {
-        if (sendMessageRef.current) sendMessageRef.current(`[IMAGE_UPLOAD] ${file.name}`);
+        // Whatever is in the box now is the note for this photo — sent as one message.
+        whenIdle(
+          () => isLoadingRef.current,
+          () => {
+            k12PhotoPendingRef.current = false;
+            if (!sendMessageRef.current) { dropPendingPhoto(); return; }
+            sendMessageRef.current(photoMessage(file.name, messageRef.current));
+          },
+          () => {
+            dropPendingPhoto();
+            toast({ title: 'Photo not sent', description: 'Please send your photo again.', variant: 'destructive' });
+          },
+        );
       }, 600);
     } catch (err: any) {
+      k12PhotoPendingRef.current = false;
       setK12ImageUploadStage('idle');
       pendingK12ImageUrlRef.current = null;
       pendingImageContextIdRef.current = null;
@@ -876,7 +906,10 @@ export default function PublicChat() {
     const messageToSend = overrideMessage ?? message;
     if (!messageToSend.trim() || isLoading || !token) return;
     const isResumeFlow = messageToSend.trim().startsWith('[RESUME_UPLOAD]');
-    const isK12ImageFlow = messageToSend.trim().startsWith('[IMAGE_UPLOAD]');
+    const isK12ImageFlow = isPhotoMessage(messageToSend);
+    // A photo is on its way: what the student typed stays in the box and goes out
+    // with the photo as one message, instead of as a separate question.
+    if (k12PhotoPendingRef.current && !isK12ImageFlow) return;
     let resumeProgressCleared = false;
 
     const userMessage: ChatMessage = {
@@ -1074,6 +1107,8 @@ export default function PublicChat() {
       if (isResumeFlow && !resumeProgressCleared) {
         setResumeUploadStage('idle');
       }
+      // A photo send that failed must not leave the photo button stuck.
+      if (isK12ImageFlow) setK12ImageUploadStage('idle');
     }
   };
 
@@ -1598,7 +1633,7 @@ export default function PublicChat() {
                 ) : (
                   <div className="flex justify-end">
                     <div className="max-w-[85%] space-y-2">
-                      {msg.imageUrl && !msg.content.startsWith('[IMAGE_UPLOAD]') && (
+                      {msg.imageUrl && !isPhotoMessage(msg.content) && (
                         <div className="flex justify-end">
                           <img 
                             src={msg.imageUrl} 
@@ -1630,7 +1665,7 @@ export default function PublicChat() {
                             </svg>
                             <span className="font-medium">Applying for {msg.content.replace(/^\[JOB_APPLY\]\s*/, '').replace(/\s*\|jobId:.*$/, '')}</span>
                           </div>
-                        ) : msg.content.startsWith('[IMAGE_UPLOAD]') ? (
+                        ) : isPhotoMessage(msg.content) ? (
                           <div className="flex flex-col gap-1">
                             {msg.imageUrl ? (
                               <img
@@ -1645,8 +1680,11 @@ export default function PublicChat() {
                                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
                                   <circle cx="12" cy="13" r="4"/>
                                 </svg>
-                                <span className="font-medium">{msg.content.replace('[IMAGE_UPLOAD] ', '')} uploaded</span>
+                                <span className="font-medium">{splitPhotoMessage(msg.content).fileName} uploaded</span>
                               </div>
+                            )}
+                            {splitPhotoMessage(msg.content).note && (
+                              <p className="whitespace-pre-wrap break-words" data-testid="text-photo-note">{splitPhotoMessage(msg.content).note}</p>
                             )}
                           </div>
                         ) : (
@@ -1669,6 +1707,9 @@ export default function PublicChat() {
               <div className="flex items-start gap-2 px-3 pb-2">
                 <div className="flex-1 max-w-[85%]">
                   <ImageUploadProgress stage={k12ImageUploadStage} chatColor={chatColor} />
+                  {message.trim() && (
+                    <p className="mt-1 text-xs text-gray-500" data-testid="text-photo-note-hint">Your note will be sent with the photo.</p>
+                  )}
                 </div>
               </div>
             )}

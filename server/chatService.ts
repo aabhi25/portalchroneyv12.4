@@ -31,6 +31,12 @@ import { isTopscholarAccount } from './services/topscholar/config';
 import { pushTextMessage, type DoubtSyncSender } from './services/topscholar/doubtSyncService';
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
 import { VOICE_RESPONSE_STYLE_BLOCK } from './services/voice/voiceStyle';
+import {
+  K12_FOLLOW_UP_TURN_RULE, classifyK12SmallTalk, isK12FollowUpTurn, k12FollowUpLookupQuery, k12GreetingPrompt,
+  k12PhotoLookupQuery, k12PhotoTurnRule, k12SmallTalkTurnRule, parseImageUploadMessage, photoHistoryEntry,
+  photoMessageMetadata, photoQuestionPointer, safePromptLabel, storedPhotoContent, studentFirstNameOf,
+  type K12SmallTalk, type K12StudentLabels, type PhotoUpload,
+} from './services/k12TurnRules';
 import { resolveChatContextMode, type ChatContextMode } from './services/chatContext/config';
 import { buildBusinessProfile, type BusinessProfile } from './services/chatContext/businessProfile';
 import { buildIdentityBlock } from './services/chatContext/identity';
@@ -131,6 +137,11 @@ export interface ChatContext {
   // question photo). Stored on the user message so it renders in the conversation
   // on reload and in the admin Conversations view.
   imageUrl?: string | null;
+  /**
+   * Server-only: the uploaded photo itself as a data URL (set by the stream routes from the upload
+   * cache, never from the request body). Shown to the answering model on this turn only.
+   */
+  imageDataUrl?: string;
   isReturnExchangeLookup?: boolean;
   channel?: 'widget' | 'whatsapp' | 'instagram' | 'facebook' | 'other'; // Source channel — OTP gating only runs on 'widget' in v1
   // TopScholar curriculum handoff: cp_id scopes curriculum retrieval; studentName personalizes the tutor.
@@ -731,7 +742,7 @@ export class ChatService {
     conversationId: string, 
     role: 'user' | 'assistant', 
     content: string,
-    metadata?: { productIds?: string[] },
+    metadata?: { productIds?: string[]; imageText?: string },
     imageUrl?: string | null
   ): Promise<void> {
     // Skip DB storage for temporary spam conversations
@@ -2226,12 +2237,16 @@ Response:`;
         }
       }
       
-      // Store user message in memory and database
-      conversationMemory.storeMessage(context.userId, 'user', userMessage);
-      await this.storeMessageInDB(conversationId, 'user', userMessage, undefined, context.imageUrl);
+      // Store user message in memory and database. A K12 photo question (the photo and the note
+      // typed with it are one message) is kept in the chat with the text read from it, so a later
+      // "Q57" / "solve it" has something to refer to.
+      const photoTurn = context.imageText?.trim() ? parseImageUploadMessage(userMessage) : null;
+      const memoryUserContent = photoTurn ? photoHistoryEntry(photoTurn, context.imageText) : userMessage;
+      conversationMemory.storeMessage(context.userId, 'user', memoryUserContent);
+      await this.storeMessageInDB(conversationId, 'user', photoTurn ? storedPhotoContent(photoTurn) : userMessage, photoTurn ? photoMessageMetadata(context.imageText) : undefined, context.imageUrl);
       // Visitor message number from the DB (custom timing); reload memory if it is behind.
       const turnCount = await this.countTurnFromDb(context.userId, conversationId);
-      if (turnCount.reloaded) history = this.historyBeforeCurrent(context.userId, userMessage);
+      if (turnCount.reloaded) history = this.historyBeforeCurrent(context.userId, memoryUserContent);
       const userMessageCount = Math.max(turnCount.n, history.filter(m => m.role === 'user').length + 1);
 
       if (userMessage.startsWith('[JOB_APPLY]')) {
@@ -2288,16 +2303,16 @@ Response:`;
       // K12 IMAGE UPLOAD: replace placeholder with the OCR'd question text so that
       // RAG document search, K12 tool calls, FAQ matching, and the LLM all see
       // the actual academic question instead of "[IMAGE_UPLOAD] filename.jpg".
-      // The original placeholder remains in conversation history (already stored above).
+      // The student's typed note (if any) leads. The chat history keeps the photo entry stored above.
       // This runs AFTER reserved-prefix protocol checks (e.g. [JOB_APPLY]) so that
       // OCR text cannot spoof internal command protocols.
-      if (context.imageText && userMessage.startsWith('[IMAGE_UPLOAD]')) {
-        const ocrText = context.imageText.trim();
-        if (ocrText.length > 0) {
-          console.log(`[Chat ProcessMessage] Replacing [IMAGE_UPLOAD] placeholder with OCR'd question text (${ocrText.length} chars) for search and LLM`);
-          userMessage = ocrText;
-        }
+      if (photoTurn) {
+        const ocrText = context.imageText!.trim();
+        console.log(`[Chat ProcessMessage] Replacing [IMAGE_UPLOAD] placeholder with OCR'd question text (${ocrText.length} chars) for search and LLM`);
+        userMessage = [photoTurn.note, ocrText].filter(Boolean).join('\n\n');
       }
+      // K12 tutor: photo question, small talk or a short follow-up — its rule goes last in the prompt.
+      const k12TurnNS = this.k12TurnPlan(context, userMessage, history, photoTurn);
 
       try {
         const { getSmartReplyResponse } = await import('./services/smartReplyService');
@@ -2385,7 +2400,9 @@ Response:`;
         console.log(`[Chat ProcessMessage] Resume text injected into system context (${context.resumeText.length} chars)`);
       }
 
-      if (context.imageText) {
+      // (A photo question carries its read text in the student's message and gets the photo rule
+      // for the turn — see k12TurnPlan. This block is only for read text without that message.)
+      if (context.imageText && !photoTurn) {
         systemContext += `\n\n=== IMAGE UPLOADED BY STUDENT (REFERENCE) ===\nThe student uploaded a photo of their question. The text below was extracted from that photo and IS the same question now appearing as the user's message. Treat the user's message as a normal academic question: follow the K12 tutor rules above (call fetch_k12_topic first, apply Content-Only / Verbatim guardrails when enabled). Do NOT ask "what would you like to know about this?" — just answer the question.\n---IMAGE_TEXT---\n${context.imageText.substring(0, 8000)}\n=== END IMAGE TEXT ===\n`;
         console.log(`[Chat ProcessMessage] Image text injected into system context (${context.imageText.length} chars)`);
       }
@@ -2438,7 +2455,7 @@ Response:`;
       if (context.skipLeadTraining) {
         relevantTools = relevantTools.filter((tool: any) => tool.function.name !== 'capture_lead');
       }
-      if (this.shouldSkipK12Retrieval(context)) {
+      if (this.shouldSkipK12Retrieval(context) || k12TurnNS.smallTalk) {
         relevantTools = this.removeK12Tools(relevantTools);
       }
 
@@ -2481,7 +2498,7 @@ Response:`;
       const languageBlockNS = this.languageBlockFor(context);
       const turnBlockNS = otpBlockNS
         ? [languageBlockNS, `${otpBlockNS}\nThis verification step overrides everything above: no small talk, no answers to other questions, no requests for other contact details.`].filter(Boolean).join('\n\n')
-        : ([leadTurnNS?.block || '', languageBlockNS].filter(Boolean).join('\n\n'));
+        : ([leadTurnNS?.block || '', languageBlockNS, k12TurnNS.rule].filter(Boolean).join('\n\n'));
 
       // Get AI response with tool awareness
       // Phone validation: pass as last-position system message override (highest GPT attention weight)
@@ -2500,7 +2517,7 @@ Response:`;
         // fetch_k12_topic so academic answers are always grounded in curriculum
         // content. gpt-4o-mini ignores the prompt-only "you MUST call the tool"
         // rule and will otherwise answer from general knowledge.
-        this.shouldForceK12Fetch(context) ? 'fetch_k12_topic' : undefined,
+        this.shouldForceK12Fetch(context) && !k12TurnNS.smallTalk ? 'fetch_k12_topic' : undefined,
         turnBlockNS
       );
 
@@ -2820,9 +2837,10 @@ Response:`;
       const toolName = toolCall.function.name;
       const toolParams = JSON.parse(toolCall.function.arguments);
       if (toolName === 'fetch_k12_topic' && typeof toolParams.query === 'string') {
-        toolParams.query = this.enrichK12ImageFollowupQuery(
+        // updatedHistory ends with the student's current message — the lookup needs what came before it
+        toolParams.query = this.contextualK12Query(
           toolParams.query,
-          updatedHistory,
+          updatedHistory[updatedHistory.length - 1]?.role === 'user' ? updatedHistory.slice(0, -1) : updatedHistory,
           context.studentChapter,
         );
       }
@@ -3721,9 +3739,10 @@ Response:`;
       // BEFORE it, so it starts now and runs while the lead / journey / persistence steps below
       // do their ordered work. It is read-only. Same inputs as before: the K12 image question
       // text when one was uploaded, and it is re-run below if the history gets reloaded.
-      const searchMessage = (context.imageText && userMessage.startsWith('[IMAGE_UPLOAD]') && context.imageText.trim().length > 0)
-        ? context.imageText.trim()
-        : userMessage;
+      // A K12 photo question: the photo and the note typed with it are one message.
+      const photoTurn = context.imageText?.trim() ? parseImageUploadMessage(userMessage) : null;
+      const photoTurnText = photoTurn ? [photoTurn.note, context.imageText!.trim()].filter(Boolean).join('\n\n') : '';
+      const searchMessage = photoTurn ? photoTurnText : userMessage;
       const historyForSearch = history;
       const earlyKnowledgeP = userMessage.startsWith('[JOB_APPLY]')
         ? null
@@ -3788,11 +3807,14 @@ Response:`;
             return getSmartReplyResponse(context.businessAccountId, "website", searchMessage);
           })());
 
-      // Store user message in memory and database
-      conversationMemory.storeMessage(context.userId, 'user', userMessage);
+      // Store user message in memory and database. A photo question is kept in the chat with the
+      // text read from it, so a later "Q57" / "solve it" has something to refer to; the saved
+      // message keeps the file line and the student's note (the read text goes in its metadata).
+      const memoryUserContent = photoTurn ? photoHistoryEntry(photoTurn, context.imageText) : userMessage;
+      conversationMemory.storeMessage(context.userId, 'user', memoryUserContent);
       await Promise.all([
         hasActiveJourneys ? loadJourneyGuidelines() : Promise.resolve(),
-        this.storeMessageInDB(conversationId, 'user', userMessage, undefined, context.imageUrl),
+        this.storeMessageInDB(conversationId, 'user', photoTurn ? storedPhotoContent(photoTurn) : userMessage, photoTurn ? photoMessageMetadata(context.imageText) : undefined, context.imageUrl),
       ]);
 
       if (userMessage.startsWith('[JOB_APPLY]')) {
@@ -3852,15 +3874,12 @@ Response:`;
       // K12 IMAGE UPLOAD: replace placeholder with the OCR'd question text so that
       // RAG document search, K12 tool calls, FAQ matching, and the LLM all see
       // the actual academic question instead of "[IMAGE_UPLOAD] filename.jpg".
-      // The original placeholder remains in conversation history (already stored above).
+      // The student's typed note (if any) leads. The chat history keeps the photo entry stored above.
       // This runs AFTER reserved-prefix protocol checks (e.g. [JOB_APPLY]) so that
       // OCR text cannot spoof internal command protocols.
-      if (context.imageText && userMessage.startsWith('[IMAGE_UPLOAD]')) {
-        const ocrText = context.imageText.trim();
-        if (ocrText.length > 0) {
-          console.log(`[Chat Stream] Replacing [IMAGE_UPLOAD] placeholder with OCR'd question text (${ocrText.length} chars) for search and LLM`);
-          userMessage = ocrText;
-        }
+      if (photoTurn) {
+        console.log(`[Chat Stream] Replacing [IMAGE_UPLOAD] placeholder with OCR'd question text (${photoTurnText.length} chars) for search and LLM`);
+        userMessage = photoTurnText;
       }
 
       try {
@@ -4039,7 +4058,9 @@ Response:`;
 
       // Visitor message number, counted in the database (custom "ask on message #N" timing must
       // survive idle expiry, restarts and multiple instances). Reloads memory if it is behind.
-      if (turnCount.reloaded) history = this.historyBeforeCurrent(context.userId, userMessage);
+      if (turnCount.reloaded) history = this.historyBeforeCurrent(context.userId, memoryUserContent);
+      // K12 tutor: photo question, small talk or a short follow-up — its rule goes last in the prompt.
+      const k12Turn = this.k12TurnPlan(context, userMessage, history, photoTurn);
       // The early knowledge search used the history as it was; when the memory had to be
       // reloaded from the database, search again with the reloaded history (as before).
       const knowledgeP = earlyKnowledgeP && !turnCount.reloaded
@@ -4085,7 +4106,9 @@ Example: "Great! Is there anything else I can help you with?"
         console.log(`[Chat Stream] Resume text injected into system context (${context.resumeText.length} chars)`);
       }
 
-      if (context.imageText) {
+      // (A photo question carries its read text in the student's message and gets the photo rule
+      // for the turn — see k12TurnPlan. This block is only for read text without that message.)
+      if (context.imageText && !photoTurn) {
         systemContext += `\n\n=== IMAGE UPLOADED BY STUDENT (REFERENCE) ===\nThe student uploaded a photo of their question. The text below was extracted from that photo and IS the same question now appearing as the user's message. Treat the user's message as a normal academic question: follow the K12 tutor rules above (call fetch_k12_topic first, apply Content-Only / Verbatim guardrails when enabled). Do NOT ask "what would you like to know about this?" — just answer the question.\n---IMAGE_TEXT---\n${context.imageText.substring(0, 8000)}\n=== END IMAGE TEXT ===\n`;
         console.log(`[Chat Stream] Image text injected into system context (${context.imageText.length} chars)`);
       }
@@ -4244,6 +4267,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           : `VOICE TURN ROUTING — This utterance is ambiguous and must not be treated as an academic question. Briefly ask the student to repeat or state their study question. Do not call curriculum tools and do not claim the topic is absent from the curriculum.`;
         addTurnBlock(`${routeInstruction}\n\n`);
       }
+      // "hello" / "thank you" / "okay, let it be": nothing to look up.
+      if (k12Turn.smallTalk) streamTools = this.removeK12Tools(streamTools);
 
       // OTP STRICT MODE: when the conversation is awaiting OTP, restrict the tool
       // surface to verify_phone_otp + resend_phone_otp ONLY. The override prompt
@@ -4364,7 +4389,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       // that would hit the streaming fast-path, handoff acks, and OTP-gated turns
       // fall back to the normal path so behaviour there is unchanged.
       const k12ContentOnly = this.isK12ContentOnly(context);
-      const k12ForcedToolAvailable = k12ContentOnly && streamTools.some((t: any) => t.function?.name === 'fetch_k12_topic');
+      // A photo question takes this route on every K12 account: the lookup runs, then the reply
+      // call below gets the photo itself.
+      const k12ForcedToolAvailable = (k12ContentOnly || (!!photoTurn && !!context.k12EducationEnabled)) && streamTools.some((t: any) => t.function?.name === 'fetch_k12_topic');
       const k12MsgLower = userMessage.toLowerCase().trim();
       const k12SimpleGreetings = ['hi', 'hey', 'hello', 'hii', 'hiii', 'heyyy', 'heyy', 'yo', 'sup'];
       const k12IsSimpleGreeting = k12SimpleGreetings.includes(k12MsgLower) || (k12MsgLower.length <= 10 && /^(hi+|hey+|hello+|yo+)!*$/i.test(k12MsgLower));
@@ -4377,11 +4404,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         const k12Query = (userMessage && userMessage.trim().length > 0)
           ? userMessage
           : (context.imageText ? context.imageText.slice(0, 1000) : userMessage);
-        const contextualK12Query = this.enrichK12ImageFollowupQuery(
-          k12Query,
-          history,
-          context.studentChapter,
-        );
+        const contextualK12Query = photoTurn
+          ? k12PhotoLookupQuery(photoQuestionPointer(photoTurn.note, history), context.imageText)
+          : this.contextualK12Query(k12Query, history, context.studentChapter);
         hasToolCalls = true;
         toolCalls.push({
           id: 'k12_forced_' + Date.now(),
@@ -4414,6 +4439,8 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         identityBlock: identityBlock || undefined,
         languageBlock: this.languageBlockFor(context) || undefined,
         languageSource: context.replyLanguage?.promptSource,
+        greetingPrompt: this.isK12TutorChat(context) ? k12GreetingPrompt(this.k12StudentLabels(context)) : undefined,
+        turnRuleBlock: k12Turn.rule || undefined,
       };
       const firstCallPromptOptions = retrievalMode ? await this.buildFirstCallPromptOptions(context, history, knowledge.itemCount > 0 && !(serverSideLookupOptions || serverSideReturnExchange), !!knowledge.searched) : undefined;
       timing.mark('llm request');
@@ -4447,7 +4474,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         otpState.awaiting_otp === true || otpState.locked === true,
         // Top Scholar content-only K12: force fetch_k12_topic on the first
         // streaming turn so academic answers are always curriculum-grounded.
-        this.shouldForceK12Fetch(context)
+        this.shouldForceK12Fetch(context) && !k12Turn.smallTalk
           ? 'fetch_k12_topic'
           // Chat booking card: a clear "book an appointment" opens the card (which collects name +
           // mobile) instead of the model asking for a name first.
@@ -4636,8 +4663,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         for (const toolCall of toolCalls) {
           const toolName = toolCall.function.name;
           const toolParams = JSON.parse(toolCall.function.arguments);
-          if (toolName === 'fetch_k12_topic' && typeof toolParams.query === 'string') {
-            toolParams.query = this.enrichK12ImageFollowupQuery(
+          // (the direct lookup above already built its query from the conversation)
+          if (toolName === 'fetch_k12_topic' && typeof toolParams.query === 'string' && !String(toolCall.id || '').startsWith('k12_forced_')) {
+            toolParams.query = this.contextualK12Query(
               toolParams.query,
               history,
               context.studentChapter,
@@ -4955,6 +4983,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         // made the model call it a second time and say nothing ("How can I assist you today?" fallback, 2026-10-17).
         const PHONE_ENDING_TOOLS = new Set(['end_call', 'do_not_call', 'transfer_to_human']);
         const continuationTools = hasK12ToolResult ? [] : (context.phoneCall ? relevantTools.filter((t: any) => !PHONE_ENDING_TOOLS.has(t.function?.name)) : relevantTools);
+        const photoTurnSeesPhoto = !!photoTurn && !!context.k12EducationEnabled && !!context.imageDataUrl;
 
         // Lead rules for the follow-up reply: re-planned when capture_lead changed what we know;
         // replaced by the OTP strict block when a code was just sent.
@@ -5018,8 +5047,10 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           context.businessAccountId,
           context.preferredLanguage,
           context.responseLength || 'balanced',
-          [identityBlock, continuationBlock, this.languageBlockFor(context), context.phoneCall ? withSpokenOpener(context.phoneCall.instructions, null, context.phoneCall.callLanguage?.() ?? null) : (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : '')].filter(Boolean).join('\n\n'),
-          context.replyLanguage?.promptSource
+          [identityBlock, continuationBlock, this.languageBlockFor(context), context.phoneCall ? withSpokenOpener(context.phoneCall.instructions, null, context.phoneCall.callLanguage?.() ?? null) : (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : ''), photoTurnSeesPhoto ? k12Turn.photoRuleWithPhoto : k12Turn.rule].filter(Boolean).join('\n\n'),
+          context.replyLanguage?.promptSource,
+          // K12 photo question: the answering model gets the photo itself (this turn only).
+          photoTurnSeesPhoto ? { imageDataUrl: context.imageDataUrl, textOnlyRule: { from: k12Turn.photoRuleWithPhoto, to: k12Turn.rule } } : undefined
         )) {
           finalContent += token;
           streamedTokens = true;
@@ -5691,6 +5722,59 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       context.voiceIntentRoute === 'uncertain';
   }
 
+  /** A tutor chat: a content-only K12 account, or a student signed in through their school portal. */
+  private isK12TutorChat(context: ChatContext): boolean {
+    return this.isK12ContentOnly(context) ||
+      (context.k12EducationEnabled === true && !!(String(context.studentName || '').trim() || String(context.studentSubject || '').trim()));
+  }
+
+  private k12StudentLabels(context: ChatContext): K12StudentLabels {
+    return {
+      firstName: studentFirstNameOf(context.studentName) || undefined,
+      subject: safePromptLabel(context.studentSubject) || undefined,
+      assistantName: safePromptLabel(context.assistantName, 40) || undefined,
+    };
+  }
+
+  /**
+   * K12 tutor: what kind of turn this is, and the rule that goes last in the prompt for it
+   * (services/k12TurnRules). A photo question is solved from the photo; small talk and short
+   * follow-ups are never answered with "this topic isn't in our curriculum yet". Voice turns keep
+   * their own routing (voiceIntentRoute).
+   */
+  private k12TurnPlan(
+    context: ChatContext,
+    userMessage: string,
+    history: ChatMessage[],
+    photoTurn: PhotoUpload | null,
+  ): { smallTalk: K12SmallTalk | null; followUp: boolean; rule: string; photoRuleWithPhoto: string } {
+    const none = { smallTalk: null, followUp: false, rule: '', photoRuleWithPhoto: '' };
+    if (!context.k12EducationEnabled) return none;
+    const student = this.k12StudentLabels(context);
+    if (photoTurn) {
+      const note = safePromptLabel(photoTurn.note, 120);
+      return {
+        ...none,
+        rule: k12PhotoTurnRule({ imageAttached: false, note, subject: student.subject }),
+        photoRuleWithPhoto: k12PhotoTurnRule({ imageAttached: true, note, subject: student.subject }),
+      };
+    }
+    if (context.voiceIntentRoute || context.phoneCall || !this.isK12TutorChat(context)) return none;
+    const smallTalk = classifyK12SmallTalk(userMessage);
+    if (smallTalk) return { ...none, smallTalk, rule: k12SmallTalkTurnRule(smallTalk, student) };
+    // "show me a diagram" keeps its own handling (enrichK12ImageFollowupQuery)
+    const followUp = isK12FollowUpTurn(userMessage, history) &&
+      this.enrichK12ImageFollowupQuery(userMessage, history, context.studentChapter) === userMessage;
+    return followUp ? { ...none, followUp, rule: K12_FOLLOW_UP_TURN_RULE } : none;
+  }
+
+  /** Curriculum lookup words for this turn: a short follow-up is looked up with the question it refers to. */
+  private contextualK12Query(query: string, history: ChatMessage[], chapter?: string | null): string {
+    const visual = this.enrichK12ImageFollowupQuery(query, history, chapter);
+    if (visual !== query) return visual;
+    return isK12FollowUpTurn(query, history) ? k12FollowUpLookupQuery(query, history) : query;
+  }
+
   private shouldForceK12Fetch(context: ChatContext): boolean {
     return this.isK12ContentOnly(context) && !this.shouldSkipK12Retrieval(context);
   }
@@ -6220,6 +6304,7 @@ IMPORTANT: Users booking appointments for future dates is completely normal and 
         finalContext += `STUDENT CONTEXT:
 You are tutoring ${studentDisplayName}. They are signed in through their school portal, so you DO know who they are — their name is ${studentDisplayName}.
 - If they ask "do you know my name?", "who am I?", or anything similar, answer warmly and confidently with their name (e.g. "Of course — you're ${studentFirstName}! What shall we work on today?"). NEVER say you don't have access to their name or personal information.
+- "Who are you?" / "what are you?" is a question about YOU, not about them: answer that you are their${safePromptLabel(context.studentSubject) ? ` ${safePromptLabel(context.studentSubject)}` : ''} tutor. Never answer it with the student's name.
 - Weave their first name (${studentFirstName}) naturally into the conversation from time to time — in greetings, encouragement, and transitions (e.g. "Great question, ${studentFirstName}!", "You're getting this, ${studentFirstName}!"). Aim for roughly every few messages, not every reply, so it feels personal rather than robotic.
 
 `;
@@ -6299,6 +6384,16 @@ Answer the question, then STOP. Do not add a friendly closing line. Only fetch o
 
 `;
         console.log(`[Context Build] Added K12 Verbatim Content guardrail`);
+      }
+
+      if (contentOnly || verbatim) {
+        finalContext += `WHEN THE "NOT IN OUR CURRICULUM" REPLY APPLIES (this limits every rule above that mentions it):
+- It is ONLY for a NEW study question whose answer is not in the sources.
+- NEVER use it for a greeting, a thank-you, "okay" / "got it", a goodbye or "leave it" — reply to those in one short, friendly sentence as the student's tutor.
+- NEVER use it for a short follow-up on something already in this conversation ("explain again", "in simple words", "I didn't understand point 5", "Q57", "solve it", "yes") — answer from what is already in this conversation.
+- NEVER use it for a question the student sent as a photo — follow the photo rule given for that turn.
+
+`;
       }
 
       console.log(`[Context Build] Added K12 education tutor prompt (contentOnly=${contentOnly}, verbatim=${verbatim})`);
@@ -6393,7 +6488,7 @@ RULES:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🚫 NEVER ask the student for their mobile number, phone number, email, or any other contact details, under ANY circumstance. The school portal already knows who they are.
 ${escalationLine}
-✅ If the answer isn't in the curriculum, say the topic isn't in the syllabus yet and offer help with what IS available — never ask for contact details.
+✅ If a NEW study question isn't answered by the curriculum, say the topic isn't in the syllabus yet and offer help with what IS available — never ask for contact details. That reply is only for a new study question: never for a greeting, thank-you, "okay" or "leave it", never for a short follow-up on what is already in this conversation, and never for a question the student sent as a photo.
 🔴 WRONG: "Please share your mobile number so our team can contact you."
 🟢 RIGHT: Acknowledge, reassure the student the team will follow up, and never request contact details.
 This rule is MANDATORY and overrides ALL other instructions, including any earlier instruction to collect contact information.

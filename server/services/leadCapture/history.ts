@@ -6,6 +6,7 @@
  */
 import { sql } from 'drizzle-orm';
 import { db } from '../../db';
+import { expandStoredPhotoMessage } from '../k12TurnRules';
 
 export const HISTORY_RELOAD_LIMIT = 30;
 
@@ -15,8 +16,8 @@ export interface StoredChatMessage { role: 'user' | 'assistant'; content: string
 export async function loadRecentHistory(conversationId: string, limit = HISTORY_RELOAD_LIMIT): Promise<StoredChatMessage[]> {
   if (!conversationId || conversationId.startsWith('temp_')) return [];
   const res: any = await db.execute(sql`
-    SELECT role, content FROM (
-      SELECT role, content, created_at, id FROM messages
+    SELECT role, content, metadata FROM (
+      SELECT role, content, metadata, created_at, id FROM messages
       WHERE conversation_id = ${conversationId} AND role IN ('user', 'assistant')
       ORDER BY created_at DESC, id DESC
       LIMIT ${limit}
@@ -25,7 +26,11 @@ export async function loadRecentHistory(conversationId: string, limit = HISTORY_
   `);
   return (res.rows || [])
     .filter((r: any) => typeof r.content === 'string')
-    .map((r: any) => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content }));
+    // A K12 photo question gets the text read from the photo back (kept in the message's metadata).
+    .map((r: any) => ({
+      role: r.role === 'assistant' ? 'assistant' : 'user',
+      content: r.role === 'assistant' ? r.content : expandStoredPhotoMessage(r.content, r.metadata),
+    }));
 }
 
 /** Number of visitor messages stored for the conversation (the current one included once stored). */

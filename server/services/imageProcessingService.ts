@@ -12,7 +12,31 @@ export interface ImageExtractionResult {
   warning?: string;
 }
 
+/** Longest side sent to the answering model — enough for small print, far below the upload limit. */
+const MODEL_IMAGE_MAX_SIDE = 1600;
+
 export class ImageProcessingService {
+  /**
+   * The student's photo as a data URL the answering model can look at: turned upright (phone
+   * photos carry their rotation as EXIF), scaled down and re-encoded as JPEG. null when the image
+   * can't be decoded — the turn then goes ahead on the read text alone.
+   */
+  async imageForModel(buffer: Buffer): Promise<string | null> {
+    try {
+      const sharp = (await import('sharp')).default;
+      const jpeg = await sharp(buffer)
+        .rotate()
+        .resize({ width: MODEL_IMAGE_MAX_SIDE, height: MODEL_IMAGE_MAX_SIDE, fit: 'inside', withoutEnlargement: true })
+        .flatten({ background: '#ffffff' })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+      return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+    } catch (err: unknown) {
+      console.warn('[Image Extract] Could not prepare the photo for the answering model (non-fatal):', err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
   private async getOpenAIClient(businessAccountId: string, externalApiKey?: string): Promise<OpenAI> {
     const apiKey = externalApiKey || (await storage.getBusinessAccountOpenAIKey(businessAccountId));
     if (!apiKey) {

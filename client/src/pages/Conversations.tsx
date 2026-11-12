@@ -14,6 +14,7 @@ import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import { convertLatexDelimiters } from '@/lib/convertLatexDelimiters';
+import { isPhotoMessage, splitPhotoMessage } from '@/lib/k12PhotoSend';
 import 'highlight.js/styles/github-dark.css';
 import { useLocation } from "wouter";
 import WebsiteNavTabs from "@/components/WebsiteNavTabs";
@@ -906,7 +907,7 @@ export default function Conversations() {
                           <div className="mb-2">
                             <div className="flex items-center gap-1 text-xs text-white/80 mb-1">
                               <ImageIcon className="w-3 h-3" />
-                              <span>{message.content.startsWith('[IMAGE_UPLOAD]') ? 'Uploaded image' : 'Image search'}</span>
+                              <span>{isPhotoMessage(message.content) ? 'Uploaded image' : 'Image search'}</span>
                             </div>
                             <img 
                               src={message.imageUrl} 
@@ -915,11 +916,15 @@ export default function Conversations() {
                             />
                           </div>
                         )}
-                        {!message.content.startsWith('[IMAGE_UPLOAD]') && (
+                        {!isPhotoMessage(message.content) && (
                           <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
                         )}
-                        {message.content.startsWith('[IMAGE_UPLOAD]') && !message.imageUrl && (
-                          <p className="text-sm whitespace-pre-wrap break-words">{message.content.replace('[IMAGE_UPLOAD] ', '')} (image not saved)</p>
+                        {isPhotoMessage(message.content) && !message.imageUrl && (
+                          <p className="text-sm whitespace-pre-wrap break-words">{splitPhotoMessage(message.content).fileName} (image not saved)</p>
+                        )}
+                        {/* The note the student typed with the photo */}
+                        {isPhotoMessage(message.content) && splitPhotoMessage(message.content).note && (
+                          <p className="text-sm whitespace-pre-wrap break-words">{splitPhotoMessage(message.content).note}</p>
                         )}
                       </div>
                       <p className="text-xs text-gray-500 mt-1 mr-1">{formatTime(message.createdAt)}</p>

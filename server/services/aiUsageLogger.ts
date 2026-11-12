@@ -32,6 +32,12 @@ const DEFAULT_MODEL_PRICING: Record<string, ModelRates> = {
     inputCostPer1k: 0.0025,   // $2.50 per 1M tokens
     outputCostPer1k: 0.010,   // $10.00 per 1M tokens
   },
+  // K12 photo questions (services/k12TurnRules.k12PhotoModels)
+  'gpt-4.1': {
+    inputCostPer1k: 0.002,          // $2.00 per 1M tokens
+    outputCostPer1k: 0.008,         // $8.00 per 1M tokens
+    cachedInputCostPer1k: 0.0005,   // $0.50 per 1M tokens
+  },
   'gpt-4o-vision': {
     inputCostPer1k: 0.0025,   // $2.50 per 1M tokens (same as gpt-4o)
     outputCostPer1k: 0.010,   // $10.00 per 1M tokens

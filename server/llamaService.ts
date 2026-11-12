@@ -6,6 +6,7 @@ import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
 import { withoutUsageTracking } from "./lib/requestContext";
 import { assistantAskedForNameIn, emailInMessage, isDecline, isValidLeadName, nameStatedInHistory } from './services/leadCapture/detectors';
 import { selectInstructionsForMessage } from './services/chatContext/customInstructions';
+import { K12_PHOTO_MAX_TOKENS, K12_PHOTO_TIMEOUT_MS, k12PhotoModels } from './services/k12TurnRules';
 
 // Using GPT-4o-mini for customer-facing chat to ensure reliable:
 // - Language matching (English/Hindi/Hinglish)
@@ -513,6 +514,32 @@ export interface StreamTurnOptions {
    * "thank you so much", or an account with no FAQs at all — nothing to find).
    */
   skipFaqPrefetch?: boolean;
+  /**
+   * K12 tutor: the system line for a first "hi" (services/k12TurnRules.k12GreetingPrompt), used
+   * by the greeting fast path instead of the customer-service greeting.
+   */
+  greetingPrompt?: string;
+  /**
+   * K12 tutor: this turn's rule (small talk / short follow-up / photo question, from
+   * services/k12TurnRules). Goes after the business's instructions so it wins over the
+   * curriculum-only wording earlier in the prompt.
+   */
+  turnRuleBlock?: string;
+}
+
+/** This turn only, for the reply that follows a tool call (continueToolConversationStream). */
+export interface ContinuationTurnOptions {
+  /**
+   * K12 photo question: the student's photo as a data URL. It is attached to the student's latest
+   * message so the answering model sees the photo itself, and the reply gets the photo model,
+   * more room and a longer wait (services/k12TurnRules).
+   */
+  imageDataUrl?: string;
+  /**
+   * The photo rule in the prompt says the photo is attached (`from`). If no model takes the
+   * photo and the reply falls back to the read text only, it is replaced by `to`.
+   */
+  textOnlyRule?: { from: string; to: string };
 }
 
 export class LlamaService {
@@ -941,8 +968,8 @@ SCRIPT RULE (CRITICAL - check this before responding):
     responseLength: string = 'balanced',
     extraFinalBlock?: string,
     languageSource?: PreferredLanguageSource
-  ): Promise<{ openai: any; model: string; messages: ConversationMessage[] }> {
-    const { openai, model } = await this.resolveMasterConfig(apiKey);
+  ): Promise<{ openai: any; model: string; provider: string; messages: ConversationMessage[] }> {
+    const { openai, model, provider } = await this.resolveMasterConfig(apiKey);
 
     // Inject personality-aware system prompt if not already present
     const hasSystemPrompt = messages.some(msg => msg.role === 'system');
@@ -1342,7 +1369,7 @@ ${extraFinalBlock.trim()}` : ''}`;
 
     messages.push({ role: 'system', content: finalOverride });
 
-    return { openai, model, messages };
+    return { openai, model, provider, messages };
   }
 
   async continueToolConversation(
@@ -1395,24 +1422,52 @@ ${extraFinalBlock.trim()}` : ''}`;
     preferredLanguage?: string,
     responseLength: string = 'balanced',
     extraFinalBlock?: string,
-    languageSource?: PreferredLanguageSource
+    languageSource?: PreferredLanguageSource,
+    turn?: ContinuationTurnOptions
   ): AsyncGenerator<string> {
-    const { openai, model, messages: preparedMessages } = await this._prepareContinuationContext(
+    const { openai, model: baseModel, provider, messages: preparedMessages } = await this._prepareContinuationContext(
       messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength, extraFinalBlock, languageSource
     );
 
-    // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
-    const stream = await withoutUsageTracking(() => openai.chat.completions.create({
-      model: model,
-      messages: preparedMessages,
-      tools: tools.length > 0 ? tools : undefined,
-      ...(this.isThinkingModel(model) ? {} : { temperature: 0.7 }),
-      max_tokens: 1000,
-      stream: true,
-      stream_options: { include_usage: true },
-    } as any, {
-      timeout: 30000,
-    }));
+    // K12 photo question: the answering model looks at the photo itself (the read text stays in
+    // the message as an aid), on a stronger model with more room — for this turn only.
+    const photo = turn?.imageDataUrl;
+    const photoMessages = photo ? this.withImageOnLastUserMessage(preparedMessages, photo) : preparedMessages;
+    // Last resort for a photo turn: the account's normal model with the read text only (a model
+    // or key that cannot take images must not fail the turn).
+    const textOnlyMessages = photo ? this.withRuleReplaced(preparedMessages, turn?.textOnlyRule) : preparedMessages;
+    const attempts: Array<{ model: string; messages: any[]; withPhoto: boolean }> = photo
+      ? [...k12PhotoModels(provider, baseModel).map(m => ({ model: m, messages: photoMessages, withPhoto: true })), { model: baseModel, messages: textOnlyMessages, withPhoto: false }]
+      : [{ model: baseModel, messages: preparedMessages, withPhoto: false }];
+
+    let stream: any;
+    let model = baseModel;
+    let photoShown = false;
+    for (let i = 0; i < attempts.length; i++) {
+      model = attempts[i].model;
+      photoShown = attempts[i].withPhoto;
+      try {
+        // withoutUsageTracking: logged below via aiUsageLogger.logChatUsage
+        stream = await withoutUsageTracking(() => openai.chat.completions.create({
+          model: model,
+          messages: attempts[i].messages,
+          tools: tools.length > 0 ? tools : undefined,
+          ...(this.isThinkingModel(model) ? {} : { temperature: 0.7 }),
+          max_tokens: photo ? K12_PHOTO_MAX_TOKENS : 1000,
+          stream: true,
+          stream_options: { include_usage: true },
+        } as any, {
+          timeout: photo ? K12_PHOTO_TIMEOUT_MS : 30000,
+        }));
+        break;
+      } catch (err: any) {
+        // Only a photo turn has a next choice.
+        if (i === attempts.length - 1) throw err;
+        const next = attempts[i + 1];
+        console.warn(`[K12 Photo] ${model} could not answer the photo turn (${err?.status ?? ''} ${err?.message ?? err}) — trying ${next.model}${next.withPhoto ? '' : ' with the read text only'}`);
+      }
+    }
+    if (photo) console.log(`[K12 Photo] Answering with ${model}, ${photoShown ? 'photo attached' : 'read text only'}`);
 
     let usage: any = undefined;
     for await (const chunk of stream as any) {
@@ -1433,6 +1488,30 @@ ${extraFinalBlock.trim()}` : ''}`;
         console.error('[Usage] Failed to log:', err)
       );
     }
+  }
+
+  /** The same messages with one rule in the system prompt replaced (photo turn answered from the read text only). */
+  private withRuleReplaced(messages: ConversationMessage[], swap?: { from: string; to: string }): any[] {
+    if (!swap?.from || !swap.to) return messages;
+    return messages.map(m => m.role === 'system' && typeof m.content === 'string' && m.content.includes(swap.from)
+      ? { ...m, content: m.content.split(swap.from).join(swap.to) }
+      : m);
+  }
+
+  /** The student's latest message with their photo attached, as a text part + image part. */
+  private withImageOnLastUserMessage(messages: ConversationMessage[], imageDataUrl: string): any[] {
+    let at = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') { at = i; break; }
+    }
+    if (at === -1) return messages;
+    return messages.map((m, i) => i !== at ? m : {
+      ...m,
+      content: [
+        { type: 'text', text: typeof m.content === 'string' ? m.content : '' },
+        { type: 'image_url', image_url: { url: imageDataUrl, detail: 'high' } },
+      ],
+    });
   }
 
   async *streamToolAwareResponse(
@@ -1491,11 +1570,13 @@ ${extraFinalBlock.trim()}` : ''}`;
       const greetingStream = await openai.chat.completions.create({
         model: model,
         messages: [
-          { role: 'system', content: `You are a friendly customer service assistant. ${personalityTraits}\nRespond with a brief, welcoming greeting in 1-2 sentences.` },
+          { role: 'system', content: turnOptions?.greetingPrompt
+            ? `${turnOptions.greetingPrompt} ${personalityTraits}`
+            : `You are a friendly customer service assistant. ${personalityTraits}\nRespond with a brief, welcoming greeting in 1-2 sentences.` },
           { role: 'user', content: userMessage }
         ],
         ...(this.isThinkingModel(model) ? {} : { temperature: 0.7 }),
-        max_tokens: 50,
+        max_tokens: turnOptions?.greetingPrompt ? 70 : 50,
         stream: true,
       }, { timeout: 10000 });
       
@@ -2230,6 +2311,11 @@ This LEAD COLLECTION block takes precedence over any business instruction about 
     // Business reply-language rule: after the business's own instructions, so it wins over them.
     if (turnOptions?.languageBlock && turnOptions.languageBlock.trim()) {
       finalOverride += `\n\n${turnOptions.languageBlock.trim()}`;
+    }
+
+    // K12 tutor: what kind of turn this is (small talk / follow-up / photo question).
+    if (turnOptions?.turnRuleBlock && turnOptions.turnRuleBlock.trim()) {
+      finalOverride += `\n\n${turnOptions.turnRuleBlock.trim()}`;
     }
 
     // Phone number the visitor just typed failed the digit rule (last position = highest weight).

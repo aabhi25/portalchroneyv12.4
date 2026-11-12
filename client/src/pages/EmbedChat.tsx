@@ -20,6 +20,7 @@ import { useUrgencyOffer } from "@/hooks/useUrgencyOffer";
 import { QuickBrowseButtons } from "@/components/QuickBrowseButtons";
 import { ResumeUploadProgress } from "@/components/ResumeUploadProgress";
 import { ImageUploadProgress } from "@/components/ImageUploadProgress";
+import { isPhotoMessage, photoMessage, splitPhotoMessage, whenIdle } from "@/lib/k12PhotoSend";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -742,6 +743,14 @@ export default function EmbedChat() {
   // message so it is stored on the user message and survives reload.
   const pendingK12ImageUrlRef = useRef<string | null>(null);
   const [k12ImageUploadStage, setK12ImageUploadStage] = useState<'idle' | 'uploading' | 'reading' | 'ready'>('idle');
+  // A question photo and the note typed with it go out as ONE message. True from
+  // the moment a photo is picked until its message is sent (or the upload fails);
+  // while it is true, typed sends wait in the box and become the photo's note.
+  const k12PhotoPendingRef = useRef(false);
+  const messageRef = useRef(message);
+  messageRef.current = message;
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
   const { toast } = useToast();
 
   // Session ID for conversation persistence (stored per businessAccountId)
@@ -2982,6 +2991,7 @@ export default function EmbedChat() {
     if (doubtLockRef.current) return;
 
     try {
+      k12PhotoPendingRef.current = true;
       setK12ImageUploadStage('uploading');
       // Reset stale pending state from any prior upload so a failed/retried
       // upload can never carry a previous image's URL onto a later message.
@@ -3015,10 +3025,31 @@ export default function EmbedChat() {
         pendingK12ImageUrlRef.current = result.imageUrl;
       }
       setK12ImageUploadStage('ready');
+      const dropPendingPhoto = () => {
+        k12PhotoPendingRef.current = false;
+        setK12ImageUploadStage('idle');
+        pendingK12ImageUrlRef.current = null;
+        pendingImageContextIdRef.current = null;
+        pendingK12ImagePreviewRef.current = null;
+      };
       setTimeout(() => {
-        sendMessage(`[IMAGE_UPLOAD] ${file.name}`);
+        // Whatever is in the box now is the note for this photo — sent as one message.
+        // (Through the refs: this closure is from the render when the photo was picked.)
+        whenIdle(
+          () => isLoadingRef.current,
+          () => {
+            k12PhotoPendingRef.current = false;
+            if (doubtLockRef.current || !sendMessageRef.current) { dropPendingPhoto(); return; }
+            sendMessageRef.current(photoMessage(file.name, messageRef.current));
+          },
+          () => {
+            dropPendingPhoto();
+            toast({ title: 'Photo not sent', description: 'Please send your photo again.', variant: 'destructive' });
+          },
+        );
       }, 600);
     } catch (err: any) {
+      k12PhotoPendingRef.current = false;
       setK12ImageUploadStage('idle');
       pendingK12ImageUrlRef.current = null;
       pendingImageContextIdRef.current = null;
@@ -3405,7 +3436,10 @@ export default function EmbedChat() {
     const isResumeFlow = messageToSend.trim().startsWith('[RESUME_UPLOAD]');
     let resumeProgressCleared = false;
 
-    const isK12ImageFlow = messageToSend.trim().startsWith('[IMAGE_UPLOAD]');
+    const isK12ImageFlow = isPhotoMessage(messageToSend);
+    // A photo is on its way: what the student typed stays in the box and goes out
+    // with the photo as one message, instead of as a separate question.
+    if (k12PhotoPendingRef.current && !isK12ImageFlow) return;
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
@@ -3839,6 +3873,8 @@ export default function EmbedChat() {
       if (isResumeFlow && !resumeProgressCleared) {
         setResumeUploadStage('idle');
       }
+      // A photo send that failed must not leave the photo button stuck.
+      if (isK12ImageFlow) setK12ImageUploadStage('idle');
       
       // Track when AI finished responding for inactivity nudge
       lastAIMessageTimeRef.current = Date.now();
@@ -6296,7 +6332,7 @@ export default function EmbedChat() {
                 style={msg.role === 'user' ? { background: `linear-gradient(to right, ${chatColor}, ${chatColorEnd})` } : { color: '#1e3a5f' }}
               >
                 {/* Show uploaded image in user message - compact clickable thumbnail */}
-                {msg.role === 'user' && msg.imageUrl && !msg.content.startsWith('[IMAGE_UPLOAD]') && (
+                {msg.role === 'user' && msg.imageUrl && !isPhotoMessage(msg.content) && (
                   <div className="mb-2">
                     <img 
                       src={msg.imageUrl} 
@@ -6362,7 +6398,7 @@ export default function EmbedChat() {
                     </svg>
                     <span className="font-medium">Applying for {msg.content.replace(/^\[JOB_APPLY\]\s*/, '').replace(/\s*\|jobId:.*$/, '')}</span>
                   </div>
-                ) : msg.role === 'user' && msg.content.startsWith('[IMAGE_UPLOAD]') ? (
+                ) : msg.role === 'user' && isPhotoMessage(msg.content) ? (
                   <div className="flex flex-col gap-1">
                     {msg.imageUrl ? (
                       <img
@@ -6377,8 +6413,11 @@ export default function EmbedChat() {
                           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
                           <circle cx="12" cy="13" r="4"/>
                         </svg>
-                        <span className="font-medium">{msg.content.replace('[IMAGE_UPLOAD] ', '')} uploaded</span>
+                        <span className="font-medium">{splitPhotoMessage(msg.content).fileName} uploaded</span>
                       </div>
+                    )}
+                    {splitPhotoMessage(msg.content).note && (
+                      <p className="whitespace-pre-wrap break-words" style={{ fontSize: chatFontSize }} data-testid="text-photo-note">{splitPhotoMessage(msg.content).note}</p>
                     )}
                   </div>
                 ) : (
@@ -6871,6 +6910,9 @@ export default function EmbedChat() {
             )}
             <div className="flex-1 max-w-[85%]">
               <ImageUploadProgress stage={k12ImageUploadStage} chatColor={chatColor} />
+              {message.trim() && (
+                <p className="mt-1 text-xs text-gray-500" data-testid="text-photo-note-hint">Your note will be sent with the photo.</p>
+              )}
             </div>
           </div>
         )}

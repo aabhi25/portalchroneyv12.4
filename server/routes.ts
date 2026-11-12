@@ -1587,6 +1587,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
 
       let imageText: string | undefined;
       let imageUrl: string | undefined;
+      let imageDataUrl: string | undefined;
       if (imageContextId && typeof imageContextId === 'string') {
         const cached = imageTextCache.get(imageContextId);
         if (cached && cached.businessAccountId === businessAccountId) {
@@ -1595,6 +1596,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
           // server-side cache (bound at upload time) — never trusted from the
           // client — so it renders on reload and in the admin view.
           imageUrl = cached.imageUrl;
+          imageDataUrl = cached.imageDataUrl;
           imageTextCache.delete(imageContextId);
           console.log(`[Widget Stream] K12 image context retrieved (${imageText.length} chars)${imageUrl ? ' with image URL' : ''}`);
         }
@@ -1925,6 +1927,7 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         resumeText,
         imageText,
         imageUrl,
+        imageDataUrl,
         resumeUrl,
         isReturnExchangeLookup: isReturnExchangeLookup === true,
         channel: 'widget',
@@ -4866,7 +4869,8 @@ Return JSON:
   const resumeTextCache = new Map<string, { text: string; businessAccountId: string; createdAt: number; resumeUrl?: string }>();
   const RESUME_CACHE_TTL_MS = 10 * 60 * 1000;
 
-  const imageTextCache = new Map<string, { text: string; businessAccountId: string; createdAt: number; imageUrl?: string }>();
+  // imageDataUrl: the photo itself (scaled down), shown to the answering model on the photo's turn.
+  const imageTextCache = new Map<string, { text: string; businessAccountId: string; createdAt: number; imageUrl?: string; imageDataUrl?: string }>();
   const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 
   const k12ImageUploadRateLimiter = new Map<string, { count: number; resetAt: number }>();
@@ -5072,6 +5076,7 @@ Return JSON:
           text: result.text.substring(0, 8000),
           businessAccountId,
           createdAt: Date.now(),
+          imageDataUrl: (await imageProcessingService.imageForModel(req.file.buffer)) || undefined,
         });
         console.log(`[K12 Image Upload] Extracted ${result.text.length} chars, cached as ${imageContextId}`);
 
@@ -20958,6 +20963,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
           text: result.text.substring(0, 8000),
           businessAccountId,
           createdAt: Date.now(),
+          imageDataUrl: (await imageProcessingService.imageForModel(req.file.buffer)) || undefined,
         });
         console.log(`[K12 Public Image Upload] Extracted ${result.text.length} chars, cached as ${imageContextId}`);
 
@@ -21100,12 +21106,14 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
 
       let imageText: string | undefined;
       let imageUrl: string | undefined;
+      let imageDataUrl: string | undefined;
       if (imageContextId && typeof imageContextId === 'string') {
         const cached = imageTextCache.get(imageContextId);
         if (cached && cached.businessAccountId === businessAccountId) {
           imageText = cached.text;
           // Server-derived URL bound at upload time — never trusted from the client.
           imageUrl = cached.imageUrl;
+          imageDataUrl = cached.imageDataUrl;
           imageTextCache.delete(imageContextId);
           console.log(`[Public Chat Stream] K12 image context retrieved (${imageText.length} chars)${imageUrl ? ' with image URL' : ''}`);
         }
@@ -21143,6 +21151,7 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         resumeUrl,
         imageText,
         imageUrl,
+        imageDataUrl,
       })) {
         res.write(`data: ${JSON.stringify(chunk)}\n\n`);
       }
