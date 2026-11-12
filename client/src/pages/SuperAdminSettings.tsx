@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Lock, AlertCircle, Sparkles, Database, Download, Brain, CheckCircle2, XCircle, Loader2, RefreshCw, Cloud, Trash2, Calendar, HardDrive, ArrowDownToLine, Upload, Copy, Check, ExternalLink } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { ArchivePasswordCard } from "@/components/superadmin/AccountArchive";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -761,6 +762,9 @@ export default function SuperAdminSettings({ section }: { section: SuperAdminSet
           </Card>
 
           )}
+
+          {/* Archive password (Archived accounts list) */}
+          {section === "account" && <div className="mt-6"><ArchivePasswordCard /></div>}
 
           {/* Database Backup Card */}
           {section === "download" && (

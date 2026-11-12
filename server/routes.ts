@@ -107,6 +107,7 @@ function cleanLandingUrl(value: unknown): string | undefined {
 import dataRetentionRoutes from "./routes/dataRetention";
 import merittoRoutes from "./routes/meritto";
 import settingsCopyRoutes from "./routes/settingsCopy";
+import accountArchiveRoutes from "./routes/accountArchive";
 import { imageUsedByOtherAccount } from "./services/settingsCopyService";
 import accountSetupRoutes from "./routes/accountSetup";
 import aiUsageRoutes from "./routes/aiUsage";
@@ -653,6 +654,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(dataRetentionRoutes);
   app.use(merittoRoutes);
   app.use(settingsCopyRoutes);
+  app.use(accountArchiveRoutes);
   app.use(accountSetupRoutes);
   app.use(aiUsageRoutes);
   app.use(agencyRoutes);
@@ -29237,7 +29239,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const todayIST = istNow.toISOString().split("T")[0];
       const mtdStartIST = `${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, "0")}-01`;
 
-      const allAccounts = await db.select({ id: businessAccounts.id, name: businessAccounts.name }).from(businessAccounts);
+      // Archived accounts are left out (server/services/accountArchive.ts); MIS rows carry no account ids to filter later.
+      const allAccounts = await db.select({ id: businessAccounts.id, name: businessAccounts.name }).from(businessAccounts).where(isNull(businessAccounts.archivedAt));
       const allMembers = await db.select({
         groupId: accountGroupMembers.groupId,
         businessAccountId: accountGroupMembers.businessAccountId,
@@ -29363,7 +29366,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       const from = req.query.from as string | undefined;
       const to = req.query.to as string | undefined;
 
-      const costs = await storage.getAICostAnalytics(businessAccountId, from, to);
+      const { archivedAccountIds } = await import("./services/accountArchive");
+      const costs = await storage.getAICostAnalytics(businessAccountId, from, to, Array.from(await archivedAccountIds()));
       res.json(costs);
     } catch (error: any) {
       console.error('[SuperAdmin Costs] Error:', error);

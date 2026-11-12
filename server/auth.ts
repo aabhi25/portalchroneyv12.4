@@ -5,6 +5,7 @@ import { db } from "./db";
 import { sessions, users, accountGroupAdmins, accountGroupMembers, accountGroups } from "@shared/schema";
 import { eq, and, gt, inArray } from "drizzle-orm";
 import { loadAgencySession, type AgencySession } from "./services/agencyService";
+import { enforceArchive } from "./services/accountArchive";
 
 const SALT_ROUNDS = 12;
 const SESSION_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
@@ -63,6 +64,7 @@ export async function validateSession(sessionToken: string) {
   return {
     ...user,
     activeBusinessAccountId: session.activeBusinessAccountId || user.businessAccountId,
+    archiveUnlockedUntil: session.archiveUnlockedUntil,
   };
 }
 
@@ -137,6 +139,12 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     req.user.businessAccountId = agency.viewingClientId;
     req.user.activeBusinessAccountId = agency.viewingClientId;
     if (agency.viewingClientId) req.user.role = "business_user";
+  }
+
+  // Archived accounts stay out of super admin screens unless the Archived list is unlocked.
+  if (user.role === "super_admin") {
+    const unlocked = !!user.archiveUnlockedUntil && user.archiveUnlockedUntil.getTime() > Date.now();
+    return enforceArchive(req, res, next, unlocked);
   }
 
   next();

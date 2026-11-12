@@ -379,6 +379,13 @@
       "when": 1794307408199,
       "tag": "0053_hide_contacts_from_view",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1794507705960,
+      "tag": "0054_account_archive",
+      "breakpoints": true
     }
   ]
 }

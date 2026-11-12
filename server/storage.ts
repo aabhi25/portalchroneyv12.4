@@ -195,7 +195,7 @@ import {
   type InsertFacebookLeadField
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, asc, count, inArray, sql, and, or, gte, lte, ilike, isNull } from "drizzle-orm";
+import { eq, desc, asc, count, inArray, notInArray, sql, and, or, gte, lte, ilike, isNull } from "drizzle-orm";
 import { isTopscholarAccount } from "./services/topscholar/config";
 import { mergeGroupLeadConfigIntoAccount } from "@shared/leadTrainingConfig";
 import { businessContextCache } from "./services/businessContextCache";
@@ -877,39 +877,24 @@ export class DatabaseStorage implements IStorage {
     return account || undefined;
   }
 
+  /** The super admin Accounts list: archived accounts are left out (they have their own locked list). */
   async getAllBusinessAccounts(limit?: number, offset?: number): Promise<BusinessAccount[]> {
-    // Build query with proper pagination support
-    if (limit !== undefined && offset !== undefined) {
-      return await db
-        .select()
-        .from(businessAccounts)
-        .orderBy(desc(businessAccounts.createdAt))
-        .limit(limit)
-        .offset(offset);
-    } else if (limit !== undefined) {
-      return await db
-        .select()
-        .from(businessAccounts)
-        .orderBy(desc(businessAccounts.createdAt))
-        .limit(limit);
-    } else if (offset !== undefined) {
-      return await db
-        .select()
-        .from(businessAccounts)
-        .orderBy(desc(businessAccounts.createdAt))
-        .offset(offset);
-    }
-    
-    return await db
+    let query = db
       .select()
       .from(businessAccounts)
-      .orderBy(desc(businessAccounts.createdAt));
+      .where(isNull(businessAccounts.archivedAt))
+      .orderBy(desc(businessAccounts.createdAt))
+      .$dynamic();
+    if (limit !== undefined) query = query.limit(limit);
+    if (offset !== undefined) query = query.offset(offset);
+    return await query;
   }
 
   async getBusinessAccountsCount(): Promise<number> {
     const [result] = await db
       .select({ count: count() })
-      .from(businessAccounts);
+      .from(businessAccounts)
+      .where(isNull(businessAccounts.archivedAt));
     return result?.count || 0;
   }
 
@@ -5959,13 +5944,16 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getAICostAnalytics(businessAccountId?: string, from?: string, to?: string) {
+  async getAICostAnalytics(businessAccountId?: string, from?: string, to?: string, excludeAccountIds: string[] = []) {
     try {
       // Build base query
       let conditions: any[] = [];
 
       if (businessAccountId) {
         conditions.push(eq(aiUsageEvents.businessAccountId, businessAccountId));
+      } else if (excludeAccountIds.length > 0) {
+        // All accounts: archived ones are left out of the totals (server/services/accountArchive.ts)
+        conditions.push(notInArray(aiUsageEvents.businessAccountId, excludeAccountIds));
       }
 
       if (from) {

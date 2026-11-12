@@ -353,6 +353,8 @@ export interface AccountPageActions {
   toggleStatus: () => void;
   togglingStatus: boolean;
   duplicate: () => void;
+  archive: () => void;
+  unarchive: () => void;
   remove: () => void;
 }
 
@@ -391,6 +393,7 @@ export function AccountPage({ accountId, tab, account, isLoading, isError, actio
           <span className="inline-flex flex-wrap items-center gap-2">
             {account.website && <a href={account.website} target="_blank" rel="noopener noreferrer" className="hover:text-violet-700 hover:underline">{domainOf(account.website)}</a>}
             <ActivityPill {...accountActivity(account)} />
+            {account.archivedAt && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11.5px] font-medium text-amber-800" data-testid="pill-archived">Archived</span>}
           </span>
         }
         back={{ label: "Accounts", href: "/super-admin" }}
@@ -453,6 +456,15 @@ export function AccountPage({ accountId, tab, account, isLoading, isError, actio
                   {account.status === "active" ? "Disable" : "Enable"}
                 </Button>
               </SaRow>
+              {account.archivedAt ? (
+                <SaRow label="Archived" help="Hidden from every super admin screen; only the Archived list (with its password) shows it. The business keeps working.">
+                  <Button size="sm" variant="outline" onClick={actions.unarchive} data-testid="button-account-unarchive">Unarchive</Button>
+                </SaRow>
+              ) : (
+                <SaRow label="Archive account" help="Hides it from every super admin screen behind the Archive password. The business keeps working: chat, WhatsApp, calls and its logins.">
+                  <Button size="sm" variant="outline" onClick={actions.archive} data-testid="button-account-archive">Archive…</Button>
+                </SaRow>
+              )}
               <SaRow label="Delete account" help="Removes the account and everything in it for good. Asks for your password.">
                 <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700" onClick={actions.remove} data-testid="button-account-delete">Delete…</Button>
               </SaRow>

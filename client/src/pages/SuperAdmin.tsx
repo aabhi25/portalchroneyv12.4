@@ -44,7 +44,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { DataRetentionDialog } from "@/components/DataRetentionDialog";
 import { LiveAvatarSettingsDialog } from "@/components/LiveAvatarSettingsDialog";
-import { Plus, Timer, Building2, Pencil, Copy, Check, Sparkles, MoreVertical, Eye, Search, Trash2, Power, LogIn, Play, Video } from "lucide-react";
+import { Plus, Timer, Building2, Pencil, Copy, Check, Sparkles, MoreVertical, Eye, Search, Trash2, Power, LogIn, Play, Video, Archive, Lock, LockOpen } from "lucide-react";
+import { ArchiveAccountDialog, ArchiveUnlockDialog, ArchivedAccountsView, unarchiveAccount, useArchiveStatus } from "@/components/superadmin/AccountArchive";
 import type { BusinessAccountDto } from "@shared/dto/businessAccount";
 import type { BusinessStarterKey } from "@shared/businessStarters";
 import { BusinessStarterPicker } from "@/components/superadmin/BusinessStarterPicker";
@@ -53,7 +54,20 @@ import AccountFeaturesSettings from "@/pages/settings/AccountFeaturesSettings";
 /** Business accounts: the list, or (with accountId) one account's own page. Both share the dialogs below. */
 export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab?: string } = {}) {
   const [, setLocation] = useLocation();
-  const [listFilter, setListFilter] = useState<"all" | ActivityState>("all");
+  const [listFilter, setListFilter] = useState<"all" | ActivityState | "archived">("all");
+  // Archived accounts: their own locked list (components/superadmin/AccountArchive.tsx)
+  const archiveStatus = useArchiveStatus();
+  const [unlockOpen, setUnlockOpen] = useState(false);
+  const [archiveAccount, setArchiveAccount] = useState<{ id: string; name: string } | null>(null);
+  const showingArchived = listFilter === "archived" && !!archiveStatus.data?.unlocked;
+  useEffect(() => {
+    // The list locked (timer, "Lock now", new password): back to all accounts.
+    if (listFilter === "archived" && archiveStatus.data && !archiveStatus.data.unlocked) setListFilter("all");
+  }, [listFilter, archiveStatus.data]);
+  const openArchived = () => {
+    if (archiveStatus.data?.unlocked) setListFilter("archived");
+    else setUnlockOpen(true);
+  };
   const [retentionAccount, setRetentionAccount] = useState<{ id: string; name: string } | null>(null);
   const [avatarAccount, setAvatarAccount] = useState<{ id: string; name: string } | null>(null);
   const [newBusinessName, setNewBusinessName] = useState("");
@@ -533,6 +547,14 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
             toggleStatus: () => { if (accountQuery.data) handleToggleStatus(accountQuery.data); },
             togglingStatus: toggleStatusMutation.isPending,
             duplicate: () => { if (accountQuery.data) handleDuplicateBusiness(accountQuery.data); },
+            archive: () => { if (accountQuery.data) setArchiveAccount({ id: accountQuery.data.id, name: accountQuery.data.name }); },
+            unarchive: () => {
+              if (!accountQuery.data) return;
+              const { id, name } = accountQuery.data;
+              unarchiveAccount(id)
+                .then(() => toast({ title: `${name} unarchived`, description: "It's back in the Accounts list." }))
+                .catch((e: Error) => toast({ title: "Couldn't unarchive", description: e.message, variant: "destructive" }));
+            },
             remove: () => { if (accountQuery.data) handleDeleteBusiness(accountQuery.data); },
           }}
         />
@@ -561,6 +583,16 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                     {label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={openArchived}
+                  aria-pressed={showingArchived}
+                  data-testid="filter-accounts-archived"
+                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[12.5px] font-medium transition-colors ${showingArchived ? "bg-gray-900 text-white" : "border border-black/[0.08] bg-white text-gray-700 hover:bg-gray-50"}`}
+                >
+                  {archiveStatus.data?.unlocked ? <LockOpen className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
+                  Archived
+                </button>
               </div>
               <Dialog open={isBusinessDialogOpen} onOpenChange={setIsBusinessDialogOpen}>
                 <DialogTrigger asChild>
@@ -1046,7 +1078,16 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
             </DialogContent>
           </Dialog>
 
-          {!accountId && (isLoadingAccounts ? (
+          <ArchiveUnlockDialog open={unlockOpen} onOpenChange={setUnlockOpen} onUnlocked={() => setListFilter("archived")} />
+          <ArchiveAccountDialog
+            account={archiveAccount}
+            onOpenChange={(open) => { if (!open) setArchiveAccount(null); }}
+            onArchived={() => { if (accountId) setLocation("/super-admin"); }}
+          />
+
+          {!accountId && showingArchived && archiveStatus.data ? (
+            <ArchivedAccountsView status={archiveStatus.data} onOpen={(id) => setLocation(accountHref(id))} />
+          ) : !accountId && (isLoadingAccounts ? (
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
               <div className="w-8 h-8 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
               <p className="text-sm text-gray-600">Loading business accounts...</p>
@@ -1179,6 +1220,10 @@ export default function SuperAdmin({ accountId, tab }: { accountId?: string; tab
                                 <DropdownMenuItem onClick={() => handleDuplicateBusiness(business)}>
                                   <Copy className="h-4 w-4 mr-2" />
                                   Duplicate account
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setArchiveAccount({ id: business.id, name: business.name })} data-testid={`menu-archive-${business.id}`}>
+                                  <Archive className="h-4 w-4 mr-2" />
+                                  Archive account
                                 </DropdownMenuItem>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem 

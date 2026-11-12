@@ -43,6 +43,9 @@ export const businessAccounts = pgTable("business_accounts", {
   elevenlabsApiKey: text("elevenlabs_api_key"), // Business-specific ElevenLabs API key for TTS voices
   jinaApiKey: text("jina_api_key"), // UNUSED: Jina was retired. The column is kept only so the database stays untouched; nothing reads or writes it.
   status: text("status").notNull().default("active"), // 'active' | 'suspended'
+  // Archived by the super admin: hidden from every super admin screen until the Archive password unlocks it
+  // (server/services/accountArchive.ts). The business itself keeps working.
+  archivedAt: timestamp("archived_at"),
   productTier: text("product_tier").notNull().default("chroney"), // 'chroney' | 'jewelry_showcase' | 'jewelry_showcase_chroney'
   shopifyAutoSyncEnabled: text("shopify_auto_sync_enabled").notNull().default("false"), // 'true' | 'false'
   shopifySyncFrequency: numeric("shopify_sync_frequency", { precision: 5, scale: 0 }).default("24"), // Sync frequency in hours (6, 12, 24, 48)
@@ -366,6 +369,7 @@ export const sessions = pgTable("sessions", {
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   sessionToken: text("session_token").notNull().unique(),
   activeBusinessAccountId: varchar("active_business_account_id").references(() => businessAccounts.id, { onDelete: "set null" }),
+  archiveUnlockedUntil: timestamp("archive_unlocked_until"), // super admin: Archived accounts unlocked until then (null = locked)
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
