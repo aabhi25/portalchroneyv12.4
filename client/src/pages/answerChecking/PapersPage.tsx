@@ -9,7 +9,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { SearchQuestions, TypeQuestion } from "./CheckAnswerPage";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
-import {
+import { ASSESS_PATH,
   API, KIND_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, fmtCost, fmtMarks, paperRunning, photoToDataUrl, scopeLabel,
   type PaperSummary, type QuestionInput, type SchemeView,
 } from "./answerCheckApi";
@@ -115,7 +115,7 @@ export default function PapersPage() {
         : await apiRequest<{ id: string }>("POST", `${API}/papers/practice`, { title: `${title} (practice)`, studentLabel: "", questions });
       if (kind === "check") setPhotos([]);
       qc.invalidateQueries({ queryKey: PAPERS_KEY });
-      setLocation(`/super-admin/answer-checking/papers/${res.id}`);
+      setLocation(`${ASSESS_PATH}/papers/${res.id}`);
     } catch (e: any) { setError(e.message); toast({ title: "Couldn't start", description: e.message, variant: "destructive" }); }
     finally { setBusy(""); }
   }
@@ -151,7 +151,7 @@ export default function PapersPage() {
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums">{fmtMarks(r.scheme.maxMarks)}</td>
                     <td className="py-2 pr-3 text-[12px]">
-                      <a href={`/super-admin/answer-checking?q=${encodeURIComponent(r.scheme.questionKey)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-violet-700 hover:underline">
+                      <a href={`${ASSESS_PATH}?q=${encodeURIComponent(r.scheme.questionKey)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-violet-700 hover:underline">
                         {r.scheme.status === "approved" ? "Approved" : "Drafted by AI"}<ExternalLink className="h-3 w-3" />
                       </a>
                     </td>
@@ -169,7 +169,7 @@ export default function PapersPage() {
             {[1, 2, 3, 4, 5, 6, 8, 10].map(n => <option key={n} value={n}>{n}</option>)}
           </select>
           <Button variant="outline" onClick={addRandom} disabled={!!busy || off || preparing > 0} data-testid="paper-add-random">{busy === "random" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Shuffle className="mr-1.5 h-4 w-4" />}Add random questions</Button>
-          <Button variant={adding === "search" ? "default" : "outline"} onClick={() => setAdding(adding === "search" ? "" : "search")} disabled={off} data-testid="paper-add-search"><BookOpen className="mr-1.5 h-4 w-4" />From Top Scholar's content</Button>
+          <Button variant={adding === "search" ? "default" : "outline"} onClick={() => setAdding(adding === "search" ? "" : "search")} disabled={off} data-testid="paper-add-search"><BookOpen className="mr-1.5 h-4 w-4" />From the curriculum</Button>
           <Button variant={adding === "type" ? "default" : "outline"} onClick={() => setAdding(adding === "type" ? "" : "type")} disabled={off} data-testid="paper-add-type"><Type className="mr-1.5 h-4 w-4" />Type a question</Button>
           {rows.length > 0 && <Button variant="ghost" onClick={() => { if (window.confirm("Remove all questions from this paper?")) setRows([]); }}>Clear</Button>}
         </div>
@@ -225,7 +225,7 @@ export default function PapersPage() {
               </thead>
               <tbody>
                 {list.papers.map(p => (
-                  <tr key={p.id} onClick={() => setLocation(`/super-admin/answer-checking/papers/${p.id}`)} className="cursor-pointer border-b border-black/[0.04] hover:bg-gray-50" data-testid={`paper-row-${p.id}`}>
+                  <tr key={p.id} onClick={() => setLocation(`${ASSESS_PATH}/papers/${p.id}`)} className="cursor-pointer border-b border-black/[0.04] hover:bg-gray-50" data-testid={`paper-row-${p.id}`}>
                     <td className="py-2.5 pr-3">
                       <span className="text-gray-900">{p.title || "Paper"}</span>
                       <span className="ml-2 text-[12px] text-gray-500">{p.studentLabel}</span>

@@ -3,6 +3,7 @@ import { db } from "../../db";
 import {
   answerCheckSettings,
   answerChecks,
+  businessAccounts,
   answerMarkingSchemes,
   type AnswerCheckRow,
   type AnswerMarkingSchemeRow,
@@ -74,24 +75,21 @@ export async function getSettings(businessAccountId: string): Promise<AnswerChec
   return resolveAnswerCheckSettings(row?.settings);
 }
 
-/** Saves the settings; the on/off switch is kept as it is (only setEnabled changes it). */
 export async function saveSettings(businessAccountId: string, raw: unknown, userId: string | null): Promise<AnswerCheckSettings> {
-  const current = await getSettings(businessAccountId);
-  const settings = { ...resolveAnswerCheckSettings(raw), enabled: current.enabled };
-  return writeSettings(businessAccountId, settings, userId);
-}
-
-/** Switches AI assessment on or off for the account. */
-export async function setEnabled(businessAccountId: string, enabled: boolean, userId: string | null): Promise<AnswerCheckSettings> {
-  const current = await getSettings(businessAccountId);
-  return writeSettings(businessAccountId, { ...current, enabled }, userId);
-}
-
-async function writeSettings(businessAccountId: string, settings: AnswerCheckSettings, userId: string | null): Promise<AnswerCheckSettings> {
+  const settings = resolveAnswerCheckSettings(raw);
   await db.insert(answerCheckSettings)
     .values({ businessAccountId, settings: settings as any, updatedBy: userId, updatedAt: new Date() })
     .onConflictDoUpdate({ target: answerCheckSettings.businessAccountId, set: { settings: settings as any, updatedBy: userId, updatedAt: new Date() } });
   return settings;
+}
+
+/**
+ * AI assessment is an account feature (Settings › Features, super admins): off by default, so
+ * nothing is checked and no AI is paid for until it is switched on.
+ */
+export async function assessmentEnabled(businessAccountId: string): Promise<boolean> {
+  const [row] = await db.select({ on: businessAccounts.answerCheckingEnabled }).from(businessAccounts).where(eq(businessAccounts.id, businessAccountId));
+  return row?.on === "true";
 }
 
 // ---- Marking schemes --------------------------------------------------------------------------

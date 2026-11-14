@@ -52,6 +52,7 @@ export const businessAccounts = pgTable("business_accounts", {
   shopifyLastSyncedAt: timestamp("shopify_last_synced_at"), // When products were last synced from Shopify
   shopifySyncStatus: text("shopify_sync_status").default("idle"), // 'idle' | 'syncing' | 'completed' | 'failed'
   shopifyEnabled: text("shopify_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Shopify features (text for consistency with other flags)
+  answerCheckingEnabled: text("answer_checking_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle: AI assessment of handwritten answers (pilot, Education › Assessment)
   wooCommerceEnabled: text("woocommerce_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle: products can come from the business's WooCommerce website
   appointmentsEnabled: text("appointments_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Appointment features (text for consistency with other flags)
   voiceModeEnabled: text("voice_mode_enabled").notNull().default("true"), // 'true' | 'false' - SuperAdmin toggle for Voice Mode feature (text for consistency with other flags)

@@ -17,7 +17,6 @@ import { VoiceSetupPanel, featureStatusKey, useVoiceStatusText, type FeatureStat
 import { FeatureSetupPanel, type ChecklistStatus, type SetupFeature } from "@/components/hub/FeatureSetupPanels";
 import { hubArea, type HubAreaId } from "@/navigation/hubAreas";
 import { callingApi, callingKeys, errorStatus, type SuperAdminCallingState } from "@/lib/aiCallingApi";
-import { AssessmentSwitch, useAssessmentOn } from "@/pages/answerChecking/AssessmentSwitch";
 
 /**
  * Everything a business account gets, in one list. Super admins only; shown in two places with the
@@ -36,7 +35,7 @@ type FlagField =
   | "chroneyEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled"
   | "whatsappMarketingEnabled" | "voiceModeEnabled" | "supportTicketsEnabled"
   | "appointmentsEnabled" | "demoOrdersEnabled" | "shopifyEnabled" | "wooCommerceEnabled" | "visualSearchEnabled"
-  | "k12EducationEnabled" | "jobPortalEnabled";
+  | "k12EducationEnabled" | "jobPortalEnabled" | "answerCheckingEnabled";
 
 const accountKey = (id: string) => ["/api/business-accounts", id];
 const avatarKey = (id: string) => ["/api/super-admin/avatar/accounts", id];
@@ -95,9 +94,6 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
   });
   const avatar = useQuery<{ settings: { enabled: boolean } }>({ queryKey: avatarKey(businessAccountId), retry: false });
   const tutor = useQuery<TutorAdminView>({ queryKey: tutorKey(businessAccountId), retry: false });
-  // AI assessment (answer checking pilot) runs on one account only: show its switch there.
-  const assessment = useAssessmentOn();
-  const assessmentHere = assessment.overview?.account?.id === businessAccountId;
   const photoSearch = usePhotoSearchStatus(businessAccountId);
   // What each feature still needs (status lines and "Needs attention").
   const featureStatus = useQuery<Record<string, ChecklistStatus>>({ queryKey: featureStatusKey(businessAccountId), retry: false, staleTime: 0 });
@@ -414,19 +410,13 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
             </Button>
           </Row>
         )}
-        {assessmentHere && (
+        {(ba.k12EducationEnabled || ba.answerCheckingEnabled) && (
           <Row
             icon={FileCheck2} tint="bg-orange-500" label="AI assessment (pilot)"
             description="The AI reads students' handwritten answers and marks them against a marking scheme"
-            below={<p className="mt-1 text-[12px] text-gray-500">Used from Super admin › Pilots › Answer checking. Off = nothing is checked and no AI cost is spent.</p>}
+            below={<p className="mt-1 text-[12px] text-gray-500">Shows as Education › Assessment, only for super admins viewing this account. Off = nothing is checked and no AI cost is spent.</p>}
           >
-            {/* The pilot pages exist on the super admin's own side, not while viewing as the business. */}
-            {window.location.pathname.startsWith("/super-admin") && (
-              <Button variant="outline" size="sm" className="h-7" asChild data-testid="button-feature-assessment">
-                <a href="/super-admin/answer-checking">Open</a>
-              </Button>
-            )}
-            <AssessmentSwitch testid="switch-feature-assessment" />
+            {flagSwitch("answerCheckingEnabled", "AI assessment")}
           </Row>
         )}
         <Row icon={Headphones} tint="bg-orange-500" label="Support tickets" description="A queue for the questions the AI hands over to people" below={checklistLine("supportTickets")}>

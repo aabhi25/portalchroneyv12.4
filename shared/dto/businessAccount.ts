@@ -14,9 +14,10 @@ export const isVistaOn = (ba: { productTier: ProductTier | string | null | undef
 export type SystemMode = 'full' | 'essential';
 
 // BusinessAccountDto with normalized boolean feature flags for API/client
-export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "wooCommerceEnabled" | "appointmentsEnabled" | "voiceModeEnabled" | "visualSearchEnabled" | "jewelryShowcaseEnabled" | "supportTicketsEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled" | "chroneyEnabled" | "k12EducationEnabled" | "k12ImageUploadEnabled" | "k12ContentOnlyMode" | "k12VerbatimContentMode" | "jobPortalEnabled" | "demoOrdersEnabled" | "whatsappMarketingEnabled" | "leadsExportEnabled" | "leadPhoneMaskingEnabled" | "aiCallingEnabled" | "systemMode"> & {
+export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "wooCommerceEnabled" | "answerCheckingEnabled" | "appointmentsEnabled" | "voiceModeEnabled" | "visualSearchEnabled" | "jewelryShowcaseEnabled" | "supportTicketsEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled" | "chroneyEnabled" | "k12EducationEnabled" | "k12ImageUploadEnabled" | "k12ContentOnlyMode" | "k12VerbatimContentMode" | "jobPortalEnabled" | "demoOrdersEnabled" | "whatsappMarketingEnabled" | "leadsExportEnabled" | "leadPhoneMaskingEnabled" | "aiCallingEnabled" | "systemMode"> & {
   shopifyEnabled: boolean;
   wooCommerceEnabled: boolean;
+  answerCheckingEnabled: boolean;
   appointmentsEnabled: boolean;
   voiceModeEnabled: boolean;
   visualSearchEnabled: boolean;
@@ -50,6 +51,7 @@ export function toBusinessAccountDto(account: BusinessAccount): BusinessAccountD
     ...account,
     shopifyEnabled: account.shopifyEnabled === "true",
     wooCommerceEnabled: account.wooCommerceEnabled === "true",
+    answerCheckingEnabled: account.answerCheckingEnabled === "true",
     appointmentsEnabled: account.appointmentsEnabled === "true",
     voiceModeEnabled: account.voiceModeEnabled === "true",
     visualSearchEnabled: account.visualSearchEnabled === "true",
@@ -80,6 +82,7 @@ export function fromBusinessAccountDto(dto: BusinessAccountDto): BusinessAccount
     ...dto,
     shopifyEnabled: dto.shopifyEnabled ? "true" : "false",
     wooCommerceEnabled: dto.wooCommerceEnabled ? "true" : "false",
+    answerCheckingEnabled: dto.answerCheckingEnabled ? "true" : "false",
     appointmentsEnabled: dto.appointmentsEnabled ? "true" : "false",
     voiceModeEnabled: dto.voiceModeEnabled ? "true" : "false",
     visualSearchEnabled: dto.visualSearchEnabled ? "true" : "false",

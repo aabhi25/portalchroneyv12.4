@@ -53,8 +53,6 @@ export interface FeedbackTone {
 }
 
 export interface AnswerCheckSettings {
-  /** AI assessment on this account. Off by default: nothing is checked (and no AI is paid for) until a super admin switches it on. */
-  enabled: boolean;
   /** Scopes the random question picks from; empty = every scope of the account. */
   scopes: ScopePick[];
   questionKinds: QuestionKind[];
@@ -101,7 +99,6 @@ export const DEFAULT_FEEDBACK_TONE: FeedbackTone = {
 
 export function defaultAnswerCheckSettings(): AnswerCheckSettings {
   return {
-    enabled: false,
     scopes: [],
     questionKinds: ["short", "long", "numerical"],
     minMarks: 2,
@@ -147,7 +144,6 @@ export function resolveAnswerCheckSettings(raw: unknown): AnswerCheckSettings {
   const feedbackTone = {} as FeedbackTone;
   for (const band of SCORE_BANDS) feedbackTone[band] = str(tone[band], d.feedbackTone[band]).slice(0, 300) || d.feedbackTone[band];
   return {
-    enabled: r.enabled === true,
     scopes,
     questionKinds: kinds.length ? kinds : d.questionKinds,
     minMarks,

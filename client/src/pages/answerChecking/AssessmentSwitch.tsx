@@ -1,42 +1,24 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Switch } from "@/components/ui/switch";
-import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
-import { API, OVERVIEW_KEY, type Overview } from "./answerCheckApi";
+import { useQuery } from "@tanstack/react-query";
+import { OVERVIEW_KEY, SCOPES_KEY, type Overview, type ScopesResponse } from "./answerCheckApi";
 
-/** Whether AI assessment is switched on (null while loading). */
+/** Whether AI assessment is switched on for the account being viewed (null while loading). */
 export function useAssessmentOn(): { on: boolean | null; overview: Overview | undefined } {
-  const { data } = useQuery<Overview>({ queryKey: OVERVIEW_KEY });
-  return { on: data ? data.settings.enabled : null, overview: data };
+  const { data } = useQuery<Overview>({ queryKey: OVERVIEW_KEY, staleTime: 0, refetchOnMount: "always" });
+  return { on: data ? data.enabled : null, overview: data };
 }
 
-/** The AI assessment on/off switch — the same one on the pilot's Settings and on the account's Features. */
-export function AssessmentSwitch({ testid = "assessment-switch" }: { testid?: string }) {
-  const { toast } = useToast();
-  const qc = useQueryClient();
-  const { on } = useAssessmentOn();
-  const [busy, setBusy] = useState(false);
-  async function set(next: boolean) {
-    setBusy(true);
-    try {
-      await apiRequest("PUT", `${API}/enabled`, { enabled: next });
-      await qc.invalidateQueries({ queryKey: OVERVIEW_KEY });
-      toast({ title: next ? "AI assessment switched on" : "AI assessment switched off" });
-    } catch (e: any) { toast({ title: "Could not change it", description: e.message, variant: "destructive" }); }
-    finally { setBusy(false); }
-  }
-  return <Switch checked={!!on} disabled={busy || on === null} onCheckedChange={set} data-testid={testid} aria-label="AI assessment" />;
+/** The account's classes and subjects (loaded on their own: a large content store can be slow). */
+export function useScopes(): { scopes: ScopesResponse["scopes"]; error: string | null; loading: boolean } {
+  const { data, isLoading } = useQuery<ScopesResponse>({ queryKey: SCOPES_KEY });
+  return { scopes: data?.scopes ?? [], error: data?.error ?? null, loading: isLoading };
 }
 
-/** Shown on the pilot pages while AI assessment is off. */
+/** Shown on the assessment pages while the account's feature switch is off. */
 export function AssessmentOffBanner({ accountName }: { accountName?: string }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl bg-gray-100 px-4 py-3 text-[14px] text-gray-800" data-testid="assessment-off">
-      <span className="min-w-0 flex-1">
-        <b>AI assessment is switched off{accountName ? ` for ${accountName}` : ""}.</b> Nothing is checked and no AI cost is spent while it's off. Earlier results stay here.
-      </span>
-      <label className="flex items-center gap-2 font-medium">Switch on <AssessmentSwitch testid="assessment-switch-banner" /></label>
+    <div className="rounded-xl bg-gray-100 px-4 py-3 text-[14px] text-gray-800" data-testid="assessment-off">
+      <b>AI assessment is switched off{accountName ? ` for ${accountName}` : ""}.</b> Nothing is checked and no AI cost is spent while it's off; earlier results stay here.
+      Switch it on in <b>Settings › Features</b> (AI assessment).
     </div>
   );
 }

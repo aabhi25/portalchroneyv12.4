@@ -48,8 +48,7 @@ console.log("Settings");
 {
   const d = defaultAnswerCheckSettings();
   expect(d.minMarks === 2 && d.maxMarks === 5 && d.questionKinds.length === 3, "defaults: 2–5 marks, all question kinds");
-  expect(d.enabled === false && resolveAnswerCheckSettings(null).enabled === false, "AI assessment is off until switched on");
-  expect(resolveAnswerCheckSettings({ enabled: true }).enabled === true && resolveAnswerCheckSettings({ enabled: "yes" }).enabled === false, "only a real true switches it on");
+  expect(!("enabled" in resolveAnswerCheckSettings({ enabled: true })), "the on/off switch is not a setting (it is the account's feature switch)");
   const r = resolveAnswerCheckSettings({ minMarks: 8, maxMarks: 3, questionKinds: ["long", "essay"], legibilityThreshold: 4, subjectRules: { maths: { strictness: "harsh", unitsRequired: false } } });
   expect(r.minMarks === 8 && r.maxMarks === 8, "max marks never below min marks", r);
   expect(r.questionKinds.length === 1 && r.questionKinds[0] === "long", "unknown question kinds dropped");

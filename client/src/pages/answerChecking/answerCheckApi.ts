@@ -2,18 +2,23 @@ import type { AnswerCheckSettings, MarkingScheme, PracticeLevel, QuestionKind, S
 
 /** Super admin › Answer checking: what the server sends, and small helpers shared by the pages. */
 
-export const API = "/api/super-admin/answer-checking";
+/** Server addresses (the account a super admin is viewing) and the pages' own address in that account. */
+export const API = "/api/answer-checking";
+export const ASSESS_PATH = "/admin/assessment";
 export const OVERVIEW_KEY = [`${API}/overview`];
+export const SCOPES_KEY = [`${API}/scopes`];
 
 export interface ScopeOption { board: string; medium: string; grade: string; subjects: string[] }
 
 export interface Overview {
   account: { id: string; name: string; hasKey: boolean } | null;
+  /** The account's AI assessment feature switch (Settings › Features). */
+  enabled: boolean;
   settings: AnswerCheckSettings;
-  scopes: ScopeOption[];
-  scopesError?: string | null;
   counts?: { checks: number; schemes: number };
 }
+
+export interface ScopesResponse { scopes: ScopeOption[]; error: string | null }
 
 export interface QuestionInput {
   questionKey: string;

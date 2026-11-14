@@ -8,7 +8,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel, Stat } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
-import {
+import { ASSESS_PATH,
   API, LEVEL_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, STATUS_LABEL, STATUS_STYLE, fmtCost, fmtMarks, imageUrl, isRunning, paperRunning,
   type CheckView, type PaperView,
 } from "./answerCheckApi";
@@ -30,7 +30,7 @@ export default function PaperDetailPage({ paperId }: { paperId: string }) {
     refetchOnMount: "always",
   });
   const p = data?.paper;
-  const back = { label: "Whole paper", href: "/super-admin/answer-checking/papers" };
+  const back = { label: "Whole paper", href: `${ASSESS_PATH}/papers` };
 
   async function act(name: string, fn: () => Promise<unknown>, done?: string) {
     setBusy(name);
@@ -45,7 +45,7 @@ export default function PaperDetailPage({ paperId }: { paperId: string }) {
       <SaHeader
         icon={FileCheck2}
         tint="bg-orange-500"
-        kind="Answer checking · whole paper"
+        kind="Assessment · whole paper"
         title={p ? `${p.title || "Paper"}${p.studentLabel ? ` — ${p.studentLabel}` : ""}` : "Paper"}
         subtitle={p ? `${p.questions.length} questions · ${p.pages.length} page${p.pages.length === 1 ? "" : "s"}${p.source === "practice" ? " · practice sheet written by the AI" : ""}` : undefined}
         back={back}
@@ -133,7 +133,7 @@ function TeacherPaper({ p }: { p: PaperView }) {
                 </tr>
               </thead>
               <tbody>
-                {p.checks.map(c => <AnswerRow key={c.id} c={c} practice={p.source === "practice"} onOpen={() => setLocation(`/super-admin/answer-checking/checks/${c.id}`)} />)}
+                {p.checks.map(c => <AnswerRow key={c.id} c={c} practice={p.source === "practice"} onOpen={() => setLocation(`${ASSESS_PATH}/checks/${c.id}`)} />)}
               </tbody>
             </table>
           </div>

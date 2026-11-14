@@ -6,7 +6,6 @@ import { db } from "../db";
 import { answerCheckImages, answerChecks, answerMarkingSchemes, businessAccounts } from "@shared/schema";
 import { PRACTICE_LEVELS, QUESTION_KINDS, accuracySummary, type PracticeLevel } from "@shared/answerCheck";
 import { requireAuth, requireRole } from "../auth";
-import { TOPSCHOLAR_ACCOUNT_ID } from "../services/topscholar/config";
 import { AnswerCheckAiError, createAnswerCheckAi } from "../services/answerCheck/ai";
 import {
   approveScheme,
@@ -23,7 +22,7 @@ import {
   saveSchemeEdit,
   saveSettings,
   saveTeacherMarks,
-  setEnabled,
+  assessmentEnabled,
   SchemeEditError,
   schemeVersions,
   schemeView,
@@ -34,49 +33,57 @@ import { cleanQuestionList, createPaper, createPracticePaper, deletePaper, listP
 import { answerPapers } from "@shared/schema";
 
 /**
- * Answer checking pilot, super admins only (super admin › Answer checking). Works on the Top
- * Scholar account (TOPSCHOLAR_ACCOUNT_ID) with that account's OpenAI key. While AI assessment is
- * switched off, nothing that calls the AI runs (history, settings and photos stay viewable).
+ * AI assessment (answer checking pilot): a business account's Education › Assessment, for super
+ * admins viewing that account only. Works on the account being viewed, with its OpenAI key. The
+ * account's feature switch (Settings › Features, "AI assessment") must be on for anything that
+ * calls the AI; history, settings and photos stay viewable while it is off.
  *
- *   GET  /api/super-admin/answer-checking/overview            account, settings, scopes
- *   PUT  /api/super-admin/answer-checking/settings
- *   PUT  /api/super-admin/answer-checking/enabled              AI assessment on / off for the account
- *   POST /api/super-admin/answer-checking/questions/random     a written-answer question from the curriculum
- *   GET  /api/super-admin/answer-checking/questions/search
- *   POST /api/super-admin/answer-checking/questions/prepare    question → its marking scheme (drafted once)
- *   GET  /api/super-admin/answer-checking/schemes/:key         current scheme + versions + checks so far
- *   PUT  /api/super-admin/answer-checking/schemes/:key         admin edit → new approved version
- *   POST /api/super-admin/answer-checking/schemes/:key/approve
- *   POST /api/super-admin/answer-checking/schemes/:key/recheck re-mark every answer with the current scheme
- *   POST /api/super-admin/answer-checking/checks               photos → a check (runs in the background)
- *   POST /api/super-admin/answer-checking/practice             practice answers at chosen levels → checks
- *   GET  /api/super-admin/answer-checking/checks               history (filters) + accuracy summary
- *   GET  /api/super-admin/answer-checking/checks/:id
- *   POST /api/super-admin/answer-checking/checks/:id/recheck
- *   PUT  /api/super-admin/answer-checking/checks/:id/teacher   teacher's marks and comment
- *   DELETE /api/super-admin/answer-checking/checks/:id
- *   GET  /api/super-admin/answer-checking/images/:id           a photo or marked sheet
- *   GET  /api/super-admin/answer-checking/export.csv
- *   POST /api/super-admin/answer-checking/papers/random-questions   several random questions for a paper
- *   POST /api/super-admin/answer-checking/papers                     whole answer sheet → read, matched, each answer checked
- *   POST /api/super-admin/answer-checking/papers/practice            the AI writes one student's whole sheet
- *   GET  /api/super-admin/answer-checking/papers                     list
- *   GET  /api/super-admin/answer-checking/papers/:id
- *   POST /api/super-admin/answer-checking/papers/:id/rerun           read the sheet again (replaces its results)
- *   DELETE /api/super-admin/answer-checking/papers/:id
+ *   GET  /api/answer-checking/overview            account, on/off, settings
+ *   GET  /api/answer-checking/scopes              the account's classes and subjects
+ *   PUT  /api/answer-checking/settings
+ *   POST /api/answer-checking/questions/random     a written-answer question from the curriculum
+ *   GET  /api/answer-checking/questions/search
+ *   POST /api/answer-checking/questions/prepare    question → its marking scheme (drafted once)
+ *   GET  /api/answer-checking/schemes/:key         current scheme + versions + checks so far
+ *   PUT  /api/answer-checking/schemes/:key         admin edit → new approved version
+ *   POST /api/answer-checking/schemes/:key/approve
+ *   POST /api/answer-checking/schemes/:key/recheck re-mark every answer with the current scheme
+ *   POST /api/answer-checking/checks               photos → a check (runs in the background)
+ *   POST /api/answer-checking/practice             practice answers at chosen levels → checks
+ *   GET  /api/answer-checking/checks               history (filters) + accuracy summary
+ *   GET  /api/answer-checking/checks/:id
+ *   POST /api/answer-checking/checks/:id/recheck
+ *   PUT  /api/answer-checking/checks/:id/teacher   teacher's marks and comment
+ *   DELETE /api/answer-checking/checks/:id
+ *   GET  /api/answer-checking/images/:id           a photo or marked sheet
+ *   GET  /api/answer-checking/export.csv
+ *   POST /api/answer-checking/papers/random-questions   several random questions for a paper
+ *   POST /api/answer-checking/papers                     whole answer sheet → read, matched, each answer checked
+ *   POST /api/answer-checking/papers/practice            the AI writes one student's whole sheet
+ *   GET  /api/answer-checking/papers                     list
+ *   GET  /api/answer-checking/papers/:id
+ *   POST /api/answer-checking/papers/:id/rerun           read the sheet again (replaces its results)
+ *   DELETE /api/answer-checking/papers/:id
  */
 const router = Router();
-const superAdmin = [requireAuth, requireRole("super_admin")];
-const BASE = "/api/super-admin/answer-checking";
+const BASE = "/api/answer-checking";
 
-function accountId(): string {
-  return TOPSCHOLAR_ACCOUNT_ID;
+/** A super admin viewing a business account (the account the pilot works on). */
+function requireViewedAccount(req: Request, res: Response, next: () => void) {
+  if (!(req as any).user?.activeBusinessAccountId) return res.status(400).json({ error: "Open a business account first." });
+  next();
+}
+
+const superAdmin = [requireAuth, requireRole("super_admin"), requireViewedAccount];
+
+function accountId(req: Request): string {
+  return (req as any).user.activeBusinessAccountId;
 }
 
 /** Questions that already have an answer key keep its marks (a suggestion must never replace a saved key). */
-async function withSavedMarks<T extends { questionKey: string; maxMarks: number }>(questions: T[]): Promise<T[]> {
+async function withSavedMarks<T extends { questionKey: string; maxMarks: number }>(req: Request, questions: T[]): Promise<T[]> {
   return Promise.all(questions.map(async q => {
-    const saved = await currentScheme(accountId(), q.questionKey);
+    const saved = await currentScheme(accountId(req), q.questionKey);
     return saved ? { ...q, maxMarks: Number(saved.maxMarks) } : q;
   }));
 }
@@ -92,11 +99,11 @@ function fail(res: Response, where: string, error: unknown) {
   return res.status(500).json({ error: "Something went wrong. Please try again." });
 }
 
-const OFF_MESSAGE = "AI assessment is switched off for this account. Switch it on first.";
+const OFF_MESSAGE = "AI assessment is switched off for this account. Switch it on in Settings › Features.";
 
 /** Refuses anything that would call the AI while AI assessment is off. */
-async function requireOn(res: Response): Promise<boolean> {
-  if ((await getSettings(accountId())).enabled) return true;
+async function requireOn(req: Request, res: Response): Promise<boolean> {
+  if (await assessmentEnabled(accountId(req))) return true;
   res.status(409).json({ error: OFF_MESSAGE, code: "assessment_off" });
   return false;
 }
@@ -123,40 +130,39 @@ function toQuestionInput(body: z.infer<typeof questionSchema>): QuestionInput {
   return { ...body, questionKey: key, source: key.startsWith("cms:") ? "cms" : key.startsWith("gen:") ? "generated" : "custom", maxMarks: Math.round(body.maxMarks * 2) / 2 };
 }
 
-router.get(`${BASE}/overview`, ...superAdmin, async (_req, res) => {
+router.get(`${BASE}/overview`, ...superAdmin, async (req, res) => {
   try {
-    const id = accountId();
+    const id = accountId(req);
     const [account] = await db.select({ id: businessAccounts.id, name: businessAccounts.name, hasKey: sql<boolean>`(${businessAccounts.openaiApiKey} is not null and ${businessAccounts.openaiApiKey} <> '')` })
       .from(businessAccounts).where(eq(businessAccounts.id, id));
-    if (!account) return res.json({ account: null, settings: await getSettings(id), scopes: [] });
-    let scopes: Awaited<ReturnType<typeof scopeOptions>> = [];
-    let scopesError: string | null = null;
-    try { scopes = await scopeOptions(id); } catch (e: any) { scopesError = "Could not load the curriculum list from the content store."; console.warn("[Answer Check] scopes:", e?.message || e); }
     const [counts] = await db.select({ checks: sql<number>`count(*)::int`, schemes: sql<number>`count(distinct ${answerChecks.questionKey})::int` })
       .from(answerChecks).where(eq(answerChecks.businessAccountId, id));
-    res.json({ account, settings: await getSettings(id), scopes, scopesError, counts });
+    res.json({ account: account ?? null, enabled: account ? await assessmentEnabled(id) : false, settings: await getSettings(id), counts });
   } catch (e) { fail(res, "overview", e); }
 });
 
+// The account's classes and subjects; separate from the overview because a large content store can be slow.
+router.get(`${BASE}/scopes`, ...superAdmin, async (req, res) => {
+  try { res.json({ scopes: await scopeOptions(accountId(req)), error: null }); }
+  catch (e: any) {
+    console.warn("[Answer Check] scopes:", e?.message || e);
+    res.json({ scopes: [], error: "Could not load the curriculum list from the content store." });
+  }
+});
+
 router.put(`${BASE}/settings`, ...superAdmin, async (req, res) => {
-  try { res.json({ settings: await saveSettings(accountId(), req.body?.settings ?? req.body, userId(req)) }); }
+  try { res.json({ settings: await saveSettings(accountId(req), req.body?.settings ?? req.body, userId(req)) }); }
   catch (e) { fail(res, "settings", e); }
 });
 
-router.put(`${BASE}/enabled`, ...superAdmin, async (req, res) => {
-  if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "Say whether to switch it on or off." });
-  try { res.json({ settings: await setEnabled(accountId(), req.body.enabled, userId(req)) }); }
-  catch (e) { fail(res, "enabled", e); }
-});
-
-router.post(`${BASE}/questions/random`, ...superAdmin, async (_req, res) => {
+router.post(`${BASE}/questions/random`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await requireOn(res))) return;
-    const id = accountId();
+    if (!(await requireOn(req, res))) return;
+    const id = accountId(req);
     const settings = await getSettings(id);
     const ai = await createAnswerCheckAi(id).catch(() => null);
     const picked = await pickRandomQuestion(id, settings, ai);
-    res.json({ ...picked, question: picked.question ? (await withSavedMarks([picked.question]))[0] : null });
+    res.json({ ...picked, question: picked.question ? (await withSavedMarks(req, [picked.question]))[0] : null });
   } catch (e) { fail(res, "random question", e); }
 });
 
@@ -164,8 +170,8 @@ router.get(`${BASE}/questions/search`, ...superAdmin, async (req, res) => {
   try {
     const q = (k: string) => String(req.query[k] ?? "").trim();
     if (!q("board") || !q("medium") || !q("grade")) return res.status(400).json({ error: "Choose a board, medium and grade." });
-    const results = await searchQuestions(accountId(), { board: q("board"), medium: q("medium"), grade: q("grade"), subject: q("subject") }, q("q"), await getSettings(accountId()));
-    res.json({ results: await withSavedMarks(results) });
+    const results = await searchQuestions(accountId(req), { board: q("board"), medium: q("medium"), grade: q("grade"), subject: q("subject") }, q("q"), await getSettings(accountId(req)));
+    res.json({ results: await withSavedMarks(req, results) });
   } catch (e) { fail(res, "search", e); }
 });
 
@@ -173,17 +179,17 @@ router.post(`${BASE}/questions/prepare`, ...superAdmin, async (req, res) => {
   const parsed = questionSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Check the question." });
   try {
-    if (!(await requireOn(res))) return;
-    const row = await prepareQuestion(accountId(), toQuestionInput(parsed.data), userId(req));
+    if (!(await requireOn(req, res))) return;
+    const row = await prepareQuestion(accountId(req), toQuestionInput(parsed.data), userId(req));
     res.json({ scheme: schemeView(row) });
   } catch (e) { fail(res, "prepare", e); }
 });
 
 router.get(`${BASE}/schemes/:key`, ...superAdmin, async (req, res) => {
   try {
-    const versions = await schemeVersions(accountId(), req.params.key);
+    const versions = await schemeVersions(accountId(req), req.params.key);
     if (!versions.length) return res.status(404).json({ error: "Question not found." });
-    const counts = await countChecksByQuestion(accountId(), [req.params.key]);
+    const counts = await countChecksByQuestion(accountId(req), [req.params.key]);
     res.json({ scheme: schemeView(versions[0]), versions: versions.map(schemeView), checks: counts.get(req.params.key) || 0 });
   } catch (e) { fail(res, "scheme", e); }
 });
@@ -191,14 +197,14 @@ router.get(`${BASE}/schemes/:key`, ...superAdmin, async (req, res) => {
 router.put(`${BASE}/schemes/:key`, ...superAdmin, async (req, res) => {
   try {
     const maxMarks = req.body?.maxMarks === undefined ? undefined : Number(req.body.maxMarks);
-    const row = await saveSchemeEdit(accountId(), req.params.key, { scheme: req.body?.scheme, maxMarks, modelAnswer: typeof req.body?.modelAnswer === "string" ? req.body.modelAnswer : undefined }, userId(req));
+    const row = await saveSchemeEdit(accountId(req), req.params.key, { scheme: req.body?.scheme, maxMarks, modelAnswer: typeof req.body?.modelAnswer === "string" ? req.body.modelAnswer : undefined }, userId(req));
     res.json({ scheme: schemeView(row) });
   } catch (e) { fail(res, "scheme edit", e); }
 });
 
 router.post(`${BASE}/schemes/:key/approve`, ...superAdmin, async (req, res) => {
   try {
-    const row = await approveScheme(accountId(), req.params.key, userId(req));
+    const row = await approveScheme(accountId(req), req.params.key, userId(req));
     if (!row) return res.status(404).json({ error: "Question not found." });
     res.json({ scheme: schemeView(row) });
   } catch (e) { fail(res, "approve", e); }
@@ -206,8 +212,8 @@ router.post(`${BASE}/schemes/:key/approve`, ...superAdmin, async (req, res) => {
 
 router.post(`${BASE}/schemes/:key/recheck`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await requireOn(res))) return;
-    res.json({ started: await recheckQuestion(accountId(), req.params.key) });
+    if (!(await requireOn(req, res))) return;
+    res.json({ started: await recheckQuestion(accountId(req), req.params.key) });
   } catch (e) { fail(res, "recheck question", e); }
 });
 
@@ -229,28 +235,28 @@ async function readPhotos(res: Response, raw: unknown, max: number, what: string
 
 router.post(`${BASE}/checks`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await requireOn(res))) return;
+    if (!(await requireOn(req, res))) return;
     const key = String(req.body?.questionKey || "");
-    const scheme = key ? await currentScheme(accountId(), key) : null;
+    const scheme = key ? await currentScheme(accountId(req), key) : null;
     if (!scheme) return res.status(400).json({ error: "Choose the question first." });
     const photos = await readPhotos(res, req.body?.photos, MAX_PAGES, "answer");
     if (!photos) return;
-    const check = await createUploadCheck({ businessAccountId: accountId(), scheme, photos, studentLabel: String(req.body?.studentLabel || "").trim(), userId: userId(req) });
+    const check = await createUploadCheck({ businessAccountId: accountId(req), scheme, photos, studentLabel: String(req.body?.studentLabel || "").trim(), userId: userId(req) });
     res.json({ id: check.id });
   } catch (e) { fail(res, "create check", e); }
 });
 
 router.post(`${BASE}/practice`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await requireOn(res))) return;
+    if (!(await requireOn(req, res))) return;
     const key = String(req.body?.questionKey || "");
-    const scheme = key ? await currentScheme(accountId(), key) : null;
+    const scheme = key ? await currentScheme(accountId(req), key) : null;
     if (!scheme) return res.status(400).json({ error: "Choose the question first." });
     const levels = (Array.isArray(req.body?.levels) ? req.body.levels : ["strong", "average", "weak"])
       .filter((l: unknown, i: number, a: unknown[]) => PRACTICE_LEVELS.includes(l as PracticeLevel) && a.indexOf(l) === i) as PracticeLevel[];
     if (!levels.length) return res.status(400).json({ error: "Choose at least one kind of practice answer." });
     const batchId = crypto.randomUUID();
-    const rows = await createPracticeChecks({ businessAccountId: accountId(), scheme, levels, userId: userId(req), batchId });
+    const rows = await createPracticeChecks({ businessAccountId: accountId(req), scheme, levels, userId: userId(req), batchId });
     res.json({ batchId, ids: rows.map(r => r.id) });
   } catch (e) { fail(res, "practice", e); }
 });
@@ -266,7 +272,7 @@ async function viewsFor(rows: Array<typeof answerChecks.$inferSelect>) {
 
 router.get(`${BASE}/checks`, ...superAdmin, async (req, res) => {
   try {
-    const conds = [eq(answerChecks.businessAccountId, accountId())];
+    const conds = [eq(answerChecks.businessAccountId, accountId(req))];
     if (req.query.batchId) conds.push(eq(answerChecks.batchId, String(req.query.batchId)));
     if (req.query.questionKey) conds.push(eq(answerChecks.questionKey, String(req.query.questionKey)));
     if (req.query.ids) conds.push(inArray(answerChecks.id, String(req.query.ids).split(",").filter(Boolean).slice(0, 50)));
@@ -291,7 +297,7 @@ router.get(`${BASE}/checks`, ...superAdmin, async (req, res) => {
 
 router.get(`${BASE}/checks/:id`, ...superAdmin, async (req, res) => {
   try {
-    const [row] = await db.select().from(answerChecks).where(and(eq(answerChecks.id, req.params.id), eq(answerChecks.businessAccountId, accountId())));
+    const [row] = await db.select().from(answerChecks).where(and(eq(answerChecks.id, req.params.id), eq(answerChecks.businessAccountId, accountId(req))));
     if (!row) return res.status(404).json({ error: "Check not found." });
     const [view] = await viewsFor([row]);
     res.json({ check: view });
@@ -300,8 +306,8 @@ router.get(`${BASE}/checks/:id`, ...superAdmin, async (req, res) => {
 
 router.post(`${BASE}/checks/:id/recheck`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await requireOn(res))) return;
-    const row = await recheck(accountId(), req.params.id, { reread: req.body?.reread === true });
+    if (!(await requireOn(req, res))) return;
+    const row = await recheck(accountId(req), req.params.id, { reread: req.body?.reread === true });
     if (!row) return res.status(404).json({ error: "Check not found." });
     res.json({ ok: true });
   } catch (e) { fail(res, "recheck", e); }
@@ -311,7 +317,7 @@ router.put(`${BASE}/checks/:id/teacher`, ...superAdmin, async (req, res) => {
   try {
     const raw = req.body?.marks;
     const marks = raw === null || raw === undefined || raw === "" ? null : Number(raw);
-    const row = await saveTeacherMarks(accountId(), req.params.id, { marks, comment: String(req.body?.comment || "") }, userId(req));
+    const row = await saveTeacherMarks(accountId(req), req.params.id, { marks, comment: String(req.body?.comment || "") }, userId(req));
     if (!row) return res.status(404).json({ error: "Check not found." });
     res.json({ ok: true });
   } catch (e) { fail(res, "teacher marks", e); }
@@ -319,14 +325,14 @@ router.put(`${BASE}/checks/:id/teacher`, ...superAdmin, async (req, res) => {
 
 router.delete(`${BASE}/checks/:id`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await deleteCheck(accountId(), req.params.id))) return res.status(404).json({ error: "Check not found." });
+    if (!(await deleteCheck(accountId(req), req.params.id))) return res.status(404).json({ error: "Check not found." });
     res.json({ ok: true });
   } catch (e) { fail(res, "delete check", e); }
 });
 
 router.get(`${BASE}/images/:id`, ...superAdmin, async (req, res) => {
   try {
-    const [row] = await db.select().from(answerCheckImages).where(and(eq(answerCheckImages.id, req.params.id), eq(answerCheckImages.businessAccountId, accountId())));
+    const [row] = await db.select().from(answerCheckImages).where(and(eq(answerCheckImages.id, req.params.id), eq(answerCheckImages.businessAccountId, accountId(req))));
     if (!row) return res.status(404).end();
     const bytes = await imageBytes(row);
     if (!bytes) return res.status(404).end();
@@ -340,42 +346,42 @@ router.get(`${BASE}/images/:id`, ...superAdmin, async (req, res) => {
 
 router.post(`${BASE}/papers/random-questions`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await requireOn(res))) return;
+    if (!(await requireOn(req, res))) return;
     const count = Math.min(10, Math.max(1, Math.round(Number(req.body?.count) || 5)));
-    const ai = await createAnswerCheckAi(accountId()).catch(() => null);
-    const picked = await pickRandomQuestions(accountId(), await getSettings(accountId()), ai, count);
-    res.json({ ...picked, questions: await withSavedMarks(picked.questions) });
+    const ai = await createAnswerCheckAi(accountId(req)).catch(() => null);
+    const picked = await pickRandomQuestions(accountId(req), await getSettings(accountId(req)), ai, count);
+    res.json({ ...picked, questions: await withSavedMarks(req, picked.questions) });
   } catch (e) { fail(res, "paper random questions", e); }
 });
 
 router.post(`${BASE}/papers`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await requireOn(res))) return;
+    if (!(await requireOn(req, res))) return;
     const questions = cleanQuestionList(req.body?.questions);
     const photos = await readPhotos(res, req.body?.photos, MAX_PAPER_PAGES, "answer sheet");
     if (!photos) return;
-    const paper = await createPaper({ businessAccountId: accountId(), title: String(req.body?.title || "").trim(), studentLabel: String(req.body?.studentLabel || "").trim(), questions, photos, userId: userId(req) });
+    const paper = await createPaper({ businessAccountId: accountId(req), title: String(req.body?.title || "").trim(), studentLabel: String(req.body?.studentLabel || "").trim(), questions, photos, userId: userId(req) });
     res.json({ id: paper.id });
   } catch (e) { fail(res, "create paper", e); }
 });
 
 router.post(`${BASE}/papers/practice`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await requireOn(res))) return;
+    if (!(await requireOn(req, res))) return;
     const questions = cleanQuestionList(req.body?.questions);
-    const paper = await createPracticePaper({ businessAccountId: accountId(), title: String(req.body?.title || "").trim(), studentLabel: String(req.body?.studentLabel || "").trim(), questions, userId: userId(req) });
+    const paper = await createPracticePaper({ businessAccountId: accountId(req), title: String(req.body?.title || "").trim(), studentLabel: String(req.body?.studentLabel || "").trim(), questions, userId: userId(req) });
     res.json({ id: paper.id });
   } catch (e) { fail(res, "practice paper", e); }
 });
 
-router.get(`${BASE}/papers`, ...superAdmin, async (_req, res) => {
-  try { res.json({ papers: await listPapers(accountId()) }); }
+router.get(`${BASE}/papers`, ...superAdmin, async (req, res) => {
+  try { res.json({ papers: await listPapers(accountId(req)) }); }
   catch (e) { fail(res, "list papers", e); }
 });
 
 router.get(`${BASE}/papers/:id`, ...superAdmin, async (req, res) => {
   try {
-    const [paper] = await db.select().from(answerPapers).where(and(eq(answerPapers.id, req.params.id), eq(answerPapers.businessAccountId, accountId())));
+    const [paper] = await db.select().from(answerPapers).where(and(eq(answerPapers.id, req.params.id), eq(answerPapers.businessAccountId, accountId(req))));
     if (!paper) return res.status(404).json({ error: "Paper not found." });
     res.json({ paper: await paperView(paper) });
   } catch (e) { fail(res, "get paper", e); }
@@ -383,15 +389,15 @@ router.get(`${BASE}/papers/:id`, ...superAdmin, async (req, res) => {
 
 router.post(`${BASE}/papers/:id/rerun`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await requireOn(res))) return;
-    if (!(await rerunPaper(accountId(), req.params.id))) return res.status(404).json({ error: "Paper not found." });
+    if (!(await requireOn(req, res))) return;
+    if (!(await rerunPaper(accountId(req), req.params.id))) return res.status(404).json({ error: "Paper not found." });
     res.json({ ok: true });
   } catch (e) { fail(res, "rerun paper", e); }
 });
 
 router.delete(`${BASE}/papers/:id`, ...superAdmin, async (req, res) => {
   try {
-    if (!(await deletePaper(accountId(), req.params.id))) return res.status(404).json({ error: "Paper not found." });
+    if (!(await deletePaper(accountId(req), req.params.id))) return res.status(404).json({ error: "Paper not found." });
     res.json({ ok: true });
   } catch (e) { fail(res, "delete paper", e); }
 });
@@ -402,9 +408,9 @@ function csvCell(v: unknown): string {
   return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
-router.get(`${BASE}/export.csv`, ...superAdmin, async (_req, res) => {
+router.get(`${BASE}/export.csv`, ...superAdmin, async (req, res) => {
   try {
-    const rows = await db.select().from(answerChecks).where(eq(answerChecks.businessAccountId, accountId())).orderBy(desc(answerChecks.createdAt)).limit(5000);
+    const rows = await db.select().from(answerChecks).where(eq(answerChecks.businessAccountId, accountId(req))).orderBy(desc(answerChecks.createdAt)).limit(5000);
     const views = await viewsFor(rows);
     const header = ["Date", "Question", "Subject", "Grade", "Student", "Source", "Practice level", "Status", "Max marks", "AI marks", "Teacher marks", "Expected marks", "AI-written %", "AI-written status", "Confidence", "Seconds", "Cost (USD)", "Teacher comment"];
     const lines = [header.join(",")];

@@ -22,7 +22,7 @@ import { FindSetting } from "@/components/hub/FindSetting";
 import { SaFind } from "@/components/superadmin/SaFind";
 import { SA_AREAS, SA_GROUPS, findSaLocation, saArea, type SaArea } from "@/navigation/superAdminAreas";
 import { Button } from "@/components/ui/button";
-import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound, ScrollText, Gauge } from "lucide-react";
+import { Package, HelpCircle, ShieldCheck, LogOut, Contact, Home, Building2, Sparkles, Settings, Brain, BarChart3, MessageSquare, ShoppingBag, Calendar, GraduationCap, ChevronRight, Presentation, FileText, Key, LifeBuoy, ClipboardList, Route, Link2, Users, DollarSign, Percent, HardDrive, Gem, Image, Database, Camera, Globe, Lightbulb, MessageCircle, MoreHorizontal, Bot, TrendingUp, Zap, BookOpen, Library, HelpCircle as QuizIcon, Briefcase, UserCircle, Terminal, PackageOpen, Megaphone, FileCode2, UsersRound, ScrollText, Gauge, FileCheck2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
@@ -322,6 +322,17 @@ export function AppSidebar({ user }: AppSidebarProps) {
                           isActive={location.startsWith("/admin/topscholar/tester")}
                           testId="link-topscholar-tester"
                           gradient="bg-gradient-to-br from-pink-500 to-rose-600"
+                        />
+                      )}
+                      {/* AI assessment (pilot): super admins only, once switched on in Settings › Features. */}
+                      {isSuperAdminImpersonating && user?.businessAccount?.answerCheckingEnabled && (
+                        <NavItem
+                          icon={FileCheck2}
+                          label="Assessment"
+                          onClick={() => setLocation("/admin/assessment")}
+                          isActive={location.startsWith("/admin/assessment")}
+                          testId="link-assessment"
+                          gradient="bg-gradient-to-br from-orange-500 to-amber-600"
                         />
                       )}
                       <NavItem

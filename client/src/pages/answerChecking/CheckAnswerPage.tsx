@@ -11,8 +11,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { PRACTICE_LEVELS, QUESTION_KINDS, type PracticeLevel, type QuestionKind } from "@shared/answerCheck";
 import { SchemeEditor } from "./SchemeEditor";
-import { AssessmentOffBanner } from "./AssessmentSwitch";
-import {
+import { AssessmentOffBanner, useScopes } from "./AssessmentSwitch";
+import { ASSESS_PATH,
   API, KIND_LABEL, LEVEL_LABEL, OVERVIEW_KEY, STATUS_LABEL, STATUS_STYLE, fmtMarks, isRunning, photoToDataUrl, scopeLabel,
   type ChecksResponse, type Overview, type QuestionInput, type SchemeView,
 } from "./answerCheckApi";
@@ -28,7 +28,7 @@ export default function CheckAnswerPage() {
   const [, setLocation] = useLocation();
   const search = useSearch();
   const questionKey = new URLSearchParams(search).get("q");
-  const { data: overview } = useQuery<Overview>({ queryKey: OVERVIEW_KEY });
+  const { data: overview } = useQuery<Overview>({ queryKey: OVERVIEW_KEY, staleTime: 0, refetchOnMount: "always" });
 
   const schemeQuery = useQuery<{ scheme: SchemeView; checks: number }>({
     queryKey: [`${API}/schemes/${encodeURIComponent(questionKey || "")}`],
@@ -45,7 +45,7 @@ export default function CheckAnswerPage() {
   useEffect(() => { if (!wasRunning && questionKey) qc.invalidateQueries({ queryKey: [`${API}/schemes/${encodeURIComponent(questionKey)}`] }); }, [wasRunning]);
 
   const [fullTest, setFullTest] = useState("");
-  const openQuestion = (key: string) => setLocation(`/super-admin/answer-checking?q=${encodeURIComponent(key)}`);
+  const openQuestion = (key: string) => setLocation(`${ASSESS_PATH}?q=${encodeURIComponent(key)}`);
   const refreshChecks = () => qc.invalidateQueries({ queryKey: [`${API}/checks?questionKey=${encodeURIComponent(questionKey || "")}`] });
 
   /** One click: random question → its marking scheme → strong, average and weak practice answers. */
@@ -66,14 +66,14 @@ export default function CheckAnswerPage() {
   }
 
   const noKey = overview?.account && !overview.account.hasKey;
-  const off = overview ? !overview.settings.enabled : false;
+  const off = overview ? !overview.enabled : false;
   return (
     <div className="space-y-5" data-testid="answer-checking-page">
       {!overview?.account && overview && (
-        <div className="rounded-xl bg-red-50 px-4 py-3 text-[14px] text-red-800">The Top Scholar account was not found on this server.</div>
+        <div className="rounded-xl bg-red-50 px-4 py-3 text-[14px] text-red-800">This account was not found.</div>
       )}
       {overview?.account && off && <AssessmentOffBanner accountName={overview.account.name} />}
-      {noKey && <div className="rounded-xl bg-amber-50 px-4 py-3 text-[14px] text-amber-900">Top Scholar has no OpenAI key, so answers can't be checked. Add the key on the account's "AI & keys" tab.</div>}
+      {noKey && <div className="rounded-xl bg-amber-50 px-4 py-3 text-[14px] text-amber-900">This account has no OpenAI key, so answers can't be checked. A super admin can add it on the account's "AI & keys" tab.</div>}
 
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-black/[0.06] bg-white px-5 py-4">
         <div className="min-w-0 flex-1">
@@ -87,8 +87,8 @@ export default function CheckAnswerPage() {
 
       <Panel
         title="1. Question"
-        subtitle={scheme ? scopeLabel(scheme) || "Typed question" : "Pick a question from Top Scholar's content, or type one."}
-        actions={scheme && <Button variant="outline" size="sm" onClick={() => setLocation("/super-admin/answer-checking")} data-testid="change-question">Change question</Button>}
+        subtitle={scheme ? scopeLabel(scheme) || "Typed question" : "Pick a question from the curriculum, or type one."}
+        actions={scheme && <Button variant="outline" size="sm" onClick={() => setLocation(`${ASSESS_PATH}`)} data-testid="change-question">Change question</Button>}
       >
         {questionKey && schemeQuery.isLoading && <p className="text-[14px] text-gray-500">Loading…</p>}
         {questionKey && schemeQuery.isError && <p className="text-[14px] text-red-600">This question could not be loaded.</p>}
@@ -96,7 +96,7 @@ export default function CheckAnswerPage() {
           <div className="space-y-2" data-testid="chosen-question">
             <p className="whitespace-pre-wrap text-[15px] text-gray-900">{scheme.questionText}</p>
             <p className="text-[13px] text-gray-500">
-              {fmtMarks(scheme.maxMarks)} marks{scheme.questionKind ? ` · ${KIND_LABEL[scheme.questionKind]}` : ""} · {scheme.source === "cms" ? "From Top Scholar's content" : scheme.source === "generated" ? "Set by the AI from the chapter notes" : "Typed by an admin"}
+              {fmtMarks(scheme.maxMarks)} marks{scheme.questionKind ? ` · ${KIND_LABEL[scheme.questionKind]}` : ""} · {scheme.source === "cms" ? "From the curriculum" : scheme.source === "generated" ? "Set by the AI from the chapter notes" : "Typed by an admin"}
             </p>
             {scheme.modelAnswer && (
               <details className="text-[13px]">
@@ -114,7 +114,7 @@ export default function CheckAnswerPage() {
             <SchemeEditor off={off} scheme={scheme} checksCount={schemeQuery.data?.checks ?? 0} onSaved={() => { qc.invalidateQueries({ queryKey: [`${API}/schemes/${encodeURIComponent(scheme.questionKey)}`] }); refreshChecks(); }} onRechecked={refreshChecks} />
           </Panel>
           <div className="grid gap-5 lg:grid-cols-2">
-            <UploadPanel off={off} questionKey={scheme.questionKey} onStarted={id => { refreshChecks(); setLocation(`/super-admin/answer-checking/checks/${id}`); }} />
+            <UploadPanel off={off} questionKey={scheme.questionKey} onStarted={id => { refreshChecks(); setLocation(`${ASSESS_PATH}/checks/${id}`); }} />
             <PracticePanel off={off} questionKey={scheme.questionKey} onStarted={refreshChecks} />
           </div>
           <Panel title="Answers to this question" subtitle={checks.length ? `${checks.length} checked` : "None yet."}>
@@ -165,7 +165,7 @@ function QuestionPicker({ overview, off, onPrepared }: { overview: Overview | un
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
         {tab("random", "Random question", Shuffle)}
-        {tab("search", "From Top Scholar's content", BookOpen)}
+        {tab("search", "From the curriculum", BookOpen)}
         {tab("type", "Type your own", Type)}
       </div>
       {mode === "random" && !candidate && (
@@ -221,7 +221,7 @@ function CandidateCard({ q, note, busy, off, onChange, onUse, onAnother, another
 }
 
 export function SearchQuestions({ overview, onPick }: { overview: Overview | undefined; onPick: (q: QuestionInput) => void }) {
-  const scopes = overview?.scopes ?? [];
+  const { scopes, error: scopesError, loading } = useScopes();
   const [scopeIdx, setScopeIdx] = useState(0);
   const [subject, setSubject] = useState("");
   const [text, setText] = useState("");
@@ -229,8 +229,9 @@ export function SearchQuestions({ overview, onPick }: { overview: Overview | und
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const scope = scopes[scopeIdx];
-  if (overview?.scopesError) return <p className="text-[14px] text-red-600">{overview.scopesError}</p>;
-  if (!scopes.length) return <p className="text-[14px] text-gray-500">Top Scholar has no curriculum content on this server yet.</p>;
+  if (loading) return <p className="text-[14px] text-gray-500">Loading the classes and subjects…</p>;
+  if (scopesError) return <p className="text-[14px] text-red-600">{scopesError}</p>;
+  if (!scopes.length) return <p className="text-[14px] text-gray-500">This account has no curriculum content yet.</p>;
 
   async function run() {
     if (!scope) return;
@@ -285,7 +286,8 @@ export function TypeQuestion({ overview, onDone }: { overview: Overview | undefi
   const [modelAnswer, setModelAnswer] = useState("");
   const [subject, setSubject] = useState("");
   const [grade, setGrade] = useState("");
-  const [board, setBoard] = useState(overview?.scopes[0]?.board ?? "");
+  const { scopes } = useScopes();
+  const [board, setBoard] = useState(scopes[0]?.board ?? "");
   const [medium, setMedium] = useState("English");
   const [kind, setKind] = useState<QuestionKind | "">("");
   const [maxMarks, setMaxMarks] = useState("3");
@@ -433,7 +435,7 @@ export function AnswersList({ checks, showQuestion = false }: { checks: ChecksRe
             const gap = (g: number | null) => g === null ? null
               : <span className={`ml-1.5 text-[12px] ${Math.abs(g) <= 0.5 ? "text-emerald-600" : "text-red-600"}`}>({g > 0 ? "+" : ""}{fmtMarks(g)})</span>;
             return (
-              <tr key={c.id} onClick={() => setLocation(`/super-admin/answer-checking/checks/${c.id}`)} className="cursor-pointer border-b border-black/[0.04] hover:bg-gray-50" data-testid={`answer-row-${c.id}`}>
+              <tr key={c.id} onClick={() => setLocation(`${ASSESS_PATH}/checks/${c.id}`)} className="cursor-pointer border-b border-black/[0.04] hover:bg-gray-50" data-testid={`answer-row-${c.id}`}>
                 <td className="py-2.5 pr-3">
                   <span className="text-gray-900">{c.studentLabel || "Uploaded answer"}</span>
                   {c.practiceLevel && <span className="ml-2 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700">{LEVEL_LABEL[c.practiceLevel]}</span>}

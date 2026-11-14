@@ -11,7 +11,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { QUESTION_KINDS, SCORE_BANDS, STRICTNESS, SUBJECT_KINDS, type AnswerCheckSettings, type ScopePick, type SubjectKind } from "@shared/answerCheck";
 import { API, KIND_LABEL, OVERVIEW_KEY, scopeLabel, type Overview } from "./answerCheckApi";
-import { AssessmentSwitch } from "./AssessmentSwitch";
+import { AssessmentOffBanner, useScopes } from "./AssessmentSwitch";
 
 const SUBJECT_LABEL: Record<SubjectKind, string> = { maths: "Maths", science: "Science", social_science: "Social Science", english: "English & languages", other: "Other subjects" };
 const BAND_LABEL: Record<string, string> = { full: "Full marks", high: "High marks (75 % +)", partial: "Partial marks (40–75 %)", low: "Low marks", zero: "Zero" };
@@ -23,13 +23,14 @@ const sameScope = (a: ScopePick, b: ScopePick) => a.board === b.board && a.mediu
 export default function SettingsPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { data } = useQuery<Overview>({ queryKey: OVERVIEW_KEY });
+  const { data } = useQuery<Overview>({ queryKey: OVERVIEW_KEY, staleTime: 0, refetchOnMount: "always" });
+  const { scopes, error: scopesError } = useScopes();
   const [s, setS] = useState<AnswerCheckSettings | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (data?.settings && !s) setS(data.settings); }, [data]);
   if (!s) return <p className="text-[14px] text-gray-500">Loading…</p>;
 
-  const allScopes: ScopePick[] = (data?.scopes ?? []).flatMap(o => o.subjects.map(subject => ({ board: o.board, medium: o.medium, grade: o.grade, subject })));
+  const allScopes: ScopePick[] = scopes.flatMap(o => o.subjects.map(subject => ({ board: o.board, medium: o.medium, grade: o.grade, subject })));
   const chosen = (p: ScopePick) => s.scopes.some(x => sameScope(x, p));
   const toggleScope = (p: ScopePick, on: boolean) => setS({ ...s, scopes: on ? [...s.scopes, p] : s.scopes.filter(x => !sameScope(x, p)) });
   const setRule = (k: SubjectKind, patch: Partial<AnswerCheckSettings["subjectRules"][SubjectKind]>) => setS({ ...s, subjectRules: { ...s.subjectRules, [k]: { ...s.subjectRules[k], ...patch } } });
@@ -47,16 +48,10 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-5" data-testid="settings-page">
-      <Panel
-        title="AI assessment"
-        subtitle={`${data?.settings.enabled ? "On" : "Off"} for ${data?.account?.name ?? "this account"}. While it's off, nothing is checked and no AI cost is spent; earlier results stay viewable.`}
-        actions={<AssessmentSwitch testid="settings-enabled" />}
-      >
-        <p className="text-[13px] text-gray-500">The same switch is on the account's Features page.</p>
-      </Panel>
+      {data && !data.enabled && <AssessmentOffBanner accountName={data.account?.name} />}
       <Panel title="Random question" subtitle="Which classes and subjects the Random question button picks from. None ticked = all of them.">
-        {data?.scopesError && <p className="mb-3 text-[14px] text-red-600">{data.scopesError}</p>}
-        {!allScopes.length && !data?.scopesError && <p className="text-[14px] text-gray-500">Top Scholar has no curriculum content on this server yet.</p>}
+        {scopesError && <p className="mb-3 text-[14px] text-red-600">{scopesError}</p>}
+        {!allScopes.length && !scopesError && <p className="text-[14px] text-gray-500">This account has no curriculum content yet.</p>}
         {allScopes.length > 0 && (
           <div className="mb-4 grid max-h-72 gap-1.5 overflow-y-auto rounded-xl border border-black/[0.06] p-3 md:grid-cols-2" data-testid="settings-scopes">
             {allScopes.map(p => (

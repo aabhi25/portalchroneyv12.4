@@ -9789,6 +9789,14 @@ Return ONLY the refined instruction, nothing else.`
         updates.shopifyEnabled = shopifyEnabled ? "true" : "false";
       }
 
+      const { answerCheckingEnabled } = req.body; // AI assessment (pilot)
+      if (answerCheckingEnabled !== undefined) {
+        if (typeof answerCheckingEnabled !== "boolean") {
+          return res.status(400).json({ error: "answerCheckingEnabled must be a boolean" });
+        }
+        updates.answerCheckingEnabled = answerCheckingEnabled ? "true" : "false";
+      }
+
       const { wooCommerceEnabled } = req.body;
       if (wooCommerceEnabled !== undefined) {
         if (typeof wooCommerceEnabled !== "boolean") {

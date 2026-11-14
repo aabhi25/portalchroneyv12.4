@@ -90,13 +90,10 @@ async function main() {
     const again = await engine.getSettings(B);
     expect(again.scopes.length === 1 && again.scopes[0].subject === "Science", "settings are kept");
     await engine.saveSettings(B, { ...again, questionKinds: ["short", "long", "numerical"], minMarks: 2, maxMarks: 5 }, null);
-    expect(again.enabled === false, "AI assessment starts switched off");
-    const on = await engine.setEnabled(B, true, null);
-    expect(on.enabled && on.scopes.length === 1, "switching on keeps the other settings");
-    const saved2 = await engine.saveSettings(B, { ...on, enabled: false, minMarks: 3 }, null);
-    expect(saved2.enabled === true && saved2.minMarks === 3, "saving settings never flips the switch (only the switch does)");
-    expect((await engine.setEnabled(B, false, null)).enabled === false && (await engine.getSettings(B)).minMarks === 3, "switching off keeps the settings");
-    await engine.setEnabled(B, true, null);
+    expect(!(await engine.assessmentEnabled(B)), "AI assessment starts switched off (account feature)");
+    await db.update(schema.businessAccounts).set({ answerCheckingEnabled: "true" }).where(eq(schema.businessAccounts.id, B));
+    expect(await engine.assessmentEnabled(B), "the account's feature switch turns it on");
+    expect(!(await engine.assessmentEnabled("no-such-account")), "an unknown account is off");
   }
 
   console.log("Random question");

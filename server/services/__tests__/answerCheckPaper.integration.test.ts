@@ -74,7 +74,7 @@ async function main() {
   const stamp = Date.now();
   const [biz] = await db.insert(schema.businessAccounts).values({ name: `Paper ${stamp}`, website: "https://school.example.com", openaiApiKey: "sk-test-not-real" } as any).returning();
   const B = biz.id as string;
-  await engine.setEnabled(B, true, null);
+  await db.update(schema.businessAccounts).set({ answerCheckingEnabled: "true" }).where(eq(schema.businessAccounts.id, B));
   const photo = async (shade: string) => sharp({ create: { width: 800, height: 1100, channels: 3, background: shade } }).jpeg().toBuffer();
 
   const prepare = async (key: string, text: string, max: number) => {

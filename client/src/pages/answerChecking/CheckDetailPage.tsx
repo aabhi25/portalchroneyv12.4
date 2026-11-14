@@ -10,7 +10,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
-import {
+import { ASSESS_PATH,
   AI_WRITTEN_LABEL, API, KIND_LABEL, LEVEL_LABEL, STATUS_LABEL, STATUS_STYLE, fmtCost, fmtMarks, imageUrl, isRunning, scopeLabel,
   type CheckView,
 } from "./answerCheckApi";
@@ -28,14 +28,14 @@ export default function CheckDetailPage({ checkId }: { checkId: string }) {
   });
   const c = data?.check;
   const back = c?.paperId
-    ? { label: "Back to the paper", href: `/super-admin/answer-checking/papers/${c.paperId}` }
-    : { label: "Answer checking", href: c ? `/super-admin/answer-checking?q=${encodeURIComponent(c.questionKey)}` : "/super-admin/answer-checking" };
+    ? { label: "Back to the paper", href: `${ASSESS_PATH}/papers/${c.paperId}` }
+    : { label: "Assessment", href: c ? `${ASSESS_PATH}?q=${encodeURIComponent(c.questionKey)}` : `${ASSESS_PATH}` };
   return (
     <>
       <SaHeader
         icon={FileCheck2}
         tint="bg-orange-500"
-        kind="Answer checking · one answer"
+        kind="Assessment · one answer"
         title={c ? (c.studentLabel || "Uploaded answer") : "Answer"}
         subtitle={c?.scheme ? scopeLabel(c.scheme) : undefined}
         back={back}
