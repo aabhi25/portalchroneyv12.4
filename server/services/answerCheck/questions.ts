@@ -122,7 +122,7 @@ export interface PickResult {
  * Random written-answer question from the chosen scopes and kinds. Tries up to 8 content packs,
  * 40 questions from a random spot in each; when none fits, the AI sets one from a chapter's notes.
  */
-export async function pickRandomQuestion(businessAccountId: string, settings: AnswerCheckSettings, ai: AnswerCheckAi | null, rand: () => number = Math.random): Promise<PickResult> {
+export async function pickRandomQuestion(businessAccountId: string, settings: AnswerCheckSettings, ai: AnswerCheckAi | null, rand: () => number = Math.random, exclude: Set<string> = new Set()): Promise<PickResult> {
   const looked = { packs: 0, questions: 0, writtenQuestions: 0 };
   const cfg = await accountContentConfig(businessAccountId);
   if (!cfg) return { question: null, note: "Account not found.", looked };
@@ -131,7 +131,8 @@ export async function pickRandomQuestion(businessAccountId: string, settings: An
   if (!rows.length) {
     return { question: null, note: all.length ? "None of the chosen classes and subjects has content. Change them in Settings." : "This account has no curriculum content yet.", looked };
   }
-  for (const scope of rows.slice(0, 8)) {
+  // Prefer packs with more written questions left: try every chosen pack before giving up.
+  for (const scope of rows.slice(0, exclude.size ? 30 : 8)) {
     looked.packs++;
     const first = await readChunks(cfg, businessAccountId, { cpId: scope.cpId, contentType: "question", page: 1, pageSize: 1 });
     if (!first.total) continue;
@@ -142,7 +143,7 @@ export async function pickRandomQuestion(businessAccountId: string, settings: An
     looked.questions += batch.items.length;
     const candidates = batch.items.map(c => questionFromChunk(c, scope, settings)).filter((q): q is QuestionInput => !!q);
     looked.writtenQuestions += candidates.length;
-    const fits = candidates.filter(q => !q.questionKind || settings.questionKinds.includes(q.questionKind));
+    const fits = candidates.filter(q => (!q.questionKind || settings.questionKinds.includes(q.questionKind)) && !exclude.has(q.questionKey));
     if (fits.length) return { question: fits[Math.floor(rand() * fits.length)], note: "", looked };
   }
   if (!ai) return { question: null, note: "No written-answer questions found in the chosen classes and subjects.", looked };
@@ -201,3 +202,17 @@ export async function searchQuestions(businessAccountId: string, scope: ScopePic
   return out;
 }
 
+
+/** Several different random questions for a paper (fewer when the content runs out). */
+export async function pickRandomQuestions(businessAccountId: string, settings: AnswerCheckSettings, ai: AnswerCheckAi | null, count: number, rand: () => number = Math.random): Promise<{ questions: QuestionInput[]; notes: string[] }> {
+  const questions: QuestionInput[] = [];
+  const notes: string[] = [];
+  for (let tries = 0; questions.length < count && tries < count * 3; tries++) {
+    const pick = await pickRandomQuestion(businessAccountId, settings, ai, rand, new Set(questions.map(q => q.questionKey)));
+    if (!pick.question) { if (pick.note && !notes.includes(pick.note)) notes.push(pick.note); if (!ai) break; continue; }
+    if (questions.some(q => q.questionKey === pick.question!.questionKey || q.questionText === pick.question!.questionText)) continue;
+    questions.push(pick.question);
+    if (pick.note && !notes.includes(pick.note)) notes.push(pick.note);
+  }
+  return { questions, notes };
+}

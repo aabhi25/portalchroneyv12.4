@@ -101,10 +101,11 @@ export const SA_AREAS: SaArea[] = [
     href: "/super-admin/answer-checking",
     tabs: [
       { key: "check", label: "Check an answer", href: "/super-admin/answer-checking" },
+      { key: "papers", label: "Whole paper", href: "/super-admin/answer-checking/papers" },
       { key: "history", label: "History & accuracy", href: "/super-admin/answer-checking/history" },
       { key: "settings", label: "Settings", href: "/super-admin/answer-checking/settings" },
     ],
-    detail: /^\/super-admin\/answer-checking\/checks\/[^/]+$/,
+    detail: /^\/super-admin\/answer-checking\/(checks|papers)\/[^/]+$/,
     formerly: "AI evaluation · answer sheet · handwritten · marking scheme · mock test · Top Scholar pilot",
   },
   {

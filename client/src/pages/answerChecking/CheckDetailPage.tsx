@@ -27,7 +27,9 @@ export default function CheckDetailPage({ checkId }: { checkId: string }) {
     refetchInterval: q => (q.state.data && isRunning(q.state.data.check) ? 2000 : false),
   });
   const c = data?.check;
-  const back = { label: "Answer checking", href: c ? `/super-admin/answer-checking?q=${encodeURIComponent(c.questionKey)}` : "/super-admin/answer-checking" };
+  const back = c?.paperId
+    ? { label: "Back to the paper", href: `/super-admin/answer-checking/papers/${c.paperId}` }
+    : { label: "Answer checking", href: c ? `/super-admin/answer-checking?q=${encodeURIComponent(c.questionKey)}` : "/super-admin/answer-checking" };
   return (
     <>
       <SaHeader
@@ -132,16 +134,22 @@ function TeacherView({ c, onDeleted }: { c: CheckView; onDeleted: () => void }) 
               <Button size="sm" variant="outline" disabled={running || off || !!busy} onClick={() => act("recheck", () => apiRequest("POST", `${API}/checks/${c.id}/recheck`), "Checking again")} data-testid="recheck">
                 {busy === "recheck" ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="mr-1 h-3.5 w-3.5" />}{c.status === "failed" ? "Try again" : "Re-check"}
               </Button>
-              {c.readText !== null && (
+              {c.readText !== null && !c.paperId && (
                 <Button size="sm" variant="outline" disabled={running || off || !!busy} onClick={() => act("reread", () => apiRequest("POST", `${API}/checks/${c.id}/recheck`, { reread: true }), "Reading the photos again")} data-testid="reread">
                   <Eye className="mr-1 h-3.5 w-3.5" />Read again
                 </Button>
               )}
-              <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => { if (window.confirm("Delete this answer, its photos and its marks? This can't be undone.")) act("delete", async () => { await apiRequest("DELETE", `${API}/checks/${c.id}`); onDeleted(); }); }} data-testid="delete-check">
+              {!c.paperId && <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => { if (window.confirm("Delete this answer, its photos and its marks? This can't be undone.")) act("delete", async () => { await apiRequest("DELETE", `${API}/checks/${c.id}`); onDeleted(); }); }} data-testid="delete-check">
                 <Trash2 className="mr-1 h-3.5 w-3.5" />Delete
-              </Button>
+              </Button>}
             </div>
           </div>
+          {c.paperId && (
+            <p className="mt-3 text-[13px] text-gray-600" data-testid="from-paper">
+              Question {c.questionNumber} of a whole answer sheet{c.reading?.notAttempted ? " — not attempted" : c.reading?.pages?.length ? `, found on page ${c.reading.pages.join(", ")}` : ""}.
+              {typeof c.reading?.matchConfidence === "number" && !c.reading.notAttempted && ` The AI is ${Math.round(c.reading.matchConfidence * 100)}% sure this is the right part of the sheet.`}
+            </p>
+          )}
           {c.error && <p className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-[14px] text-red-700" data-testid="check-error">{c.error}</p>}
           {running && <p className="mt-3 text-[14px] text-gray-500">{c.status === "writing" ? "The AI is writing this practice answer…" : "Reading the handwriting and marking — usually 20–60 seconds."}</p>}
           {r && (

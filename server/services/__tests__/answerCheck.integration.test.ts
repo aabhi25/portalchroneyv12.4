@@ -118,6 +118,10 @@ async function main() {
     expect((pick.question?.maxMarks ?? 0) >= 2 && (pick.question?.maxMarks ?? 9) <= 5, "max marks suggested inside the 2–5 range", pick.question?.maxMarks);
     expect(pick.looked.questions === 3 && pick.looked.writtenQuestions === 1, "it reports how many written questions it saw", pick.looked);
 
+    const without = await questions.pickRandomQuestion(B, settings, null, Math.random, new Set(["cms:cp-sci:q-written"]));
+    expect(!without.question, "a question already on the paper is not picked again", without.question?.questionKey);
+    const several = await questions.pickRandomQuestions(B, settings, null, 3);
+    expect(several.questions.length === 1 && several.questions[0].questionKey === "cms:cp-sci:q-written", "asking for 3 when only 1 exists gives that 1, no repeats", several.questions.map(q => q.questionKey));
     const mathOnly = { ...settings, scopes: [{ board: "CBSE", medium: "English", grade: "9", subject: "Mathematics" }] };
     const none = await questions.pickRandomQuestion(B, mathOnly, null);
     expect(!none.question && /No written-answer/.test(none.note), "no written questions and no AI → a plain explanation", none.note);

@@ -68,6 +68,8 @@ const AnswerCheckPage = lazy(() => import("@/pages/answerChecking/CheckAnswerPag
 const AnswerCheckDetail = lazy(() => import("@/pages/answerChecking/CheckDetailPage"));
 const AnswerCheckHistory = lazy(() => import("@/pages/answerChecking/HistoryPage"));
 const AnswerCheckSettings = lazy(() => import("@/pages/answerChecking/SettingsPage"));
+const AnswerCheckPapers = lazy(() => import("@/pages/answerChecking/PapersPage"));
+const AnswerCheckPaper = lazy(() => import("@/pages/answerChecking/PaperDetailPage"));
 const billingPage = (page: ReactNode) => <Suspense fallback={<p className="text-sm text-gray-500">Loading…</p>}>{page}</Suspense>;
 import { AgencyClientsPage, AgencyClientPage, AgencyStatementPage, AgencyTeamPage, AgencyBrandPage, AgencyPackagesPage, AgencyEmailPage } from "@/pages/agency/AgencyPortal";
 import { AgencyViewingBanner } from "@/components/agency/AgencyViewingBanner";
@@ -304,6 +306,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/super-admin/answer-checking">{() => billingPage(<AnswerCheckPage />)}</Route>
                 <Route path="/super-admin/answer-checking/history">{() => billingPage(<AnswerCheckHistory />)}</Route>
                 <Route path="/super-admin/answer-checking/settings">{() => billingPage(<AnswerCheckSettings />)}</Route>
+                <Route path="/super-admin/answer-checking/papers">{() => billingPage(<AnswerCheckPapers />)}</Route>
+                <Route path="/super-admin/answer-checking/papers/:paperId">{({ paperId }) => billingPage(<AnswerCheckPaper key={paperId} paperId={paperId} />)}</Route>
                 <Route path="/super-admin/answer-checking/checks/:checkId">{({ checkId }) => billingPage(<AnswerCheckDetail key={checkId} checkId={checkId} />)}</Route>
                 <Route path="/super-admin/settings">{() => <SuperAdminSettings section="account" />}</Route>
                 <Route path="/super-admin/backups">{() => <SuperAdminSettings section="backups" />}</Route>

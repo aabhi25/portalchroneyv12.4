@@ -403,3 +403,139 @@ export function guessQuestionKind(questionType: unknown, questionText: string, s
   if (/explain in detail|describe|discuss|elaborate|differentiate|compare|विस्तार/.test(q) || words > 120) return "long";
   return "short";
 }
+
+// ---- Whole answer sheets ----------------------------------------------------------------------
+// Two steps, so the reader still never sees the questions (it would "fix" mistakes): first the
+// whole sheet is copied into parts with the student's own labels ("Q3", "Ans 2"), then a text-only
+// step matches the parts to the paper's questions.
+
+export const READ_PAPER_SYSTEM = `You read a school student's handwritten exam answer sheet from photos (several pages, in order), for an examiner.
+Copy exactly what the student wrote. Students make mistakes and the examiner needs to see them: never correct spelling, grammar, signs, numbers, maths or facts, and never add anything that is not written.
+Split the sheet into parts: start a new part wherever the student starts a new answer (a question number or label such as "Q3", "Ans 2", "3)", "(b)", or a clearly separate answer).
+- "label": the question number or label exactly as the student wrote it at the start of the part, or "" if there is none (for example an answer continuing from the previous page).
+- "pages": the page numbers (1 = first photo) the part is on.
+- "text": the part's text without its label. Keep line breaks. Maths in plain text (2x + 4 = 10, x^2, 3/4). Describe diagrams in square brackets. Leave out crossed-out text. Write [unclear] for anything you cannot read and never guess silently; a character that could be read two ways goes in "unclear" with the other reading as "guess".
+- Name, roll number, date or rough work at the top or margins are their own parts with label "" and start their text with "(heading)" or "(rough work)".
+Reply with JSON only:
+{"parts": [{"label": "Q1", "pages": [1], "text": "...", "legibility": 0.0-1.0, "unclear": [{"where": "...", "guess": "..."}]}], "blank": false, "notes": "short note for the examiner, or empty"}`;
+
+export function readPaperUserText(q: Pick<QuestionContext, "board" | "grade" | "medium" | "subject" | "chapter">, pages: number): string {
+  return `${contextLine({ ...q, chapter: null })}\n\nThe ${pages} photo${pages === 1 ? " is" : "s are"} the page${pages === 1 ? "" : "s"}, in order, of one student's handwritten answer sheet. Copy it exactly, mistakes included, split into parts.`;
+}
+
+export interface SheetPart {
+  label: string;
+  pages: number[];
+  text: string;
+  legibility: number;
+  unclear: Array<{ where: string; guess: string }>;
+}
+
+export function parsePaperRead(raw: Record<string, any> | null, pageCount: number): { parts: SheetPart[]; blank: boolean; notes: string } {
+  const r = raw || {};
+  const parts: SheetPart[] = (Array.isArray(r.parts) ? r.parts : [])
+    .filter((p: any) => p && typeof p === "object")
+    .map((p: any) => {
+      const read = parseRead({ text: p.text, legibility: p.legibility, unclear: p.unclear });
+      const pages = (Array.isArray(p.pages) ? p.pages : [p.pages])
+        .map((x: unknown) => Math.round(num(x, 0)))
+        .filter((x: number, i: number, a: number[]) => x >= 1 && x <= pageCount && a.indexOf(x) === i);
+      return { label: str(p.label).slice(0, 30), pages: pages.length ? pages : [1], text: read.text, legibility: read.legibility, unclear: read.unclear };
+    })
+    .filter((p: SheetPart) => p.text)
+    .slice(0, 60);
+  return { parts, blank: r.blank === true || !parts.length, notes: str(r.notes).slice(0, 300) };
+}
+
+export interface PaperQuestion {
+  number: string;
+  maxMarks: number;
+  questionText: string;
+}
+
+export const MATCH_SYSTEM = `You match the parts of a student's handwritten answer sheet to the questions of the exam paper.
+- Use the student's own labels first ("Q3", "Ans 3", "3)", "iii" all mean question 3). Students often answer out of order.
+- When a label is missing, unclear or wrong, use what the part says: which question does it answer?
+- A part with no label straight after another part usually continues that answer (for example on the next page).
+- Every part belongs to at most one question; one question may have several parts (give them in reading order).
+- Headings (name, roll number, date) and rough work belong to no question: list them under "unassigned" with the reason.
+- A question with no part is "notAttempted".
+- confidence (0–1): how sure you are that these parts are this question's answer. Lower it when you relied on content instead of a clear label, or when two questions look alike.
+Reply with JSON only:
+{"answers": [{"number": "1", "parts": [0, 2], "confidence": 0.0-1.0, "note": "short reason when not a clear label, else empty"}], "notAttempted": ["4"], "unassigned": [{"part": 3, "reason": "rough work"}]}`;
+
+export function matchUserText(questions: PaperQuestion[], parts: SheetPart[]): string {
+  const qs = questions.map(q => `Question ${q.number} (${q.maxMarks} marks): ${q.questionText.replace(/\s+/g, " ").slice(0, 400)}`).join("\n");
+  const ps = parts.map((p, i) => `Part ${i} — label "${p.label}", page ${p.pages.join(", ")}:\n${p.text.slice(0, 700)}${p.text.length > 700 ? " …" : ""}`).join("\n\n");
+  return `The exam paper's questions:\n${qs}\n\nThe parts of the student's answer sheet:\n${ps}`;
+}
+
+export interface MatchedAnswer {
+  number: string;
+  parts: number[];
+  text: string;
+  pages: number[];
+  legibility: number;
+  unclear: Array<{ where: string; guess: string }>;
+  confidence: number;
+  note: string;
+  notAttempted: boolean;
+}
+
+export interface PaperMatching {
+  answers: MatchedAnswer[];
+  unassigned: Array<{ part: number; reason: string; text: string }>;
+}
+
+/**
+ * Each question's answer from the AI's matching, checked in code: unknown question numbers and
+ * part numbers are dropped, a part is used once (first claim wins), every question gets an entry
+ * (none found = not attempted), and parts nobody claimed are listed as unassigned.
+ */
+export function assembleAnswers(questions: PaperQuestion[], parts: SheetPart[], raw: Record<string, any> | null): PaperMatching {
+  const r = raw || {};
+  const norm = (v: unknown) => str(typeof v === "number" ? String(v) : v).replace(/^(q|que|question|ans|answer)\.?\s*/i, "").replace(/[).:\s]+$/, "").toLowerCase();
+  const byNumber = new Map(questions.map(q => [norm(q.number), q]));
+  const used = new Set<number>();
+  const found = new Map<string, { parts: number[]; confidence: number; note: string }>();
+  for (const a of Array.isArray(r.answers) ? r.answers : []) {
+    if (!a || typeof a !== "object") continue;
+    const q = byNumber.get(norm(a.number));
+    if (!q || found.has(q.number)) continue;
+    const mine = (Array.isArray(a.parts) ? a.parts : [])
+      .map((x: unknown) => Math.round(num(x, -1)))
+      .filter((i: number) => i >= 0 && i < parts.length && !used.has(i));
+    mine.forEach((i: number) => used.add(i));
+    if (mine.length) found.set(q.number, { parts: mine, confidence: clamp01(num(a.confidence, 0.5)), note: str(a.note).slice(0, 200) });
+  }
+  const answers: MatchedAnswer[] = questions.map(q => {
+    const f = found.get(q.number);
+    if (!f) return { number: q.number, parts: [], text: "", pages: [], legibility: 1, unclear: [], confidence: 1, note: "", notAttempted: true };
+    const mine = f.parts.map(i => parts[i]);
+    return {
+      number: q.number,
+      parts: f.parts,
+      text: mine.map(p => p.text).join("\n"),
+      pages: Array.from(new Set(mine.flatMap(p => p.pages))).sort((a, b) => a - b),
+      legibility: Math.min(...mine.map(p => p.legibility)),
+      unclear: mine.flatMap(p => p.unclear),
+      confidence: f.confidence,
+      note: f.note,
+      notAttempted: false,
+    };
+  });
+  const reasons = new Map<number, string>();
+  for (const u of Array.isArray(r.unassigned) ? r.unassigned : []) {
+    const i = Math.round(num(u?.part, -1));
+    if (i >= 0 && i < parts.length) reasons.set(i, str(u?.reason).slice(0, 120));
+  }
+  const unassigned = parts
+    .map((p, i) => ({ part: i, reason: reasons.get(i) || "Not matched to any question", text: p.text.slice(0, 300) }))
+    .filter(u => !used.has(u.part));
+  return { answers, unassigned };
+}
+
+/** Parts the AI couldn't place that look like real answers (not a heading or rough work). */
+export function unplacedAnswerParts(m: PaperMatching): PaperMatching["unassigned"] {
+  return m.unassigned.filter(u => !/^\((heading|rough work)\)/i.test(u.text.trim()) && !/heading|rough|name|roll|date/i.test(u.reason));
+}

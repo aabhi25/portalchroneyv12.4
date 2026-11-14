@@ -1,6 +1,6 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
-import { answerCheckImages, type AnswerCheckImageRow } from "@shared/schema";
+import { answerCheckImages, answerChecks, type AnswerCheckImageRow } from "@shared/schema";
 import { r2Storage } from "../r2StorageService";
 
 /**
@@ -12,9 +12,11 @@ import { r2Storage } from "../r2StorageService";
 
 export const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 export const MAX_PAGES = 5;
+/** Pages of a whole answer sheet. */
+export const MAX_PAPER_PAGES = 12;
 const MAX_SIDE = 2000;
 
-export type ImageKind = "answer" | "marked";
+export type ImageKind = "answer" | "marked" | "paper_page";
 
 export class ImageError extends Error {}
 
@@ -35,7 +37,7 @@ export async function prepareUpload(input: Buffer): Promise<Buffer> {
   }
 }
 
-export async function saveImage(opts: { checkId: string; businessAccountId: string; kind: ImageKind; position: number; data: Buffer; contentType?: string }): Promise<AnswerCheckImageRow> {
+export async function saveImage(opts: { checkId?: string | null; paperId?: string | null; businessAccountId: string; kind: ImageKind; position: number; data: Buffer; contentType?: string }): Promise<AnswerCheckImageRow> {
   const contentType = opts.contentType || "image/jpeg";
   let storageRef: string | null = null;
   await r2Storage.ensureInitialized().catch(() => false);
@@ -46,7 +48,8 @@ export async function saveImage(opts: { checkId: string; businessAccountId: stri
     else console.warn(`[Answer Check] private R2 upload failed (${up.error || "not private"}) — keeping the photo in the database`);
   }
   const [row] = await db.insert(answerCheckImages).values({
-    checkId: opts.checkId,
+    checkId: opts.checkId ?? null,
+    paperId: opts.paperId ?? null,
     businessAccountId: opts.businessAccountId,
     kind: opts.kind,
     position: opts.position,
@@ -63,6 +66,7 @@ export async function listImages(checkId: string, kind?: ImageKind): Promise<Ans
   return db.select({
     id: answerCheckImages.id,
     checkId: answerCheckImages.checkId,
+    paperId: answerCheckImages.paperId,
     businessAccountId: answerCheckImages.businessAccountId,
     kind: answerCheckImages.kind,
     position: answerCheckImages.position,
@@ -72,6 +76,13 @@ export async function listImages(checkId: string, kind?: ImageKind): Promise<Ans
     byteSize: answerCheckImages.byteSize,
     createdAt: answerCheckImages.createdAt,
   }).from(answerCheckImages).where(where).orderBy(asc(answerCheckImages.kind), asc(answerCheckImages.position));
+}
+
+/** A whole answer sheet's pages, in order. */
+export async function listPaperImages(paperId: string): Promise<AnswerCheckImageRow[]> {
+  return db.select().from(answerCheckImages)
+    .where(and(eq(answerCheckImages.paperId, paperId), eq(answerCheckImages.kind, "paper_page")))
+    .orderBy(asc(answerCheckImages.position));
 }
 
 export async function imageBytes(row: Pick<AnswerCheckImageRow, "storageRef" | "data">): Promise<Buffer | null> {
@@ -88,6 +99,16 @@ export async function imageBytes(row: Pick<AnswerCheckImageRow, "storageRef" | "
 export async function deleteStoredFiles(checkId: string): Promise<void> {
   const rows = await db.select({ storageRef: answerCheckImages.storageRef }).from(answerCheckImages).where(eq(answerCheckImages.checkId, checkId));
   for (const r of rows) {
+    if (r.storageRef) await r2Storage.deleteByRef(r.storageRef).catch(() => undefined);
+  }
+}
+
+/** Removes a paper's pages and its answers' photos from R2 (the rows go with the paper). */
+export async function deletePaperFiles(paperId: string): Promise<void> {
+  const pages = await db.select({ storageRef: answerCheckImages.storageRef }).from(answerCheckImages).where(eq(answerCheckImages.paperId, paperId));
+  const answers = await db.select({ storageRef: answerCheckImages.storageRef }).from(answerCheckImages)
+    .where(inArray(answerCheckImages.checkId, db.select({ id: answerChecks.id }).from(answerChecks).where(eq(answerChecks.paperId, paperId))));
+  for (const r of [...pages, ...answers]) {
     if (r.storageRef) await r2Storage.deleteByRef(r.storageRef).catch(() => undefined);
   }
 }

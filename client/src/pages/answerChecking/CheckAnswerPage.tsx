@@ -220,7 +220,7 @@ function CandidateCard({ q, note, busy, off, onChange, onUse, onAnother, another
   );
 }
 
-function SearchQuestions({ overview, onPick }: { overview: Overview | undefined; onPick: (q: QuestionInput) => void }) {
+export function SearchQuestions({ overview, onPick }: { overview: Overview | undefined; onPick: (q: QuestionInput) => void }) {
   const scopes = overview?.scopes ?? [];
   const [scopeIdx, setScopeIdx] = useState(0);
   const [subject, setSubject] = useState("");
@@ -280,7 +280,7 @@ function SearchQuestions({ overview, onPick }: { overview: Overview | undefined;
   );
 }
 
-function TypeQuestion({ overview, onDone }: { overview: Overview | undefined; onDone: (q: QuestionInput) => void }) {
+export function TypeQuestion({ overview, onDone }: { overview: Overview | undefined; onDone: (q: QuestionInput) => void }) {
   const [questionText, setQuestionText] = useState("");
   const [modelAnswer, setModelAnswer] = useState("");
   const [subject, setSubject] = useState("");

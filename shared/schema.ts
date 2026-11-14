@@ -5934,6 +5934,30 @@ export const answerMarkingSchemes = pgTable("answer_marking_schemes", {
   uniqueIndex("answer_marking_schemes_question_version_idx").on(table.businessAccountId, table.questionKey, table.version),
 ]);
 
+// A whole answer sheet: the paper's questions, the student's pages (answer_check_images with
+// paper_id), what the AI read from them and which part answers which question. Each question's
+// answer then becomes an answer_checks row with this paper_id.
+export const answerPapers = pgTable("answer_papers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default(""),
+  studentLabel: text("student_label").notNull().default(""),
+  status: text("status").notNull().default("reading"), // 'writing' | 'reading' | 'checked' | 'failed'
+  source: text("source").notNull().default("upload"), // 'upload' | 'practice'
+  questions: jsonb("questions").$type<Record<string, unknown>[]>().notNull().default([]), // [{ number, questionKey }]
+  reading: jsonb("reading").$type<Record<string, unknown>>(), // { segments[], pages, notes }
+  matching: jsonb("matching").$type<Record<string, unknown>>(), // { answers[], unassigned[], notAttempted[] }
+  practice: jsonb("practice").$type<Record<string, unknown>>(), // practice sheet: what was written per question
+  costUsd: numeric("cost_usd", { precision: 10, scale: 5 }).notNull().default("0"),
+  durationMs: integer("duration_ms"),
+  error: text("error"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("answer_papers_account_created_idx").on(table.businessAccountId, table.createdAt),
+]);
+
 // One checked answer (an upload, or a practice answer the AI wrote at a known level).
 export const answerChecks = pgTable("answer_checks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -5941,6 +5965,8 @@ export const answerChecks = pgTable("answer_checks", {
   schemeId: varchar("scheme_id").references(() => answerMarkingSchemes.id, { onDelete: "set null" }),
   questionKey: text("question_key").notNull(),
   batchId: varchar("batch_id"), // checks started together ("Run full test")
+  paperId: varchar("paper_id").references(() => answerPapers.id, { onDelete: "cascade" }), // answer found in a whole answer sheet
+  questionNumber: text("question_number"), // the question's number on that paper
   status: text("status").notNull().default("checking"), // 'checking' | 'done' | 'needs_teacher' | 'failed'
   source: text("source").notNull().default("upload"), // 'upload' | 'practice'
   practiceLevel: text("practice_level"), // PracticeLevel, for practice answers
@@ -5970,15 +5996,17 @@ export const answerChecks = pgTable("answer_checks", {
   index("answer_checks_account_created_idx").on(table.businessAccountId, table.createdAt),
   index("answer_checks_question_idx").on(table.businessAccountId, table.questionKey),
   index("answer_checks_batch_idx").on(table.batchId),
+  index("answer_checks_paper_idx").on(table.paperId),
 ]);
 
 // Photos: the student's answer pages and the marked sheet. Kept in the private R2 bucket when
 // one is configured, else in the database (never in the public bucket).
 export const answerCheckImages = pgTable("answer_check_images", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  checkId: varchar("check_id").notNull().references(() => answerChecks.id, { onDelete: "cascade" }),
+  checkId: varchar("check_id").references(() => answerChecks.id, { onDelete: "cascade" }), // one answer's photos and marked sheet
+  paperId: varchar("paper_id").references(() => answerPapers.id, { onDelete: "cascade" }), // or a whole answer sheet's pages
   businessAccountId: varchar("business_account_id").notNull(),
-  kind: text("kind").notNull(), // 'answer' | 'marked'
+  kind: text("kind").notNull(), // 'answer' | 'marked' | 'paper_page'
   position: integer("position").notNull().default(0),
   storageRef: text("storage_ref"), // r2private://… when stored in R2
   data: bytea("data"), // when stored in the database
@@ -5987,9 +6015,11 @@ export const answerCheckImages = pgTable("answer_check_images", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [
   index("answer_check_images_check_idx").on(table.checkId),
+  index("answer_check_images_paper_idx").on(table.paperId),
 ]);
 
 export type AnswerCheckSettingsRow = typeof answerCheckSettings.$inferSelect;
 export type AnswerMarkingSchemeRow = typeof answerMarkingSchemes.$inferSelect;
 export type AnswerCheckRow = typeof answerChecks.$inferSelect;
 export type AnswerCheckImageRow = typeof answerCheckImages.$inferSelect;
+export type AnswerPaperRow = typeof answerPapers.$inferSelect;

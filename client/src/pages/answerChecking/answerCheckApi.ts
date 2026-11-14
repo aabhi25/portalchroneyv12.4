@@ -71,6 +71,8 @@ export interface CheckView {
   id: string;
   questionKey: string;
   batchId: string | null;
+  paperId: string | null;
+  questionNumber: string | null;
   status: "writing" | "checking" | "done" | "needs_teacher" | "failed";
   interrupted: boolean;
   source: "upload" | "practice";
@@ -80,7 +82,11 @@ export interface CheckView {
   studentLabel: string;
   maxMarks: number;
   readText: string | null;
-  reading: { legibility: number; unclear: Array<{ where: string; guess: string }>; blank: boolean; notes: string } | null;
+  reading: {
+    legibility: number; unclear: Array<{ where: string; guess: string }>; blank: boolean; notes: string;
+    // answers found in a whole answer sheet
+    pages?: number[]; matchConfidence?: number; matchNote?: string; notAttempted?: boolean; unplacedOnSheet?: boolean;
+  } | null;
   result: CheckResult | null;
   aiMarks: number | null;
   aiWritten: { percent: number | null; status: "likely_human" | "possibly_ai" | "inconclusive"; confidence: string; signals: string[]; words: number } | null;
@@ -107,6 +113,55 @@ export interface ChecksResponse {
 }
 
 export const imageUrl = (id: string) => `${API}/images/${id}`;
+
+export interface PaperTotals { maxMarks: number; aiMarks: number | null; teacherMarks: number | null; expectedMarks: number | null; answered: number; notAttempted: number; needsTeacher: number }
+
+export type PaperStatus = "writing" | "reading" | "checking" | "done" | "needs_teacher" | "failed";
+
+export interface PaperView {
+  id: string;
+  title: string;
+  studentLabel: string;
+  source: "upload" | "practice";
+  status: PaperStatus;
+  questions: Array<{ number: string; questionKey: string }>;
+  pages: Array<{ id: string; position: number }>;
+  reading: { parts: Array<{ label: string; pages: number[]; text: string }>; blank: boolean; notes: string; pages: number } | null;
+  matching: { answers: Array<{ number: string; parts: number[]; confidence: number; note: string; notAttempted: boolean }>; unassigned: Array<{ part: number; reason: string; text: string }> } | null;
+  practice: { writtenOrder: string[]; sheet: string; answers: Array<{ number: string; level: string; expectedMarks: number; why: string }> } | null;
+  totals: PaperTotals;
+  checks: CheckView[];
+  costUsd: number;
+  durationMs: number | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaperSummary {
+  id: string; title: string; studentLabel: string; source: "upload" | "practice"; status: PaperStatus;
+  questionCount: number; pageCount: number; totals: PaperTotals; costUsd: number; createdAt: string;
+}
+
+export const PAPER_STATUS_LABEL: Record<PaperStatus, string> = {
+  writing: "Writing practice sheet…",
+  reading: "Reading the sheet…",
+  checking: "Marking answers…",
+  done: "Checked",
+  needs_teacher: "Needs a teacher",
+  failed: "Failed",
+};
+
+export const PAPER_STATUS_STYLE: Record<PaperStatus, string> = {
+  writing: "bg-sky-50 text-sky-700",
+  reading: "bg-sky-50 text-sky-700",
+  checking: "bg-sky-50 text-sky-700",
+  done: "bg-emerald-50 text-emerald-700",
+  needs_teacher: "bg-amber-50 text-amber-800",
+  failed: "bg-red-50 text-red-700",
+};
+
+export const paperRunning = (s: PaperStatus) => s === "writing" || s === "reading" || s === "checking";
 
 export const isRunning = (c: Pick<CheckView, "status">) => c.status === "checking" || c.status === "writing";
 

@@ -40,7 +40,7 @@ import {
   schemeUserText,
   type QuestionContext,
 } from "./prompts";
-import { imageBytes, listImages, replaceMarkedImage, saveImage, toDataUrl } from "./images";
+import { imageBytes, listImages, listPaperImages, replaceMarkedImage, saveImage, toDataUrl } from "./images";
 import { renderMarkedSheet, renderPracticeSheet } from "./drawing";
 import type { QuestionInput } from "./questions";
 
@@ -57,6 +57,11 @@ import type { QuestionInput } from "./questions";
 let aiFactory: (businessAccountId: string) => Promise<AnswerCheckAi> = createAnswerCheckAi;
 export function setAnswerCheckAiFactoryForTests(f: ((businessAccountId: string) => Promise<AnswerCheckAi>) | null) {
   aiFactory = f || createAnswerCheckAi;
+}
+
+/** The AI client for an account (a stand-in in tests). */
+export function answerCheckAi(businessAccountId: string): Promise<AnswerCheckAi> {
+  return aiFactory(businessAccountId);
 }
 
 const n = (v: unknown): number => (v === null || v === undefined || v === "" ? 0 : Number(v));
@@ -216,7 +221,7 @@ const queue: Array<() => Promise<void>> = [];
 let running = 0;
 const idleWaiters: Array<() => void> = [];
 
-function enqueue(job: () => Promise<void>) {
+export function enqueue(job: () => Promise<void>) {
   queue.push(job);
   pump();
 }
@@ -335,6 +340,17 @@ async function writePractice(scheme: AnswerMarkingSchemeRow, rows: AnswerCheckRo
 
 // ---- Running a check --------------------------------------------------------------------------
 
+/** Below this, a teacher confirms that the matched part of a sheet answers the question. */
+export const MATCH_CONFIDENCE_MIN = 0.6;
+
+/** The sheet's pages an answer was found on (1 = first page); all pages when that's unknown. */
+async function paperPagesFor(paperId: string, wanted: unknown) {
+  const all = await listPaperImages(paperId);
+  const want = Array.isArray(wanted) ? new Set(wanted.map(Number)) : null;
+  const mine = want ? all.filter(p => want.has(p.position + 1)) : [];
+  return mine.length ? mine : all;
+}
+
 export async function runCheck(checkId: string, opts: { reread?: boolean } = {}): Promise<void> {
   const started = Date.now();
   const [check] = await db.select().from(answerChecks).where(eq(answerChecks.id, checkId));
@@ -351,14 +367,19 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
     const ctx = contextOf(schemeRow);
     const scheme = schemeOf(schemeRow);
     const rules = settings.subjectRules[ctx.subjectKind];
-    const pages = (await listImages(checkId, "answer")).sort((a, b) => a.position - b.position);
+    // An answer from a whole answer sheet uses the sheet's pages it was found on; it was read
+    // with the whole sheet, so it is never read again on its own.
+    const fromPaper = !!check.paperId;
+    const pages = fromPaper
+      ? await paperPagesFor(check.paperId!, (check.reading as any)?.pages)
+      : (await listImages(checkId, "answer")).sort((a, b) => a.position - b.position);
     const pageBytes = (await Promise.all(pages.map(p => imageBytes(p)))).filter((b): b is Buffer => !!b);
     if (!pageBytes.length) return fail("The answer photos are missing.");
 
     // 1. Read the handwriting (kept on a re-check unless asked to read again).
     let readText = check.readText;
     let reading = check.reading as any;
-    if (readText === null || readText === undefined || opts.reread) {
+    if (readText === null || readText === undefined || (opts.reread && !fromPaper)) {
       const replied = await ai.json({ model: ANSWER_CHECK_MODEL, system: READ_SYSTEM, user: readUserText(ctx, pageBytes.length), images: pageBytes.map(b => toDataUrl(b)), maxTokens: 3000 });
       if (!replied) return fail("The AI could not read the photos. Try again.", ai.costUsd());
       const read = parseRead(replied);
@@ -368,11 +389,14 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
     }
     const legibility = Number(reading?.legibility ?? 0);
     const unclearCount = Array.isArray(reading?.unclear) ? reading.unclear.length : 0;
-    const blank = reading?.blank === true;
+    const notAttempted = reading?.notAttempted === true;
+    const blank = reading?.blank === true || notAttempted;
 
-    // 2. Mark against the scheme (nothing to mark on a blank page).
+    // 2. Mark against the scheme (nothing to mark on a blank page or an unanswered question).
     let markReply = parseMark(null);
-    if (!blank) {
+    if (notAttempted) {
+      markReply = { ...markReply, confidence: 1, feedback: { summary: "This question was not attempted.", improvement: "", revision: "Revise this topic and try the question." }, teacherComment: "Not attempted" };
+    } else if (!blank) {
       const replied = await ai.json({ model: ANSWER_CHECK_MODEL, system: markSystem(settings), user: markUserText(ctx, scheme, rules, readText || ""), maxTokens: 2500 });
       if (!replied) return fail("The AI could not mark this answer. Try again.", ai.costUsd());
       markReply = parseMark(replied);
@@ -391,15 +415,22 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
     }
 
     // 4. Does a teacher need to look?
-    const reasons = teacherReasons({ legibility, unclearCount, blank, confidence: markReply.confidence }, settings);
+    const reasons = notAttempted
+      ? (reading?.unplacedOnSheet ? ["Parts of the sheet weren't matched to any question — check this question really wasn't answered."] : [])
+      : teacherReasons({ legibility, unclearCount, blank, confidence: markReply.confidence }, settings);
+    if (fromPaper && !notAttempted && typeof reading?.matchConfidence === "number" && reading.matchConfidence < MATCH_CONFIDENCE_MIN) {
+      reasons.push("The AI isn't sure this part of the sheet is the answer to this question.");
+    }
 
-    // 5. The marked sheet.
+    // 5. The marked sheet (none for a question that wasn't attempted).
     const remark = markReply.teacherComment || markReply.feedback.summary.split(/(?<=[.!?])\s/)[0] || "";
-    try {
-      const marked = await renderMarkedSheet({ pages: pageBytes, steps: marks.steps, total: marks.total, maxMarks: ctx.maxMarks, remark, needsTeacher: reasons.length > 0 });
-      await replaceMarkedImage(checkId, check.businessAccountId, marked);
-    } catch (err: any) {
-      console.warn("[Answer Check] marked sheet not drawn:", err?.message || err);
+    if (!notAttempted) {
+      try {
+        const marked = await renderMarkedSheet({ pages: pageBytes, steps: marks.steps, total: marks.total, maxMarks: ctx.maxMarks, remark, needsTeacher: reasons.length > 0 });
+        await replaceMarkedImage(checkId, check.businessAccountId, marked);
+      } catch (err: any) {
+        console.warn("[Answer Check] marked sheet not drawn:", err?.message || err);
+      }
     }
 
     // Keep the earlier marking when this is a re-check.
@@ -493,8 +524,9 @@ export async function saveTeacherMarks(businessAccountId: string, checkId: strin
 
 export async function deleteCheck(businessAccountId: string, checkId: string): Promise<boolean> {
   const { deleteStoredFiles } = await import("./images");
-  const [check] = await db.select({ id: answerChecks.id }).from(answerChecks).where(and(eq(answerChecks.id, checkId), eq(answerChecks.businessAccountId, businessAccountId)));
+  const [check] = await db.select({ id: answerChecks.id, paperId: answerChecks.paperId }).from(answerChecks).where(and(eq(answerChecks.id, checkId), eq(answerChecks.businessAccountId, businessAccountId)));
   if (!check) return false;
+  if (check.paperId) throw new SchemeEditError(["This answer is part of a whole paper: delete the paper instead."]);
   await deleteStoredFiles(checkId);
   await db.delete(answerChecks).where(eq(answerChecks.id, checkId));
   return true;
@@ -507,6 +539,8 @@ export function checkView(row: AnswerCheckRow, scheme: AnswerMarkingSchemeRow | 
     id: row.id,
     questionKey: row.questionKey,
     batchId: row.batchId,
+    paperId: row.paperId,
+    questionNumber: row.questionNumber,
     status: effectiveStatus(row),
     interrupted: effectiveStatus(row) === "failed" && row.status !== "failed",
     source: row.source,

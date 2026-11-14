@@ -79,8 +79,8 @@ const RULE_GAP = 66;
 const FIRST_RULE = 250;
 const MARGIN_X = 150;
 
-/** Practice answer written by hand on lined pages; returns one JPEG per page (at most 3). */
-export async function renderPracticeSheet(opts: { text: string; studentLabel: string; questionLabel: string; seed: string }): Promise<Buffer[]> {
+/** Practice answer written by hand on lined pages; returns one JPEG per page (at most `maxPages`, default 3). */
+export async function renderPracticeSheet(opts: { text: string; studentLabel: string; questionLabel: string; seed: string; maxPages?: number }): Promise<Buffer[]> {
   const c = await loadCanvas();
   const rand = seeded(opts.seed);
   const hindi = DEVANAGARI.test(opts.text);
@@ -96,7 +96,7 @@ export async function renderPracticeSheet(opts: { text: string; studentLabel: st
   const ink = ["#1c2c7a", "#22348a", "#1a2970"][Math.floor(rand() * 3)];
   const sharp = (await import("sharp")).default;
   const out: Buffer[] = [];
-  for (let p = 0; p < Math.min(pages.length, 3); p++) {
+  for (let p = 0; p < Math.min(pages.length, opts.maxPages ?? 3); p++) {
     const canvas = c.createCanvas(PAGE_W, PAGE_H);
     const g = canvas.getContext("2d");
     g.fillStyle = "#fbfaf4";

@@ -28,8 +28,10 @@ import {
   schemeVersions,
   schemeView,
 } from "../services/answerCheck/engine";
-import { ImageError, imageBytes, MAX_PAGES, prepareUpload } from "../services/answerCheck/images";
-import { customQuestionKey, pickRandomQuestion, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
+import { ImageError, imageBytes, MAX_PAGES, MAX_PAPER_PAGES, prepareUpload } from "../services/answerCheck/images";
+import { customQuestionKey, pickRandomQuestion, pickRandomQuestions, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
+import { cleanQuestionList, createPaper, createPracticePaper, deletePaper, listPapers, PaperError, paperView, rerunPaper } from "../services/answerCheck/papers";
+import { answerPapers } from "@shared/schema";
 
 /**
  * Answer checking pilot, super admins only (super admin › Answer checking). Works on the Top
@@ -55,6 +57,13 @@ import { customQuestionKey, pickRandomQuestion, scopeOptions, searchQuestions, t
  *   DELETE /api/super-admin/answer-checking/checks/:id
  *   GET  /api/super-admin/answer-checking/images/:id           a photo or marked sheet
  *   GET  /api/super-admin/answer-checking/export.csv
+ *   POST /api/super-admin/answer-checking/papers/random-questions   several random questions for a paper
+ *   POST /api/super-admin/answer-checking/papers                     whole answer sheet → read, matched, each answer checked
+ *   POST /api/super-admin/answer-checking/papers/practice            the AI writes one student's whole sheet
+ *   GET  /api/super-admin/answer-checking/papers                     list
+ *   GET  /api/super-admin/answer-checking/papers/:id
+ *   POST /api/super-admin/answer-checking/papers/:id/rerun           read the sheet again (replaces its results)
+ *   DELETE /api/super-admin/answer-checking/papers/:id
  */
 const router = Router();
 const superAdmin = [requireAuth, requireRole("super_admin")];
@@ -64,13 +73,21 @@ function accountId(): string {
   return TOPSCHOLAR_ACCOUNT_ID;
 }
 
+/** Questions that already have an answer key keep its marks (a suggestion must never replace a saved key). */
+async function withSavedMarks<T extends { questionKey: string; maxMarks: number }>(questions: T[]): Promise<T[]> {
+  return Promise.all(questions.map(async q => {
+    const saved = await currentScheme(accountId(), q.questionKey);
+    return saved ? { ...q, maxMarks: Number(saved.maxMarks) } : q;
+  }));
+}
+
 function userId(req: Request): string | null {
   return (req as any).user?.id ?? null;
 }
 
 function fail(res: Response, where: string, error: unknown) {
   if (error instanceof SchemeEditError) return res.status(400).json({ error: error.message, problems: error.problems });
-  if (error instanceof ImageError || error instanceof AnswerCheckAiError) return res.status(400).json({ error: (error as Error).message });
+  if (error instanceof ImageError || error instanceof AnswerCheckAiError || error instanceof PaperError) return res.status(400).json({ error: (error as Error).message });
   console.error(`[Answer Check] ${where}:`, error);
   return res.status(500).json({ error: "Something went wrong. Please try again." });
 }
@@ -139,7 +156,7 @@ router.post(`${BASE}/questions/random`, ...superAdmin, async (_req, res) => {
     const settings = await getSettings(id);
     const ai = await createAnswerCheckAi(id).catch(() => null);
     const picked = await pickRandomQuestion(id, settings, ai);
-    res.json(picked);
+    res.json({ ...picked, question: picked.question ? (await withSavedMarks([picked.question]))[0] : null });
   } catch (e) { fail(res, "random question", e); }
 });
 
@@ -148,7 +165,7 @@ router.get(`${BASE}/questions/search`, ...superAdmin, async (req, res) => {
     const q = (k: string) => String(req.query[k] ?? "").trim();
     if (!q("board") || !q("medium") || !q("grade")) return res.status(400).json({ error: "Choose a board, medium and grade." });
     const results = await searchQuestions(accountId(), { board: q("board"), medium: q("medium"), grade: q("grade"), subject: q("subject") }, q("q"), await getSettings(accountId()));
-    res.json({ results });
+    res.json({ results: await withSavedMarks(results) });
   } catch (e) { fail(res, "search", e); }
 });
 
@@ -196,21 +213,28 @@ router.post(`${BASE}/schemes/:key/recheck`, ...superAdmin, async (req, res) => {
 
 const DATA_URL = /^data:(image\/(?:jpeg|jpg|png|webp|heic|heif));base64,([A-Za-z0-9+/=\s]+)$/i;
 
+/** Photos sent as data URLs → upright JPEGs (null + a reply already sent when one is unusable). */
+async function readPhotos(res: Response, raw: unknown, max: number, what: string): Promise<Buffer[] | null> {
+  const list: unknown[] = Array.isArray(raw) ? raw : [];
+  if (!list.length) { res.status(400).json({ error: `Add at least one photo of the ${what}.` }); return null; }
+  if (list.length > max) { res.status(400).json({ error: `At most ${max} photos.` }); return null; }
+  const photos: Buffer[] = [];
+  for (const p of list) {
+    const m = typeof p === "string" ? DATA_URL.exec(p) : null;
+    if (!m) { res.status(400).json({ error: "Photos must be JPG or PNG images." }); return null; }
+    photos.push(await prepareUpload(Buffer.from(m[2], "base64")));
+  }
+  return photos;
+}
+
 router.post(`${BASE}/checks`, ...superAdmin, async (req, res) => {
   try {
     if (!(await requireOn(res))) return;
     const key = String(req.body?.questionKey || "");
     const scheme = key ? await currentScheme(accountId(), key) : null;
     if (!scheme) return res.status(400).json({ error: "Choose the question first." });
-    const raw: unknown[] = Array.isArray(req.body?.photos) ? req.body.photos : [];
-    if (!raw.length) return res.status(400).json({ error: "Add at least one photo of the answer." });
-    if (raw.length > MAX_PAGES) return res.status(400).json({ error: `At most ${MAX_PAGES} photos per answer.` });
-    const photos: Buffer[] = [];
-    for (const p of raw) {
-      const m = typeof p === "string" ? DATA_URL.exec(p) : null;
-      if (!m) return res.status(400).json({ error: "Photos must be JPG or PNG images." });
-      photos.push(await prepareUpload(Buffer.from(m[2], "base64")));
-    }
+    const photos = await readPhotos(res, req.body?.photos, MAX_PAGES, "answer");
+    if (!photos) return;
     const check = await createUploadCheck({ businessAccountId: accountId(), scheme, photos, studentLabel: String(req.body?.studentLabel || "").trim(), userId: userId(req) });
     res.json({ id: check.id });
   } catch (e) { fail(res, "create check", e); }
@@ -310,6 +334,66 @@ router.get(`${BASE}/images/:id`, ...superAdmin, async (req, res) => {
     res.setHeader("Cache-Control", "private, max-age=3600");
     res.send(bytes);
   } catch (e) { fail(res, "image", e); }
+});
+
+// ---- Whole papers ------------------------------------------------------------------------------
+
+router.post(`${BASE}/papers/random-questions`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(res))) return;
+    const count = Math.min(10, Math.max(1, Math.round(Number(req.body?.count) || 5)));
+    const ai = await createAnswerCheckAi(accountId()).catch(() => null);
+    const picked = await pickRandomQuestions(accountId(), await getSettings(accountId()), ai, count);
+    res.json({ ...picked, questions: await withSavedMarks(picked.questions) });
+  } catch (e) { fail(res, "paper random questions", e); }
+});
+
+router.post(`${BASE}/papers`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(res))) return;
+    const questions = cleanQuestionList(req.body?.questions);
+    const photos = await readPhotos(res, req.body?.photos, MAX_PAPER_PAGES, "answer sheet");
+    if (!photos) return;
+    const paper = await createPaper({ businessAccountId: accountId(), title: String(req.body?.title || "").trim(), studentLabel: String(req.body?.studentLabel || "").trim(), questions, photos, userId: userId(req) });
+    res.json({ id: paper.id });
+  } catch (e) { fail(res, "create paper", e); }
+});
+
+router.post(`${BASE}/papers/practice`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(res))) return;
+    const questions = cleanQuestionList(req.body?.questions);
+    const paper = await createPracticePaper({ businessAccountId: accountId(), title: String(req.body?.title || "").trim(), studentLabel: String(req.body?.studentLabel || "").trim(), questions, userId: userId(req) });
+    res.json({ id: paper.id });
+  } catch (e) { fail(res, "practice paper", e); }
+});
+
+router.get(`${BASE}/papers`, ...superAdmin, async (_req, res) => {
+  try { res.json({ papers: await listPapers(accountId()) }); }
+  catch (e) { fail(res, "list papers", e); }
+});
+
+router.get(`${BASE}/papers/:id`, ...superAdmin, async (req, res) => {
+  try {
+    const [paper] = await db.select().from(answerPapers).where(and(eq(answerPapers.id, req.params.id), eq(answerPapers.businessAccountId, accountId())));
+    if (!paper) return res.status(404).json({ error: "Paper not found." });
+    res.json({ paper: await paperView(paper) });
+  } catch (e) { fail(res, "get paper", e); }
+});
+
+router.post(`${BASE}/papers/:id/rerun`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(res))) return;
+    if (!(await rerunPaper(accountId(), req.params.id))) return res.status(404).json({ error: "Paper not found." });
+    res.json({ ok: true });
+  } catch (e) { fail(res, "rerun paper", e); }
+});
+
+router.delete(`${BASE}/papers/:id`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await deletePaper(accountId(), req.params.id))) return res.status(404).json({ error: "Paper not found." });
+    res.json({ ok: true });
+  } catch (e) { fail(res, "delete paper", e); }
 });
 
 function csvCell(v: unknown): string {
