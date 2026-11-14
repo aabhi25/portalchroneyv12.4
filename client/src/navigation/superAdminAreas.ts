@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Building2, Link2, Handshake, Presentation, ReceiptText, Sunrise, ClipboardList, Gauge, Bot, Database, Server, ScrollText, UserCog,
+  Building2, Link2, Handshake, Presentation, ReceiptText, Sunrise, ClipboardList, Gauge, Bot, Database, Server, ScrollText, UserCog, FileCheck2,
 } from "lucide-react";
 
 /**
@@ -17,7 +17,7 @@ export interface SaTab {
   fill?: boolean;
 }
 
-export type SaGroup = "Customers" | "Reports" | "Platform";
+export type SaGroup = "Customers" | "Reports" | "Pilots" | "Platform";
 
 export interface SaArea {
   id: string;
@@ -97,6 +97,17 @@ export const SA_AREAS: SaArea[] = [
     formerly: "Usage & Limits · Cost Analytics · monthly limit · tokens",
   },
   {
+    id: "answer-checking", label: "Answer checking", kind: "Pilot · Top Scholar", icon: FileCheck2, tint: "bg-orange-500", group: "Pilots",
+    href: "/super-admin/answer-checking",
+    tabs: [
+      { key: "check", label: "Check an answer", href: "/super-admin/answer-checking" },
+      { key: "history", label: "History & accuracy", href: "/super-admin/answer-checking/history" },
+      { key: "settings", label: "Settings", href: "/super-admin/answer-checking/settings" },
+    ],
+    detail: /^\/super-admin\/answer-checking\/checks\/[^/]+$/,
+    formerly: "AI evaluation · answer sheet · handwritten · marking scheme · mock test · Top Scholar pilot",
+  },
+  {
     id: "providers", label: "AI providers", kind: "Platform", icon: Bot, tint: "bg-cyan-600", group: "Platform",
     href: "/super-admin/ai-providers",
     tabs: [
@@ -140,7 +151,7 @@ export const SA_AREAS: SaArea[] = [
   },
 ];
 
-export const SA_GROUPS: SaGroup[] = ["Customers", "Reports", "Platform"];
+export const SA_GROUPS: SaGroup[] = ["Customers", "Reports", "Pilots", "Platform"];
 
 export function saArea(id: string): SaArea {
   return SA_AREAS.find(a => a.id === id)!;

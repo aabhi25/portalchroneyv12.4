@@ -1,0 +1,340 @@
+import { Router, type Request, type Response } from "express";
+import crypto from "crypto";
+import { z } from "zod";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { db } from "../db";
+import { answerCheckImages, answerChecks, answerMarkingSchemes, businessAccounts } from "@shared/schema";
+import { PRACTICE_LEVELS, QUESTION_KINDS, accuracySummary, type PracticeLevel } from "@shared/answerCheck";
+import { requireAuth, requireRole } from "../auth";
+import { TOPSCHOLAR_ACCOUNT_ID } from "../services/topscholar/config";
+import { AnswerCheckAiError, createAnswerCheckAi } from "../services/answerCheck/ai";
+import {
+  approveScheme,
+  checkView,
+  countChecksByQuestion,
+  createPracticeChecks,
+  createUploadCheck,
+  currentScheme,
+  deleteCheck,
+  getSettings,
+  prepareQuestion,
+  recheck,
+  recheckQuestion,
+  saveSchemeEdit,
+  saveSettings,
+  saveTeacherMarks,
+  setEnabled,
+  SchemeEditError,
+  schemeVersions,
+  schemeView,
+} from "../services/answerCheck/engine";
+import { ImageError, imageBytes, MAX_PAGES, prepareUpload } from "../services/answerCheck/images";
+import { customQuestionKey, pickRandomQuestion, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
+
+/**
+ * Answer checking pilot, super admins only (super admin › Answer checking). Works on the Top
+ * Scholar account (TOPSCHOLAR_ACCOUNT_ID) with that account's OpenAI key. While AI assessment is
+ * switched off, nothing that calls the AI runs (history, settings and photos stay viewable).
+ *
+ *   GET  /api/super-admin/answer-checking/overview            account, settings, scopes
+ *   PUT  /api/super-admin/answer-checking/settings
+ *   PUT  /api/super-admin/answer-checking/enabled              AI assessment on / off for the account
+ *   POST /api/super-admin/answer-checking/questions/random     a written-answer question from the curriculum
+ *   GET  /api/super-admin/answer-checking/questions/search
+ *   POST /api/super-admin/answer-checking/questions/prepare    question → its marking scheme (drafted once)
+ *   GET  /api/super-admin/answer-checking/schemes/:key         current scheme + versions + checks so far
+ *   PUT  /api/super-admin/answer-checking/schemes/:key         admin edit → new approved version
+ *   POST /api/super-admin/answer-checking/schemes/:key/approve
+ *   POST /api/super-admin/answer-checking/schemes/:key/recheck re-mark every answer with the current scheme
+ *   POST /api/super-admin/answer-checking/checks               photos → a check (runs in the background)
+ *   POST /api/super-admin/answer-checking/practice             practice answers at chosen levels → checks
+ *   GET  /api/super-admin/answer-checking/checks               history (filters) + accuracy summary
+ *   GET  /api/super-admin/answer-checking/checks/:id
+ *   POST /api/super-admin/answer-checking/checks/:id/recheck
+ *   PUT  /api/super-admin/answer-checking/checks/:id/teacher   teacher's marks and comment
+ *   DELETE /api/super-admin/answer-checking/checks/:id
+ *   GET  /api/super-admin/answer-checking/images/:id           a photo or marked sheet
+ *   GET  /api/super-admin/answer-checking/export.csv
+ */
+const router = Router();
+const superAdmin = [requireAuth, requireRole("super_admin")];
+const BASE = "/api/super-admin/answer-checking";
+
+function accountId(): string {
+  return TOPSCHOLAR_ACCOUNT_ID;
+}
+
+function userId(req: Request): string | null {
+  return (req as any).user?.id ?? null;
+}
+
+function fail(res: Response, where: string, error: unknown) {
+  if (error instanceof SchemeEditError) return res.status(400).json({ error: error.message, problems: error.problems });
+  if (error instanceof ImageError || error instanceof AnswerCheckAiError) return res.status(400).json({ error: (error as Error).message });
+  console.error(`[Answer Check] ${where}:`, error);
+  return res.status(500).json({ error: "Something went wrong. Please try again." });
+}
+
+const OFF_MESSAGE = "AI assessment is switched off for this account. Switch it on first.";
+
+/** Refuses anything that would call the AI while AI assessment is off. */
+async function requireOn(res: Response): Promise<boolean> {
+  if ((await getSettings(accountId())).enabled) return true;
+  res.status(409).json({ error: OFF_MESSAGE, code: "assessment_off" });
+  return false;
+}
+
+const questionSchema = z.object({
+  questionKey: z.string().max(200).optional(),
+  source: z.enum(["cms", "custom", "generated"]).default("custom"),
+  questionText: z.string().trim().min(5, "Type the question.").max(4000),
+  modelAnswer: z.string().max(10000).default(""),
+  questionKind: z.enum(QUESTION_KINDS).nullable().default(null),
+  board: z.string().max(100).nullable().default(null),
+  medium: z.string().max(100).nullable().default(null),
+  grade: z.string().max(50).nullable().default(null),
+  subject: z.string().max(200).nullable().default(null),
+  chapter: z.string().max(300).nullable().default(null),
+  maxMarks: z.coerce.number().min(0.5, "Max marks must be at least 0.5.").max(100, "Max marks can be at most 100."),
+});
+
+/** A question key is only trusted for curriculum questions; typed ones are keyed by their text. */
+function toQuestionInput(body: z.infer<typeof questionSchema>): QuestionInput {
+  const key = body.source === "cms" && body.questionKey?.startsWith("cms:") ? body.questionKey
+    : body.source === "generated" && body.questionKey?.startsWith("gen:") ? body.questionKey
+    : customQuestionKey(body.questionText);
+  return { ...body, questionKey: key, source: key.startsWith("cms:") ? "cms" : key.startsWith("gen:") ? "generated" : "custom", maxMarks: Math.round(body.maxMarks * 2) / 2 };
+}
+
+router.get(`${BASE}/overview`, ...superAdmin, async (_req, res) => {
+  try {
+    const id = accountId();
+    const [account] = await db.select({ id: businessAccounts.id, name: businessAccounts.name, hasKey: sql<boolean>`(${businessAccounts.openaiApiKey} is not null and ${businessAccounts.openaiApiKey} <> '')` })
+      .from(businessAccounts).where(eq(businessAccounts.id, id));
+    if (!account) return res.json({ account: null, settings: await getSettings(id), scopes: [] });
+    let scopes: Awaited<ReturnType<typeof scopeOptions>> = [];
+    let scopesError: string | null = null;
+    try { scopes = await scopeOptions(id); } catch (e: any) { scopesError = "Could not load the curriculum list from the content store."; console.warn("[Answer Check] scopes:", e?.message || e); }
+    const [counts] = await db.select({ checks: sql<number>`count(*)::int`, schemes: sql<number>`count(distinct ${answerChecks.questionKey})::int` })
+      .from(answerChecks).where(eq(answerChecks.businessAccountId, id));
+    res.json({ account, settings: await getSettings(id), scopes, scopesError, counts });
+  } catch (e) { fail(res, "overview", e); }
+});
+
+router.put(`${BASE}/settings`, ...superAdmin, async (req, res) => {
+  try { res.json({ settings: await saveSettings(accountId(), req.body?.settings ?? req.body, userId(req)) }); }
+  catch (e) { fail(res, "settings", e); }
+});
+
+router.put(`${BASE}/enabled`, ...superAdmin, async (req, res) => {
+  if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "Say whether to switch it on or off." });
+  try { res.json({ settings: await setEnabled(accountId(), req.body.enabled, userId(req)) }); }
+  catch (e) { fail(res, "enabled", e); }
+});
+
+router.post(`${BASE}/questions/random`, ...superAdmin, async (_req, res) => {
+  try {
+    if (!(await requireOn(res))) return;
+    const id = accountId();
+    const settings = await getSettings(id);
+    const ai = await createAnswerCheckAi(id).catch(() => null);
+    const picked = await pickRandomQuestion(id, settings, ai);
+    res.json(picked);
+  } catch (e) { fail(res, "random question", e); }
+});
+
+router.get(`${BASE}/questions/search`, ...superAdmin, async (req, res) => {
+  try {
+    const q = (k: string) => String(req.query[k] ?? "").trim();
+    if (!q("board") || !q("medium") || !q("grade")) return res.status(400).json({ error: "Choose a board, medium and grade." });
+    const results = await searchQuestions(accountId(), { board: q("board"), medium: q("medium"), grade: q("grade"), subject: q("subject") }, q("q"), await getSettings(accountId()));
+    res.json({ results });
+  } catch (e) { fail(res, "search", e); }
+});
+
+router.post(`${BASE}/questions/prepare`, ...superAdmin, async (req, res) => {
+  const parsed = questionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Check the question." });
+  try {
+    if (!(await requireOn(res))) return;
+    const row = await prepareQuestion(accountId(), toQuestionInput(parsed.data), userId(req));
+    res.json({ scheme: schemeView(row) });
+  } catch (e) { fail(res, "prepare", e); }
+});
+
+router.get(`${BASE}/schemes/:key`, ...superAdmin, async (req, res) => {
+  try {
+    const versions = await schemeVersions(accountId(), req.params.key);
+    if (!versions.length) return res.status(404).json({ error: "Question not found." });
+    const counts = await countChecksByQuestion(accountId(), [req.params.key]);
+    res.json({ scheme: schemeView(versions[0]), versions: versions.map(schemeView), checks: counts.get(req.params.key) || 0 });
+  } catch (e) { fail(res, "scheme", e); }
+});
+
+router.put(`${BASE}/schemes/:key`, ...superAdmin, async (req, res) => {
+  try {
+    const maxMarks = req.body?.maxMarks === undefined ? undefined : Number(req.body.maxMarks);
+    const row = await saveSchemeEdit(accountId(), req.params.key, { scheme: req.body?.scheme, maxMarks, modelAnswer: typeof req.body?.modelAnswer === "string" ? req.body.modelAnswer : undefined }, userId(req));
+    res.json({ scheme: schemeView(row) });
+  } catch (e) { fail(res, "scheme edit", e); }
+});
+
+router.post(`${BASE}/schemes/:key/approve`, ...superAdmin, async (req, res) => {
+  try {
+    const row = await approveScheme(accountId(), req.params.key, userId(req));
+    if (!row) return res.status(404).json({ error: "Question not found." });
+    res.json({ scheme: schemeView(row) });
+  } catch (e) { fail(res, "approve", e); }
+});
+
+router.post(`${BASE}/schemes/:key/recheck`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(res))) return;
+    res.json({ started: await recheckQuestion(accountId(), req.params.key) });
+  } catch (e) { fail(res, "recheck question", e); }
+});
+
+const DATA_URL = /^data:(image\/(?:jpeg|jpg|png|webp|heic|heif));base64,([A-Za-z0-9+/=\s]+)$/i;
+
+router.post(`${BASE}/checks`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(res))) return;
+    const key = String(req.body?.questionKey || "");
+    const scheme = key ? await currentScheme(accountId(), key) : null;
+    if (!scheme) return res.status(400).json({ error: "Choose the question first." });
+    const raw: unknown[] = Array.isArray(req.body?.photos) ? req.body.photos : [];
+    if (!raw.length) return res.status(400).json({ error: "Add at least one photo of the answer." });
+    if (raw.length > MAX_PAGES) return res.status(400).json({ error: `At most ${MAX_PAGES} photos per answer.` });
+    const photos: Buffer[] = [];
+    for (const p of raw) {
+      const m = typeof p === "string" ? DATA_URL.exec(p) : null;
+      if (!m) return res.status(400).json({ error: "Photos must be JPG or PNG images." });
+      photos.push(await prepareUpload(Buffer.from(m[2], "base64")));
+    }
+    const check = await createUploadCheck({ businessAccountId: accountId(), scheme, photos, studentLabel: String(req.body?.studentLabel || "").trim(), userId: userId(req) });
+    res.json({ id: check.id });
+  } catch (e) { fail(res, "create check", e); }
+});
+
+router.post(`${BASE}/practice`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(res))) return;
+    const key = String(req.body?.questionKey || "");
+    const scheme = key ? await currentScheme(accountId(), key) : null;
+    if (!scheme) return res.status(400).json({ error: "Choose the question first." });
+    const levels = (Array.isArray(req.body?.levels) ? req.body.levels : ["strong", "average", "weak"])
+      .filter((l: unknown, i: number, a: unknown[]) => PRACTICE_LEVELS.includes(l as PracticeLevel) && a.indexOf(l) === i) as PracticeLevel[];
+    if (!levels.length) return res.status(400).json({ error: "Choose at least one kind of practice answer." });
+    const batchId = crypto.randomUUID();
+    const rows = await createPracticeChecks({ businessAccountId: accountId(), scheme, levels, userId: userId(req), batchId });
+    res.json({ batchId, ids: rows.map(r => r.id) });
+  } catch (e) { fail(res, "practice", e); }
+});
+
+async function viewsFor(rows: Array<typeof answerChecks.$inferSelect>) {
+  if (!rows.length) return [];
+  const schemeIds = Array.from(new Set(rows.map(r => r.schemeId).filter((x): x is string => !!x)));
+  const schemes = schemeIds.length ? await db.select().from(answerMarkingSchemes).where(inArray(answerMarkingSchemes.id, schemeIds)) : [];
+  const images = await db.select({ id: answerCheckImages.id, checkId: answerCheckImages.checkId, kind: answerCheckImages.kind, position: answerCheckImages.position })
+    .from(answerCheckImages).where(inArray(answerCheckImages.checkId, rows.map(r => r.id)));
+  return rows.map(r => checkView(r, schemes.find(s => s.id === r.schemeId) ?? null, images.filter(i => i.checkId === r.id).sort((a, b) => a.position - b.position)));
+}
+
+router.get(`${BASE}/checks`, ...superAdmin, async (req, res) => {
+  try {
+    const conds = [eq(answerChecks.businessAccountId, accountId())];
+    if (req.query.batchId) conds.push(eq(answerChecks.batchId, String(req.query.batchId)));
+    if (req.query.questionKey) conds.push(eq(answerChecks.questionKey, String(req.query.questionKey)));
+    if (req.query.ids) conds.push(inArray(answerChecks.id, String(req.query.ids).split(",").filter(Boolean).slice(0, 50)));
+    if (req.query.source === "upload" || req.query.source === "practice") conds.push(eq(answerChecks.source, String(req.query.source)));
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    const rows = await db.select().from(answerChecks).where(and(...conds)).orderBy(desc(answerChecks.createdAt)).limit(limit);
+    const views = await viewsFor(rows);
+    const finished = views.filter(v => v.aiMarks !== null);
+    res.json({
+      checks: views,
+      accuracy: {
+        teacher: accuracySummary(finished.map(v => ({ aiMarks: v.aiMarks, maxMarks: v.maxMarks, compareMarks: v.teacherMarks }))),
+        expected: accuracySummary(finished.map(v => ({ aiMarks: v.aiMarks, maxMarks: v.maxMarks, compareMarks: v.expectedMarks }))),
+        averageSeconds: finished.length ? Math.round(finished.reduce((a, v) => a + (v.durationMs || 0), 0) / finished.length / 100) / 10 : 0,
+        averageCostUsd: finished.length ? finished.reduce((a, v) => a + v.costUsd, 0) / finished.length : 0,
+        needsTeacher: views.filter(v => v.status === "needs_teacher").length,
+        total: views.length,
+      },
+    });
+  } catch (e) { fail(res, "list checks", e); }
+});
+
+router.get(`${BASE}/checks/:id`, ...superAdmin, async (req, res) => {
+  try {
+    const [row] = await db.select().from(answerChecks).where(and(eq(answerChecks.id, req.params.id), eq(answerChecks.businessAccountId, accountId())));
+    if (!row) return res.status(404).json({ error: "Check not found." });
+    const [view] = await viewsFor([row]);
+    res.json({ check: view });
+  } catch (e) { fail(res, "get check", e); }
+});
+
+router.post(`${BASE}/checks/:id/recheck`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(res))) return;
+    const row = await recheck(accountId(), req.params.id, { reread: req.body?.reread === true });
+    if (!row) return res.status(404).json({ error: "Check not found." });
+    res.json({ ok: true });
+  } catch (e) { fail(res, "recheck", e); }
+});
+
+router.put(`${BASE}/checks/:id/teacher`, ...superAdmin, async (req, res) => {
+  try {
+    const raw = req.body?.marks;
+    const marks = raw === null || raw === undefined || raw === "" ? null : Number(raw);
+    const row = await saveTeacherMarks(accountId(), req.params.id, { marks, comment: String(req.body?.comment || "") }, userId(req));
+    if (!row) return res.status(404).json({ error: "Check not found." });
+    res.json({ ok: true });
+  } catch (e) { fail(res, "teacher marks", e); }
+});
+
+router.delete(`${BASE}/checks/:id`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await deleteCheck(accountId(), req.params.id))) return res.status(404).json({ error: "Check not found." });
+    res.json({ ok: true });
+  } catch (e) { fail(res, "delete check", e); }
+});
+
+router.get(`${BASE}/images/:id`, ...superAdmin, async (req, res) => {
+  try {
+    const [row] = await db.select().from(answerCheckImages).where(and(eq(answerCheckImages.id, req.params.id), eq(answerCheckImages.businessAccountId, accountId())));
+    if (!row) return res.status(404).end();
+    const bytes = await imageBytes(row);
+    if (!bytes) return res.status(404).end();
+    res.setHeader("Content-Type", row.contentType);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.send(bytes);
+  } catch (e) { fail(res, "image", e); }
+});
+
+function csvCell(v: unknown): string {
+  const s = v === null || v === undefined ? "" : String(v);
+  const safe = /^[=+\-@]/.test(s) ? `'${s}` : s;
+  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+router.get(`${BASE}/export.csv`, ...superAdmin, async (_req, res) => {
+  try {
+    const rows = await db.select().from(answerChecks).where(eq(answerChecks.businessAccountId, accountId())).orderBy(desc(answerChecks.createdAt)).limit(5000);
+    const views = await viewsFor(rows);
+    const header = ["Date", "Question", "Subject", "Grade", "Student", "Source", "Practice level", "Status", "Max marks", "AI marks", "Teacher marks", "Expected marks", "AI-written %", "AI-written status", "Confidence", "Seconds", "Cost (USD)", "Teacher comment"];
+    const lines = [header.join(",")];
+    for (const v of views) {
+      lines.push([
+        new Date(v.createdAt).toISOString(), v.scheme?.questionText, v.scheme?.subject, v.scheme?.grade, v.studentLabel, v.source, v.practiceLevel, v.status,
+        v.maxMarks, v.aiMarks, v.teacherMarks, v.expectedMarks, (v.aiWritten as any)?.percent, (v.aiWritten as any)?.status, (v.result as any)?.confidence,
+        v.durationMs ? Math.round(v.durationMs / 1000) : "", v.costUsd.toFixed(4), v.teacherComment,
+      ].map(csvCell).join(","));
+    }
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="answer-checks.csv"`);
+    res.send("﻿" + lines.join("\n"));
+  } catch (e) { fail(res, "export", e); }
+});
+
+export default router;

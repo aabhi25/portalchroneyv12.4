@@ -5887,3 +5887,109 @@ export type TopscholarPlanRun = typeof topscholarPlanRuns.$inferSelect;
 export type InsertTopscholarPlanRun = typeof topscholarPlanRuns.$inferInsert;
 export type TopscholarPlanRunItem = typeof topscholarPlanRunItems.$inferSelect;
 export type InsertTopscholarPlanRunItem = typeof topscholarPlanRunItems.$inferInsert;
+
+// ---- Answer checking pilot (super admin › Answer checking) ----------------------------------
+// The AI reads a student's handwritten answer and marks it against a saved marking scheme.
+// Rules and types live in shared/answerCheck.ts.
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
+
+// One row per account: what the random question picks from, per-subject rules, teacher thresholds.
+export const answerCheckSettings = pgTable("answer_check_settings", {
+  businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default({}), // AnswerCheckSettings
+  updatedBy: varchar("updated_by"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// Marking schemes, one row per version: a question's current scheme is its highest version.
+// A check keeps the id of the version it was marked with, so old marks stay explainable.
+export const answerMarkingSchemes = pgTable("answer_marking_schemes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  questionKey: text("question_key").notNull(), // "cms:<cpId>:<question id>" or "custom:<hash of the question text>"
+  version: integer("version").notNull().default(1),
+  source: text("source").notNull().default("custom"), // 'cms' | 'custom'
+  questionText: text("question_text").notNull(),
+  modelAnswer: text("model_answer").notNull().default(""),
+  modelAnswerByAi: boolean("model_answer_by_ai").notNull().default(false),
+  questionKind: text("question_kind"), // QuestionKind
+  board: text("board"),
+  medium: text("medium"),
+  grade: text("grade"),
+  subject: text("subject"),
+  chapter: text("chapter"),
+  maxMarks: numeric("max_marks", { precision: 5, scale: 1 }).notNull(),
+  scheme: jsonb("scheme").$type<Record<string, unknown>>().notNull().default({}), // MarkingScheme
+  status: text("status").notNull().default("ai_draft"), // 'ai_draft' | 'approved'
+  createdBy: varchar("created_by"),
+  approvedBy: varchar("approved_by"),
+  approvedAt: timestamp("approved_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("answer_marking_schemes_question_version_idx").on(table.businessAccountId, table.questionKey, table.version),
+]);
+
+// One checked answer (an upload, or a practice answer the AI wrote at a known level).
+export const answerChecks = pgTable("answer_checks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  schemeId: varchar("scheme_id").references(() => answerMarkingSchemes.id, { onDelete: "set null" }),
+  questionKey: text("question_key").notNull(),
+  batchId: varchar("batch_id"), // checks started together ("Run full test")
+  status: text("status").notNull().default("checking"), // 'checking' | 'done' | 'needs_teacher' | 'failed'
+  source: text("source").notNull().default("upload"), // 'upload' | 'practice'
+  practiceLevel: text("practice_level"), // PracticeLevel, for practice answers
+  practiceText: text("practice_text"), // what the practice answer says (written by the AI)
+  expectedMarks: numeric("expected_marks", { precision: 5, scale: 1 }), // marks a practice answer was written to earn
+  studentLabel: text("student_label").notNull().default(""),
+  maxMarks: numeric("max_marks", { precision: 5, scale: 1 }).notNull(),
+  readText: text("read_text"), // what the AI read from the photos
+  reading: jsonb("reading").$type<Record<string, unknown>>(), // { legibility, unclear[], blank, notes }
+  result: jsonb("result").$type<Record<string, unknown>>(), // MarkResult + feedback, missing points, confidence
+  aiMarks: numeric("ai_marks", { precision: 5, scale: 1 }),
+  aiWritten: jsonb("ai_written").$type<Record<string, unknown>>(), // { percent, status, confidence, signals }
+  teacherReasons: jsonb("teacher_reasons").$type<string[]>().notNull().default([]),
+  teacherMarks: numeric("teacher_marks", { precision: 5, scale: 1 }),
+  teacherComment: text("teacher_comment"),
+  teacherBy: varchar("teacher_by"),
+  teacherAt: timestamp("teacher_at"),
+  history: jsonb("history").$type<Record<string, unknown>[]>().notNull().default([]), // earlier markings (re-checks)
+  model: text("model"),
+  costUsd: numeric("cost_usd", { precision: 10, scale: 5 }).notNull().default("0"),
+  durationMs: integer("duration_ms"),
+  error: text("error"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("answer_checks_account_created_idx").on(table.businessAccountId, table.createdAt),
+  index("answer_checks_question_idx").on(table.businessAccountId, table.questionKey),
+  index("answer_checks_batch_idx").on(table.batchId),
+]);
+
+// Photos: the student's answer pages and the marked sheet. Kept in the private R2 bucket when
+// one is configured, else in the database (never in the public bucket).
+export const answerCheckImages = pgTable("answer_check_images", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  checkId: varchar("check_id").notNull().references(() => answerChecks.id, { onDelete: "cascade" }),
+  businessAccountId: varchar("business_account_id").notNull(),
+  kind: text("kind").notNull(), // 'answer' | 'marked'
+  position: integer("position").notNull().default(0),
+  storageRef: text("storage_ref"), // r2private://… when stored in R2
+  data: bytea("data"), // when stored in the database
+  contentType: text("content_type").notNull().default("image/jpeg"),
+  byteSize: integer("byte_size").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  index("answer_check_images_check_idx").on(table.checkId),
+]);
+
+export type AnswerCheckSettingsRow = typeof answerCheckSettings.$inferSelect;
+export type AnswerMarkingSchemeRow = typeof answerMarkingSchemes.$inferSelect;
+export type AnswerCheckRow = typeof answerChecks.$inferSelect;
+export type AnswerCheckImageRow = typeof answerCheckImages.$inferSelect;

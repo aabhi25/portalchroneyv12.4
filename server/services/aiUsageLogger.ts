@@ -38,6 +38,12 @@ const DEFAULT_MODEL_PRICING: Record<string, ModelRates> = {
     outputCostPer1k: 0.008,         // $8.00 per 1M tokens
     cachedInputCostPer1k: 0.0005,   // $0.50 per 1M tokens
   },
+  // Answer checking pilot (services/answerCheck): AI-written estimate and practice answers
+  'gpt-4.1-mini': {
+    inputCostPer1k: 0.0004,         // $0.40 per 1M tokens
+    outputCostPer1k: 0.0016,        // $1.60 per 1M tokens
+    cachedInputCostPer1k: 0.0001,   // $0.10 per 1M tokens
+  },
   'gpt-4o-vision': {
     inputCostPer1k: 0.0025,   // $2.50 per 1M tokens (same as gpt-4o)
     outputCostPer1k: 0.010,   // $10.00 per 1M tokens
@@ -151,6 +157,17 @@ export function normalizeUsage(
     tokensInputCached: cached,
     tokensInputCachedAudio: cachedAudio,
   };
+}
+
+/**
+ * Cost in USD of one text call at the built-in rates (unknown models priced as gpt-4o-mini, like
+ * the logger). For features that show their own running cost; ai_usage_events stays the record.
+ */
+export function estimateTextCostUsd(model: string, tokensInput: number, tokensOutput: number, tokensInputCached = 0): number {
+  const r = DEFAULT_MODEL_PRICING[model] ?? DEFAULT_MODEL_PRICING['gpt-4o-mini'];
+  const u = normalizeUsage(tokensInput, tokensOutput, { tokensInputCached });
+  const fresh = u.tokensInput - u.tokensInputCached;
+  return (fresh * r.inputCostPer1k + u.tokensInputCached * (r.cachedInputCostPer1k ?? r.inputCostPer1k) + u.tokensOutput * r.outputCostPer1k) / 1000;
 }
 
 class AIUsageLogger {

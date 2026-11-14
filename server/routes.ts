@@ -115,6 +115,7 @@ import accountSetupRoutes from "./routes/accountSetup";
 import aiUsageRoutes from "./routes/aiUsage";
 import agencyRoutes from "./routes/agencies";
 import invoiceRoutes from "./routes/invoices";
+import answerCheckingRoutes from "./routes/answerChecking";
 import avatarRoutes from "./routes/avatar";
 import photoSearchRoutes from "./routes/photoSearch";
 import { productHasGeminiFingerprint } from "./services/visualSearchEngine";
@@ -662,6 +663,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(aiUsageRoutes);
   app.use(agencyRoutes);
   app.use(invoiceRoutes);
+  app.use(answerCheckingRoutes);
   // Live AI avatar (super-admin settings, widget sessions). Close avatar sessions
   // a previous process left open (billed to their last heartbeat).
   app.use(avatarRoutes);
