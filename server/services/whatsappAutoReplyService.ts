@@ -1749,6 +1749,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       console.log(`[WhatsApp Auto-Reply] Total messages in context: ${messages.length}`);
 
       let tools: any[] | undefined;
+      let forceProductSearch = false;
       const extraToolsOn = !!(businessAccountId && (opts.appointmentsEnabled || opts.ordersEnabled));
       if (businessAccountId && (useProductCatalog || extraToolsOn)) {
         try {
@@ -1774,6 +1775,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
               const whatsappProductTool = JSON.parse(JSON.stringify(productTool));
               whatsappProductTool.function.description = 'Search and retrieve products from the catalog when the user asks about products, items, or wants to browse. Returns product details including name, price, and description. Product images will be sent as separate image messages automatically. Keep to 3-5 products max.';
               tools = [whatsappProductTool];
+              forceProductSearch = true;
               console.log(`[WhatsApp Auto-Reply] Product tool included for this message`);
             }
             // Only tools this account has switched on (and never inside a guided flow — the caller decides).
@@ -1800,6 +1802,8 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       }
       if (leadPlan?.captureLead) {
         tools = [...(tools || []), CAPTURE_LEAD_TOOL];
+        // A message with contact details may need capture_lead this turn: let the AI choose.
+        forceProductSearch = false;
       }
 
       // Same model as the website (Master AI Settings), short WhatsApp-sized replies.
@@ -1812,7 +1816,14 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       };
       if (tools && tools.length > 0) {
         requestParams.tools = tools;
-        requestParams.tool_choice = "auto";
+        // A product question always searches the catalog (so the products are shown), even when the
+        // answer seems to be in the chat already; the reply after the search chooses freely.
+        // Only when searching is the only thing on offer (never over a booking / order step).
+        if (tools.some((t: any) => t.function?.name !== 'get_products')) forceProductSearch = false;
+        requestParams.tool_choice = forceProductSearch
+          ? { type: "function", function: { name: "get_products" } }
+          : "auto";
+        if (forceProductSearch) console.log(`[WhatsApp Auto-Reply] Product question: catalog search required`);
       }
 
       let response: any;
