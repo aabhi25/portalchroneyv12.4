@@ -393,6 +393,13 @@
       "when": 1794644516725,
       "tag": "0055_woocommerce_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1794646349446,
+      "tag": "0056_woocommerce_keys",
+      "breakpoints": true
     }
   ]
 }

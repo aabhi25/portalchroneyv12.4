@@ -13,7 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { WOO_STATUS_KEY, type WooStatus } from "@/lib/wooCommerce";
-import { AlertTriangle, CheckCircle2, Globe, Loader2, PlugZap, RefreshCw, Unplug, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Globe, KeyRound, Link2, Loader2, Pencil, PlugZap, RefreshCw, Unplug, XCircle } from "lucide-react";
 
 
 const hoursLabel = (h: number) =>
@@ -22,7 +22,8 @@ const hoursLabel = (h: number) =>
 const when = (iso: string) => `${format(new Date(iso), "d MMM, h:mm a")} (${formatDistanceToNow(new Date(iso), { addSuffix: true })})`;
 
 /**
- * Products → WooCommerce (super admins). Reads the website's public product list (no keys).
+ * Products → WooCommerce (super admins). Reads the website's public product list (no keys), or the
+ * WooCommerce API with the website's consumer key + secret (saved encrypted, never shown again).
  * While connected the chat uses only the website's products; manual products are kept but not used.
  */
 export default function WooCommerce() {
@@ -35,12 +36,24 @@ export default function WooCommerce() {
   const [syncHours, setSyncHours] = useState("24");
   const [test, setTest] = useState<{ success: boolean; message: string; sample?: string[]; currency?: string | null } | null>(null);
   const [confirm, setConfirm] = useState<"connect" | "disconnect" | null>(null);
+  const [readMode, setReadMode] = useState<"public" | "keys">("public");
+  const [consumerKey, setConsumerKey] = useState("");
+  const [consumerSecret, setConsumerSecret] = useState("");
+  // Changing the website, the way it's read or the keys while connected.
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     if (!status) return;
     if (status.storeUrl) setStoreUrl(u => u || status.storeUrl!);
     setSyncHours(String(status.syncHours));
   }, [status?.storeUrl, status?.syncHours]);
+  useEffect(() => {
+    if (status?.readMode) setReadMode(status.readMode);
+  }, [status?.readMode]);
+
+  const readBody = () => readMode === "keys"
+    ? { storeUrl, readMode, consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim() }
+    : { storeUrl, readMode };
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: WOO_STATUS_KEY });
@@ -48,16 +61,22 @@ export default function WooCommerce() {
   };
 
   const testMutation = useMutation({
-    mutationFn: () => apiRequest<{ success: boolean; message: string; sample?: string[]; currency?: string | null }>("POST", "/api/woocommerce/test", { storeUrl }),
+    mutationFn: () => apiRequest<{ success: boolean; message: string; sample?: string[]; currency?: string | null }>("POST", "/api/woocommerce/test", readBody()),
     onSuccess: (r) => setTest(r),
     onError: (e: Error) => setTest({ success: false, message: e.message }),
   });
 
   const connectMutation = useMutation({
-    mutationFn: () => apiRequest<{ success: boolean; message: string }>("POST", "/api/woocommerce/connect", { storeUrl, syncHours: Number(syncHours) }),
+    mutationFn: () => apiRequest<{ success: boolean; message: string }>("POST", "/api/woocommerce/connect", { ...readBody(), syncHours: Number(syncHours) }),
     onSuccess: (r) => {
       setConfirm(null);
       refresh();
+      if (r.success) {
+        setEditing(false);
+        setTest(null);
+        setConsumerKey("");
+        setConsumerSecret("");
+      }
       toast(r.success ? { title: "WooCommerce connected", description: r.message } : { title: "Couldn't connect", description: r.message, variant: "destructive" });
     },
     onError: (e: Error) => toast({ title: "Couldn't connect", description: e.message, variant: "destructive" }),
@@ -123,15 +142,17 @@ export default function WooCommerce() {
               : <Badge variant="secondary" className="ml-1" data-testid="badge-woo-not-connected">Not connected</Badge>}
           </CardTitle>
           <CardDescription>
-            Products are read from the website's public product list, so no keys are needed. While connected, the chat
-            (website, WhatsApp, Instagram, Facebook and voice) uses only the website's products.
+            Products are read from the website: from its public product list (just the website link), or with the
+            WooCommerce keys from the website's developer. While connected, the chat (website, WhatsApp, Instagram,
+            Facebook and voice) uses only the website's products.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {status.connected ? (
+          {status.connected && !editing ? (
             <>
               <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
                 <div>Website: <a href={status.storeUrl ?? "#"} target="_blank" rel="noreferrer" className="font-medium text-primary underline" data-testid="text-woo-store-url">{status.storeUrl}</a></div>
+                <div data-testid="text-woo-read-mode">Reading: {status.readMode === "keys" ? "with the website's keys (saved encrypted)" : "the public product list (no keys)"}</div>
                 <div data-testid="text-woo-live">Live in chat: <span className="font-medium">{status.counts.website} website products</span> · {status.counts.manual} manual products kept, not used in chat</div>
                 {status.lastSyncedAt && <div className="text-muted-foreground">Last good sync: {when(status.lastSyncedAt)}</div>}
                 {status.nextSyncAt && !status.syncing && <div className="text-muted-foreground">Next sync: {format(new Date(status.nextSyncAt), "d MMM, h:mm a")}</div>}
@@ -150,6 +171,9 @@ export default function WooCommerce() {
                   {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                   {busy ? "Syncing…" : "Sync now"}
                 </Button>
+                <Button variant="outline" onClick={() => { setEditing(true); setTest(null); setStoreUrl(status.storeUrl || ""); }} disabled={busy} data-testid="button-woo-change">
+                  <Pencil className="mr-2 h-4 w-4" /> Change website or keys
+                </Button>
                 <Button variant="outline" onClick={() => setConfirm("disconnect")} disabled={busy} data-testid="button-woo-disconnect">
                   <Unplug className="mr-2 h-4 w-4" /> Disconnect
                 </Button>
@@ -161,6 +185,46 @@ export default function WooCommerce() {
                 <Label htmlFor="woo-url">Website address</Label>
                 <Input id="woo-url" placeholder="https://example.com" value={storeUrl} onChange={(e) => { setStoreUrl(e.target.value); setTest(null); }} data-testid="input-woo-store-url" />
               </div>
+              <div className="space-y-1.5">
+                <Label>How to read the products</Label>
+                <div className="grid gap-2 sm:grid-cols-2" role="radiogroup">
+                  {([
+                    { mode: "public" as const, icon: Link2, title: "Website link only", text: "Reads the public product list that shoppers see. No keys needed." },
+                    { mode: "keys" as const, icon: KeyRound, title: "Website link + keys", text: "Uses the WooCommerce keys from the website's developer. Also works if the public list is switched off or blocked." },
+                  ]).map(o => (
+                    <button
+                      key={o.mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={readMode === o.mode}
+                      onClick={() => { setReadMode(o.mode); setTest(null); }}
+                      className={`rounded-md border p-3 text-left text-sm transition-colors ${readMode === o.mode ? "border-purple-500 bg-purple-50 ring-1 ring-purple-500 dark:bg-purple-950/30" : "hover:bg-muted/50"}`}
+                      data-testid={`radio-woo-mode-${o.mode}`}
+                    >
+                      <div className="flex items-center gap-2 font-medium"><o.icon className="h-4 w-4 text-purple-600" /> {o.title}</div>
+                      <div className="mt-1 text-muted-foreground">{o.text}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {readMode === "keys" && (
+                <div className="space-y-3 rounded-md border p-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="woo-key">Consumer key</Label>
+                      <Input id="woo-key" type="password" autoComplete="off" placeholder={status.hasKeys ? "Saved (leave empty to keep)" : "ck_…"} value={consumerKey} onChange={(e) => { setConsumerKey(e.target.value); setTest(null); }} data-testid="input-woo-consumer-key" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="woo-secret">Consumer secret</Label>
+                      <Input id="woo-secret" type="password" autoComplete="off" placeholder={status.hasKeys ? "Saved (leave empty to keep)" : "cs_…"} value={consumerSecret} onChange={(e) => { setConsumerSecret(e.target.value); setTest(null); }} data-testid="input-woo-consumer-secret" />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Made on the website in WooCommerce › Settings › Advanced › REST API. Read access is enough. The keys are saved
+                    encrypted when Connect works, and are never shown again.
+                  </p>
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label>Re-read the website</Label>
                 <Select value={syncHours} onValueChange={setSyncHours}>
@@ -183,11 +247,19 @@ export default function WooCommerce() {
                 <Button variant="outline" onClick={() => testMutation.mutate()} disabled={!storeUrl.trim() || testMutation.isPending} data-testid="button-woo-test">
                   {testMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Test connection
                 </Button>
-                <Button onClick={() => setConfirm("connect")} disabled={!storeUrl.trim() || busy} data-testid="button-woo-connect">
-                  {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />} Connect
+                <Button onClick={() => (status.connected ? connectMutation.mutate() : setConfirm("connect"))} disabled={!storeUrl.trim() || busy} data-testid="button-woo-connect">
+                  {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />} {status.connected ? "Save and sync" : "Connect"}
                 </Button>
+                {status.connected && (
+                  <Button variant="ghost" onClick={() => { setEditing(false); setTest(null); setReadMode(status.readMode); setConsumerKey(""); setConsumerSecret(""); setStoreUrl(status.storeUrl || ""); }} disabled={busy} data-testid="button-woo-cancel-change">
+                    Cancel
+                  </Button>
+                )}
               </div>
-              {status.counts.website > 0 && (
+              {status.connected && (
+                <p className="text-sm text-muted-foreground">The new settings are saved only if the sync works; until then the current connection keeps running.</p>
+              )}
+              {!status.connected && status.counts.website > 0 && (
                 <p className="text-sm text-muted-foreground">{status.counts.website} website products from an earlier connection are kept (not used in chat). Connecting again refreshes them.</p>
               )}
             </>

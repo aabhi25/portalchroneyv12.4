@@ -2,11 +2,15 @@ import dns from "dns/promises";
 import net from "net";
 
 /**
- * Reads a WooCommerce website's public product list (Store API, /wp-json/wc/store/v1/products).
- * No keys: it returns what any visitor can see, i.e. published, visible products.
+ * Reads a WooCommerce website's products, in one of two ways:
+ *  - public: the public product list (Store API, /wp-json/wc/store/v1/products). No keys; it returns what
+ *    any visitor can see, i.e. published, visible products.
+ *  - keys: the WooCommerce REST API (/wp-json/wc/v3/products) with the website's consumer key + secret
+ *    (Read access is enough). Published products only; hidden ones are skipped.
  *
  * Only https websites on public addresses are allowed (the address is typed by a person, and the server
- * fetches it). WOO_ALLOW_LOCAL_STORE=1 lets a local stand-in store on http://localhost be used in tests.
+ * fetches it). Keys are only ever sent to the website's own address (never after a redirect elsewhere) and
+ * never logged. WOO_ALLOW_LOCAL_STORE=1 lets a local stand-in store on http://localhost be used in tests.
  */
 
 const PER_PAGE = 100;
@@ -33,7 +37,16 @@ export interface WooFetchResult {
   currency: string | null;
 }
 
-export class WooStoreError extends Error {}
+export class WooStoreError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+  }
+}
+
+export interface WooKeys {
+  key: string;
+  secret: string;
+}
 
 const allowLocal = () => process.env.WOO_ALLOW_LOCAL_STORE === "1";
 
@@ -90,18 +103,27 @@ async function assertPublicHost(url: URL): Promise<void> {
   if (addresses.some(isPrivateIp)) throw new WooStoreError("That website address isn't allowed");
 }
 
-/** GET with redirects checked one by one (each hop must be a public https address). */
-async function getJson(urlString: string): Promise<{ body: unknown; headers: Headers }> {
+/**
+ * GET with redirects checked one by one (each hop must be a public https address).
+ * With keys: Basic auth, or the keys as query parameters (`keysInQuery`) for servers that drop the
+ * Authorization header; a redirect to another website is refused so the keys never leave the site.
+ */
+async function getJson(urlString: string, opts: { keys?: WooKeys; keysInQuery?: boolean } = {}): Promise<{ body: unknown; headers: Headers }> {
   let url = new URL(urlString);
+  const origin = url.origin;
   for (let hop = 0; hop < 4; hop++) {
     await assertPublicHost(url);
+    const target = new URL(url);
+    const headers: Record<string, string> = { Accept: "application/json", "User-Agent": USER_AGENT };
+    if (opts.keys && opts.keysInQuery) {
+      target.searchParams.set("consumer_key", opts.keys.key);
+      target.searchParams.set("consumer_secret", opts.keys.secret);
+    } else if (opts.keys) {
+      headers.Authorization = `Basic ${Buffer.from(`${opts.keys.key}:${opts.keys.secret}`).toString("base64")}`;
+    }
     let res: Response;
     try {
-      res = await fetch(url, {
-        redirect: "manual",
-        headers: { Accept: "application/json", "User-Agent": USER_AGENT },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+      res = await fetch(target, { redirect: "manual", headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     } catch (e: any) {
       const reason = e?.name === "TimeoutError" ? "it took too long to answer" : "it could not be reached";
       throw new WooStoreError(`The website didn't respond (${reason}). Try again later.`);
@@ -110,17 +132,27 @@ async function getJson(urlString: string): Promise<{ body: unknown; headers: Hea
       const next = new URL(res.headers.get("location")!, url);
       const local = next.hostname === "localhost" || next.hostname === "127.0.0.1";
       if (next.protocol !== "https:" && !(local && allowLocal())) throw new WooStoreError("The website redirected to a non-https address");
+      if (opts.keys && next.origin !== origin) {
+        throw new WooStoreError(`The website moved to ${next.origin}. Use that address instead.`);
+      }
+      // Never carry the keys in a redirected address.
+      next.searchParams.delete("consumer_key");
+      next.searchParams.delete("consumer_secret");
       url = next;
       continue;
     }
     if (res.status === 404) {
-      throw new WooStoreError("This website has no public WooCommerce product list (the Store API may be switched off, or it isn't a WooCommerce site).");
+      throw new WooStoreError(opts.keys
+        ? "This website has no WooCommerce API at /wp-json/wc/v3 (is it a WooCommerce site, with the REST API on?)."
+        : "This website has no public WooCommerce product list (the Store API may be switched off, or it isn't a WooCommerce site). Try connecting with the website's keys.", 404);
     }
     if (res.status === 401 || res.status === 403) {
-      throw new WooStoreError("The website refused our request (a security plugin or firewall may be blocking servers). Ask the website's developer to allow it.");
+      throw new WooStoreError(opts.keys
+        ? "The website didn't accept the keys. Check the consumer key and secret, and that they have Read access."
+        : "The website refused our request (a security plugin or firewall may be blocking servers). Ask the website's developer to allow it.", res.status);
     }
-    if (res.status === 429) throw new WooStoreError("The website asked us to slow down. Try again in a while.");
-    if (!res.ok) throw new WooStoreError(`The website answered with an error (${res.status}). Try again later.`);
+    if (res.status === 429) throw new WooStoreError("The website asked us to slow down. Try again in a while.", 429);
+    if (!res.ok) throw new WooStoreError(`The website answered with an error (${res.status}). Try again later.`, res.status);
     const text = await res.text();
     try {
       return { body: JSON.parse(text), headers: res.headers };
@@ -129,6 +161,16 @@ async function getJson(urlString: string): Promise<{ body: unknown; headers: Hea
     }
   }
   throw new WooStoreError("The website redirected too many times");
+}
+
+/** Keyed request: Basic auth first; servers that drop the Authorization header get the keys as parameters. */
+async function getWithKeys(urlString: string, keys: WooKeys): Promise<{ body: unknown; headers: Headers }> {
+  try {
+    return await getJson(urlString, { keys });
+  } catch (e) {
+    if (!(e instanceof WooStoreError) || e.status !== 401) throw e;
+    return await getJson(urlString, { keys, keysInQuery: true });
+  }
 }
 
 const NAMED_ENTITIES: Record<string, string> = {
@@ -213,8 +255,75 @@ export function mapStoreProduct(p: any): WooProduct | null {
   };
 }
 
-/** Every product on the website, all pages. Throws WooStoreError with a plain message. */
-export async function fetchStoreProducts(storeUrl: string, opts: { maxPages?: number } = {}): Promise<WooFetchResult> {
+/** Decimal price from the REST API ("2500", "2500.5", "") → "2500.00" or null. */
+function decimal(v: unknown): string | null {
+  if (typeof v !== "string" || !/^\d+(\.\d+)?$/.test(v.trim())) return null;
+  return Number(v).toFixed(2);
+}
+
+/** One REST API (wc/v3, with keys) product → our fields, or null for unpublished / hidden ones. Exported for tests. */
+export function mapRestProduct(p: any): WooProduct | null {
+  if (!p || typeof p !== "object" || p.id == null || typeof p.name !== "string") return null;
+  if (p.status && p.status !== "publish") return null;
+  if (p.catalog_visibility === "hidden") return null;
+  const variable = p.type === "variable";
+  const price = decimal(p.price);
+  const regular = decimal(p.regular_price);
+  const regularPrice = !variable && p.on_sale && regular && price && Number(regular) > Number(price) ? regular : null;
+
+  const parts: string[] = [];
+  const short = typeof p.short_description === "string" ? htmlToText(p.short_description) : "";
+  const long = typeof p.description === "string" ? htmlToText(p.description) : "";
+  if (short) parts.push(short);
+  if (long && long !== short) parts.push(long);
+  if (Array.isArray(p.attributes)) {
+    for (const a of p.attributes) {
+      if (!a?.variation || !Array.isArray(a.options) || a.options.length === 0) continue;
+      parts.push(`${decodeEntities(String(a.name))}: ${a.options.map((o: any) => decodeEntities(String(o))).join(", ")}`);
+    }
+  }
+  if (variable && price) parts.push("Price depends on the option chosen (shown price is the lowest).");
+  let description = parts.join("\n\n");
+  if (description.length > MAX_DESCRIPTION) description = `${description.slice(0, MAX_DESCRIPTION).trimEnd()}…`;
+
+  const names = (list: unknown) => Array.isArray(list)
+    ? Array.from(new Set(list.map((c: any) => decodeEntities(String(c?.name ?? "")).trim()).filter(Boolean)))
+    : [];
+  const image = Array.isArray(p.images) ? p.images.find((i: any) => typeof i?.src === "string" && i.src) : null;
+  return {
+    externalId: String(p.id),
+    name: decodeEntities(p.name).trim() || `Product ${p.id}`,
+    description,
+    price,
+    regularPrice,
+    imageUrl: image ? image.src : null,
+    productUrl: typeof p.permalink === "string" && /^https?:\/\//.test(p.permalink) ? p.permalink : null,
+    sku: typeof p.sku === "string" && p.sku.trim() ? p.sku.trim() : null,
+    stockStatus: p.stock_status === "outofstock" ? "out_of_stock" : p.stock_status === "onbackorder" ? "on_backorder" : "in_stock",
+    categories: names(p.categories),
+    tags: names(p.tags),
+  };
+}
+
+const listUrl = (base: string, keys: WooKeys | undefined, perPage: number, page: number) => keys
+  ? `${base}/wp-json/wc/v3/products?per_page=${perPage}&page=${page}&status=publish`
+  : `${base}/wp-json/wc/store/v1/products?per_page=${perPage}&page=${page}`;
+
+const getList = (url: string, keys: WooKeys | undefined) => (keys ? getWithKeys(url, keys) : getJson(url));
+
+/** The shop's currency with keys (the REST product list has none). Null if the key can't read it. */
+async function keyedCurrency(base: string, keys: WooKeys): Promise<string | null> {
+  try {
+    const { body } = await getWithKeys(`${base}/wp-json/wc/v3/data/currencies/current`, keys);
+    const code = (body as any)?.code;
+    return typeof code === "string" && /^[A-Z]{3}$/.test(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every published product on the website, all pages. Throws WooStoreError with a plain message. */
+export async function fetchStoreProducts(storeUrl: string, opts: { maxPages?: number; keys?: WooKeys } = {}): Promise<WooFetchResult> {
   const base = normalizeStoreUrl(storeUrl);
   const maxPages = opts.maxPages ?? MAX_PAGES;
   const products: WooProduct[] = [];
@@ -222,7 +331,7 @@ export async function fetchStoreProducts(storeUrl: string, opts: { maxPages?: nu
   let currency: string | null = null;
   let totalPages = 1;
   for (let page = 1; page <= Math.min(totalPages, maxPages); page++) {
-    const { body, headers } = await getJson(`${base}/wp-json/wc/store/v1/products?per_page=${PER_PAGE}&page=${page}`);
+    const { body, headers } = await getList(listUrl(base, opts.keys, PER_PAGE, page), opts.keys);
     if (!Array.isArray(body)) throw new WooStoreError("The website sent back something that isn't a product list.");
     if (page === 1) {
       totalPages = Math.max(1, Number(headers.get("x-wp-totalpages")) || 1);
@@ -230,27 +339,28 @@ export async function fetchStoreProducts(storeUrl: string, opts: { maxPages?: nu
       if (totalPages > maxPages) throw new WooStoreError(`The website has more than ${maxPages * PER_PAGE} products, which is more than the sync can read.`);
     }
     for (const raw of body) {
-      const mapped = mapStoreProduct(raw);
+      const mapped = opts.keys ? mapRestProduct(raw) : mapStoreProduct(raw);
       if (!mapped || seen.has(mapped.externalId)) continue;
       seen.add(mapped.externalId);
       products.push(mapped);
-      if (!currency && typeof (raw as any)?.prices?.currency_code === "string") currency = (raw as any).prices.currency_code;
+      if (!opts.keys && !currency && typeof (raw as any)?.prices?.currency_code === "string") currency = (raw as any).prices.currency_code;
     }
     if (body.length < PER_PAGE && page >= totalPages) break;
   }
+  if (opts.keys) currency = await keyedCurrency(base, opts.keys);
   return { products, currency };
 }
 
 /** Quick check for "Test connection": first page only. */
-export async function testStore(storeUrl: string): Promise<{ total: number; sample: string[]; currency: string | null }> {
+export async function testStore(storeUrl: string, keys?: WooKeys): Promise<{ total: number; sample: string[]; currency: string | null }> {
   const base = normalizeStoreUrl(storeUrl);
-  const { body, headers } = await getJson(`${base}/wp-json/wc/store/v1/products?per_page=5&page=1`);
+  const { body, headers } = await getList(listUrl(base, keys, 5, 1), keys);
   if (!Array.isArray(body)) throw new WooStoreError("The website sent back something that isn't a product list.");
-  const mapped = body.map(mapStoreProduct).filter((p): p is WooProduct => !!p);
+  const mapped = body.map(p => (keys ? mapRestProduct(p) : mapStoreProduct(p))).filter((p): p is WooProduct => !!p);
   const total = Number(headers.get("x-wp-total"));
   return {
     total: Number.isFinite(total) && total >= 0 ? total : mapped.length,
     sample: mapped.slice(0, 5).map(p => p.name),
-    currency: (body[0] as any)?.prices?.currency_code ?? null,
+    currency: keys ? await keyedCurrency(base, keys) : (body[0] as any)?.prices?.currency_code ?? null,
   };
 }

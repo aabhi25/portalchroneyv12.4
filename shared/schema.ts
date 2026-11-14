@@ -1016,6 +1016,9 @@ export const widgetSettings = pgTable("widget_settings", {
   // WooCommerce product sync - reads the website's public product list (no keys). While connected, the chat
   // uses only the website's products; manual products are kept but not used (server/services/productSourceSwitch.ts).
   wooStoreUrl: text("woo_store_url"), // e.g. "https://accurex.net"
+  wooReadMode: text("woo_read_mode").notNull().default("public"), // 'public' = public product list (no keys) | 'keys' = WooCommerce REST API with keys
+  wooConsumerKey: text("woo_consumer_key"), // encrypted (ck_...), only for 'keys'
+  wooConsumerSecret: text("woo_consumer_secret"), // encrypted (cs_...), only for 'keys'
   wooConnected: text("woo_connected").notNull().default("false"), // 'true' once the first sync worked; 'false' after Disconnect
   wooSyncHours: integer("woo_sync_hours").notNull().default(24), // Re-read the website every N hours
   wooSyncStatus: text("woo_sync_status").notNull().default("idle"), // 'idle' | 'syncing' | 'completed' | 'failed'

@@ -6,6 +6,8 @@ export interface WooStatus {
   connected: boolean;
   liveSource: "woocommerce" | "catalog";
   storeUrl: string | null;
+  readMode: "public" | "keys";
+  hasKeys: boolean;
   syncHours: number;
   syncHourChoices: number[];
   syncing: boolean;

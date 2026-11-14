@@ -3,7 +3,8 @@ import { db } from "../db";
 import { reportError } from "../lib/errorReporter";
 import { businessAccounts, categories, productCategories, products, productTags, tags, widgetSettings } from "@shared/schema";
 import { storage } from "../storage";
-import { fetchStoreProducts, normalizeStoreUrl, WooStoreError, type WooProduct } from "./wooCommerceStore";
+import { fetchStoreProducts, normalizeStoreUrl, WooStoreError, type WooKeys, type WooProduct } from "./wooCommerceStore";
+import { decrypt, encrypt } from "./encryptionService";
 import { onProductSourceChanged } from "./productSourceSwitch";
 
 /**
@@ -123,14 +124,28 @@ function productFields(p: WooProduct) {
   };
 }
 
+export type WooReadMode = "public" | "keys";
+
+/** The saved keys, decrypted (only for the 'keys' read mode). */
+export function savedWooKeys(settings: { wooConsumerKey?: string | null; wooConsumerSecret?: string | null } | null | undefined): WooKeys | undefined {
+  if (!settings?.wooConsumerKey || !settings?.wooConsumerSecret) return undefined;
+  try {
+    return { key: decrypt(settings.wooConsumerKey), secret: decrypt(settings.wooConsumerSecret) };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * One sync. Never throws: problems come back in the result (and are saved for the WooCommerce page).
- * `connect`: the first sync from the Connect button; on success the chat switches to the website products.
+ * `connect`: the sync from the Connect button with the address / read mode / keys typed there. Only when
+ * it works are they saved (keys encrypted) and the chat switched to the website products; a failed
+ * Connect leaves an existing connection as it was.
  */
 export async function syncWooCommerce(
   businessAccountId: string,
   trigger: WooSyncResult["trigger"],
-  opts: { storeUrl?: string } = {},
+  opts: { storeUrl?: string; readMode?: WooReadMode; keys?: WooKeys } = {},
 ): Promise<WooSyncResult> {
   if (!(await claimSync(businessAccountId))) {
     return emptyResult(trigger, "A sync is already running. Wait for it to finish.");
@@ -139,7 +154,10 @@ export async function syncWooCommerce(
   const previous = (settings?.wooLastResult as WooSyncResult | null) ?? null;
   try {
     const storeUrl = normalizeStoreUrl(opts.storeUrl ?? settings?.wooStoreUrl);
-    const fetched = await fetchStoreProducts(storeUrl);
+    const readMode: WooReadMode = opts.readMode ?? (settings?.wooReadMode === "keys" ? "keys" : "public");
+    const keys = readMode === "keys" ? opts.keys ?? savedWooKeys(settings) : undefined;
+    if (readMode === "keys" && !keys) throw new WooStoreError("Add the website's consumer key and secret first.");
+    const fetched = await fetchStoreProducts(storeUrl, { keys });
 
     const existing = await db
       .select()
@@ -236,7 +254,14 @@ export async function syncWooCommerce(
       total: fetched.products.length, added, updated, removed: gone.length, unchanged,
       currency: fetched.currency, ...(problems.length ? { problems: problems.slice(0, 20) } : {}),
     };
-    await finish(businessAccountId, result, trigger === "connect" ? { wooStoreUrl: storeUrl, wooConnected: "true" } : {});
+    await finish(businessAccountId, result, trigger === "connect" ? {
+      wooStoreUrl: storeUrl,
+      wooConnected: "true",
+      wooReadMode: readMode,
+      // Keys are kept only for the keys mode (encrypted); reading the public list forgets them.
+      wooConsumerKey: keys ? encrypt(keys.key) : null,
+      wooConsumerSecret: keys ? encrypt(keys.secret) : null,
+    } : {});
     if (trigger === "connect" || added || updated || gone.length) await onProductSourceChanged(businessAccountId);
 
     // Search fingerprints for new/changed products, a few at a time (not one call per product at once).

@@ -10,7 +10,10 @@
  *  - safety: an empty or much shorter list, a website error or another currency changes nothing and
  *    the chat keeps the last good products;
  *  - Disconnect / feature switch off → the chat is back on the manual products, website products kept;
- *  - the timer only syncs connected accounts whose time has come; one sync at a time.
+ *  - the timer only syncs connected accounts whose time has come; one sync at a time;
+ *  - reading with the website's keys (WooCommerce REST API): wrong keys, drafts and hidden products skipped,
+ *    servers that drop the Authorization header, no keys sent after a redirect to another website,
+ *    keys saved encrypted only when Connect works, switching between the two ways keeps the same products.
  *
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55571/postgres?sslmode=disable \
  *   WOO_SYNC_TEST_DB=1 npx tsx server/services/__tests__/wooCommerceSync.integration.test.ts
@@ -79,13 +82,31 @@ function startFakeOpenAI(): Promise<{ baseUrl: string; close: () => void; calls:
 }
 
 // ── Stand-in WooCommerce website (Store API) ──
-interface FakeProduct { id: number; name: string; price: number; cats: string[]; tags?: string[]; inStock?: boolean; sale?: number; html?: string; options?: string[] }
+interface FakeProduct { id: number; name: string; price: number; cats: string[]; tags?: string[]; inStock?: boolean; sale?: number; html?: string; options?: string[]; draft?: boolean; hidden?: boolean }
+const TEST_KEY = 'ck_test_key_0001';
+const TEST_SECRET = 'cs_test_secret_0001';
 const store = {
   products: [] as FakeProduct[],
   mode: 'ok' as 'ok' | 'error' | 'html' | 'empty',
   currency: 'INR',
   requests: 0,
+  stripAuthHeader: false, // like servers that drop the Authorization header
+  keyedVia: [] as string[],
 };
+const visible = (list: FakeProduct[]) => list.filter(p => !p.draft && !p.hidden);
+function restJson(p: FakeProduct, base: string) {
+  return {
+    id: p.id, name: p.name, slug: `p-${p.id}`, permalink: `${base}/product/p-${p.id}/`, type: p.options ? 'variable' : 'simple',
+    status: p.draft ? 'draft' : 'publish', catalog_visibility: p.hidden ? 'hidden' : 'visible', sku: p.id % 2 ? `SKU-${p.id}` : '',
+    price: String(p.sale ?? p.price), regular_price: p.options ? '' : String(p.price), sale_price: p.sale !== undefined ? String(p.sale) : '', on_sale: p.sale !== undefined,
+    short_description: p.html ?? `<h3>Overview</h3>\n<p>${p.name} for clinical labs &amp; hospitals.</p>`, description: '',
+    stock_status: p.inStock === false ? 'outofstock' : 'instock',
+    categories: p.cats.map((name, i) => ({ id: i + 1, name, slug: name.toLowerCase() })),
+    tags: (p.tags || []).map((name, i) => ({ id: 100 + i, name, slug: name.toLowerCase() })),
+    images: [{ id: p.id * 10, src: `${base}/img/${p.id}.webp`, name: '', alt: '' }],
+    attributes: p.options ? [{ id: 1, name: 'Pack size', variation: true, visible: true, options: p.options }] : [],
+  };
+}
 function storeJson(p: FakeProduct, base: string) {
   const paise = (n: number) => String(Math.round(n * 100));
   const range = p.options ? { min_amount: paise(p.price), max_amount: paise(p.price * 2) } : null;
@@ -114,11 +135,34 @@ function startFakeStore(): Promise<{ base: string; close: () => void }> {
       if (u.pathname === '/old-shop/wp-json/wc/store/v1/products') {
         res.writeHead(301, { location: `${base}/wp-json/wc/store/v1/products${u.search}` }); res.end(); return;
       }
+      if (u.pathname.startsWith('/elsewhere/wp-json/wc/v3/')) {
+        // Same server under another name: the keys must not follow.
+        res.writeHead(301, { location: `${base.replace('127.0.0.1', 'localhost')}${u.pathname.replace('/elsewhere', '')}${u.search}` }); res.end(); return;
+      }
+      if (u.pathname.startsWith('/wp-json/wc/v3/')) {
+        const header = store.stripAuthHeader ? '' : String(req.headers.authorization || '');
+        const viaHeader = header === `Basic ${Buffer.from(`${TEST_KEY}:${TEST_SECRET}`).toString('base64')}`;
+        const viaQuery = u.searchParams.get('consumer_key') === TEST_KEY && u.searchParams.get('consumer_secret') === TEST_SECRET;
+        if (!viaHeader && !viaQuery) { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"code":"woocommerce_rest_cannot_view"}'); return; }
+        store.keyedVia.push(viaHeader ? 'header' : 'query');
+        if (u.pathname === '/wp-json/wc/v3/data/currencies/current') {
+          res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ code: store.currency, name: 'Rupee', symbol: '₹' })); return;
+        }
+        if (u.pathname !== '/wp-json/wc/v3/products') { res.writeHead(404); res.end('{}'); return; }
+        store.requests++;
+        if (store.mode === 'error') { res.writeHead(503); res.end('busy'); return; }
+        const list = store.mode === 'empty' ? [] : store.products.filter(p => u.searchParams.get('status') !== 'publish' || !p.draft);
+        const perPage = Math.min(100, Number(u.searchParams.get('per_page')) || 10);
+        const page = Number(u.searchParams.get('page')) || 1;
+        res.writeHead(200, { 'content-type': 'application/json', 'x-wp-total': String(list.length), 'x-wp-totalpages': String(Math.max(1, Math.ceil(list.length / perPage))) });
+        res.end(JSON.stringify(list.slice((page - 1) * perPage, page * perPage).map(p => restJson(p, base))));
+        return;
+      }
       if (u.pathname !== '/wp-json/wc/store/v1/products') { res.writeHead(404); res.end('not found'); return; }
       store.requests++;
       if (store.mode === 'error') { res.writeHead(503); res.end('busy'); return; }
       if (store.mode === 'html') { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html>Checking your browser…</html>'); return; }
-      const list = store.mode === 'empty' ? [] : store.products;
+      const list = store.mode === 'empty' ? [] : visible(store.products);
       const perPage = Math.min(100, Number(u.searchParams.get('per_page')) || 10);
       const page = Number(u.searchParams.get('page')) || 1;
       const slice = list.slice((page - 1) * perPage, page * perPage);
@@ -156,7 +200,8 @@ async function main() {
   const { storage } = await import('../../storage');
   const { and, eq } = await import('drizzle-orm');
   const { businessAccounts, products, categories, widgetSettings, productCategories } = await import('@shared/schema');
-  const { normalizeStoreUrl, mapStoreProduct, testStore, WooStoreError } = await import('../wooCommerceStore');
+  const { normalizeStoreUrl, mapStoreProduct, mapRestProduct, testStore, WooStoreError } = await import('../wooCommerceStore');
+  const { decrypt } = await import('../encryptionService');
   const { syncWooCommerce, disconnectWooCommerce, wooCommerceSyncScheduler } = await import('../wooCommerceSync');
   const { getLiveProductSource, onProductSourceChanged } = await import('../productSourceSwitch');
   const { productTextEmbeddingService } = await import('../productTextEmbeddingService');
@@ -335,6 +380,49 @@ async function main() {
   before = store.requests;
   await wooCommerceSyncScheduler.tick();
   expect(store.requests > before, 'timer: a sync stuck for over an hour (e.g. a restart) is picked up again');
+
+  // ── 9. Reading with the website's keys ──
+  const rest = mapRestProduct({ id: 3, name: 'Kit &amp; more', status: 'publish', catalog_visibility: 'visible', type: 'simple', price: '1999', regular_price: '2500', on_sale: true, stock_status: 'onbackorder', short_description: '<p>Hi</p>', categories: [{ name: 'Hematology' }], images: [{ src: 'https://x.test/i.webp' }], permalink: 'https://x.test/p/3', sku: 'AB-1' });
+  expect(rest?.name === 'Kit & more' && rest?.price === '1999.00' && rest?.regularPrice === '2500.00' && rest?.stockStatus === 'on_backorder' && rest?.sku === 'AB-1', 'keys: product fields read', rest);
+  expect(mapRestProduct({ id: 4, name: 'Draft', status: 'draft' }) === null && mapRestProduct({ id: 5, name: 'Hidden', status: 'publish', catalog_visibility: 'hidden' }) === null, 'keys: drafts and hidden products skipped');
+  const restVar = mapRestProduct({ id: 6, name: 'Lyse', status: 'publish', type: 'variable', price: '1000', regular_price: '', attributes: [{ name: 'Size', variation: true, options: ['200ml', '1L'] }, { name: 'Brand', variation: false, options: ['X'] }] });
+  expect(restVar?.price === '1000.00' && /Size: 200ml, 1L/.test(restVar?.description || '') && !/Brand/.test(restVar?.description || ''), 'keys: product with options', restVar?.description);
+
+  store.products.push({ id: 7000, name: 'Draft on website', price: 1, cats: ['Hematology'], draft: true }, { id: 7001, name: 'Hidden on website', price: 1, cats: ['Hematology'], hidden: true });
+  let wrongKeys = '';
+  try { await testStore(site.base, { key: 'ck_wrong', secret: 'cs_wrong' }); } catch (e: any) { wrongKeys = e.message; }
+  expect(/didn't accept the keys/.test(wrongKeys), 'keys: wrong keys → plain message', wrongKeys);
+  const tk = await testStore(site.base, { key: TEST_KEY, secret: TEST_SECRET });
+  expect(tk.total === 151 && tk.currency === 'INR', 'keys: Test connection counts published products and reads the currency', tk);
+
+  const productCountBefore = (await storage.getAllProducts(A)).filter(p => p.source === 'woocommerce').length;
+  const badConnect = await syncWooCommerce(A, 'connect', { storeUrl: site.base, readMode: 'keys', keys: { key: 'ck_wrong', secret: 'cs_wrong' } });
+  const afterBad = await storage.getWidgetSettings(A);
+  expect(!badConnect.ok && afterBad?.wooReadMode === 'public' && !afterBad?.wooConsumerKey && afterBad?.wooConnected === 'true', 'keys: a failed Connect saves nothing and keeps the current connection', [badConnect.error, afterBad?.wooReadMode]);
+
+  store.keyedVia = [];
+  const keyed = await syncWooCommerce(A, 'connect', { storeUrl: site.base, readMode: 'keys', keys: { key: TEST_KEY, secret: TEST_SECRET } });
+  expect(keyed.ok && keyed.added === 0 && keyed.removed === 0 && keyed.total === 150, 'keys: switching to keys keeps the same products (no adds/removes, draft + hidden skipped)', keyed);
+  expect((await storage.getAllProducts(A)).filter(p => p.source === 'woocommerce').length === productCountBefore, 'keys: same number of website products');
+  expect(store.keyedVia.every(v => v === 'header'), 'keys: sent as a login header, not in the address', store.keyedVia);
+  const afterKeys = await storage.getWidgetSettings(A);
+  expect(afterKeys?.wooReadMode === 'keys' && afterKeys?.wooConsumerKey && afterKeys.wooConsumerKey !== TEST_KEY && !afterKeys.wooConsumerSecret?.includes(TEST_SECRET), 'keys: saved encrypted, not as typed');
+  expect(decrypt(afterKeys!.wooConsumerKey!) === TEST_KEY && decrypt(afterKeys!.wooConsumerSecret!) === TEST_SECRET, 'keys: saved keys decrypt back');
+  const keyedLater = await syncWooCommerce(A, 'manual');
+  expect(keyedLater.ok && keyedLater.unchanged === 150, 'keys: later syncs use the saved keys', keyedLater);
+
+  store.stripAuthHeader = true;
+  store.keyedVia = [];
+  const stripped = await syncWooCommerce(A, 'manual');
+  expect(stripped.ok && store.keyedVia.includes('query'), 'keys: a server that drops the login header still works (keys as parameters)', [stripped.error, store.keyedVia]);
+  store.stripAuthHeader = false;
+
+  const moved2 = await syncWooCommerce(A, 'manual', { storeUrl: `${site.base}/elsewhere` });
+  expect(!moved2.ok && /moved to http:\/\/localhost/.test(moved2.error || ''), 'keys: never sent after a redirect to another website', moved2.error);
+
+  const backPublic = await syncWooCommerce(A, 'connect', { storeUrl: site.base, readMode: 'public' });
+  const afterPublic = await storage.getWidgetSettings(A);
+  expect(backPublic.ok && backPublic.added === 0 && afterPublic?.wooReadMode === 'public' && !afterPublic?.wooConsumerKey && !afterPublic?.wooConsumerSecret, 'back to the website link only: same products, saved keys forgotten', backPublic);
 
   site.close();
   openai.close();

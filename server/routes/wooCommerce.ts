@@ -5,12 +5,13 @@ import { businessAccounts, products, widgetSettings } from "@shared/schema";
 import { requireAuth, requireBusinessAccount } from "../auth";
 import { storage } from "../storage";
 import { getLiveProductSource } from "../services/productSourceSwitch";
-import { normalizeStoreUrl, testStore, WooStoreError } from "../services/wooCommerceStore";
-import { disconnectWooCommerce, syncWooCommerce, WOO_SYNC_HOUR_CHOICES, type WooSyncResult } from "../services/wooCommerceSync";
+import { normalizeStoreUrl, testStore, WooStoreError, type WooKeys } from "../services/wooCommerceStore";
+import { disconnectWooCommerce, savedWooKeys, syncWooCommerce, WOO_SYNC_HOUR_CHOICES, type WooReadMode, type WooSyncResult } from "../services/wooCommerceSync";
 
 /**
  * WooCommerce product sync for the business account in view (Products → WooCommerce).
- * Reading the status is open to the account (the Catalog banner shows which products are live in chat);
+ * The website is read from its public product list, or with its consumer key + secret (saved encrypted,
+ * never sent back). Reading the status is open to the account (the Catalog banner shows which products are live in chat);
  * connecting, syncing and changing the timing are for super admins only.
  */
 const router = Router();
@@ -22,11 +23,33 @@ function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+/**
+ * How to read the website, from the request: the public list, or keys (typed now, or the saved ones when
+ * both boxes are left empty). Throws WooStoreError with a plain message.
+ */
+function readChoice(body: any, saved: { wooConsumerKey?: string | null; wooConsumerSecret?: string | null } | undefined): { readMode: WooReadMode; keys?: WooKeys } {
+  if (body?.readMode !== "keys") return { readMode: "public" };
+  const key = typeof body.consumerKey === "string" ? body.consumerKey.trim() : "";
+  const secret = typeof body.consumerSecret === "string" ? body.consumerSecret.trim() : "";
+  if (!key && !secret) {
+    const keys = savedWooKeys(saved);
+    if (!keys) throw new WooStoreError("Type the consumer key and consumer secret.");
+    return { readMode: "keys", keys };
+  }
+  if (!key || !secret) throw new WooStoreError("Type both the consumer key and the consumer secret.");
+  if (!key.startsWith("ck_")) throw new WooStoreError("The consumer key starts with ck_. Check that the two boxes aren't swapped.");
+  if (!secret.startsWith("cs_")) throw new WooStoreError("The consumer secret starts with cs_. Check that the two boxes aren't swapped.");
+  return { readMode: "keys", keys: { key, secret } };
+}
+
 async function loadState(businessAccountId: string) {
   const [row] = await db
     .select({
       featureOn: businessAccounts.wooCommerceEnabled,
       storeUrl: widgetSettings.wooStoreUrl,
+      readMode: widgetSettings.wooReadMode,
+      consumerKey: widgetSettings.wooConsumerKey,
+      consumerSecret: widgetSettings.wooConsumerSecret,
       connected: widgetSettings.wooConnected,
       syncHours: widgetSettings.wooSyncHours,
       status: widgetSettings.wooSyncStatus,
@@ -66,6 +89,9 @@ router.get("/api/woocommerce/status", requireAuth, requireBusinessAccount, async
       connected,
       liveSource: await getLiveProductSource(businessAccountId),
       storeUrl: state.storeUrl ?? null,
+      readMode: state.readMode === "keys" ? "keys" : "public",
+      // Keys are never sent back, only whether they are saved.
+      hasKeys: !!(state.consumerKey && state.consumerSecret),
       syncHours,
       syncHourChoices: WOO_SYNC_HOUR_CHOICES,
       syncing: state.status === "syncing",
@@ -82,7 +108,10 @@ router.get("/api/woocommerce/status", requireAuth, requireBusinessAccount, async
 
 router.post("/api/woocommerce/test", requireAuth, requireBusinessAccount, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await testStore(normalizeStoreUrl(req.body?.storeUrl));
+    const businessAccountId = accountOf(req);
+    if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+    const { keys } = readChoice(req.body, await storage.getWidgetSettings(businessAccountId));
+    const result = await testStore(normalizeStoreUrl(req.body?.storeUrl), keys);
     res.json({
       success: true,
       ...result,
@@ -101,8 +130,10 @@ router.post("/api/woocommerce/connect", requireAuth, requireBusinessAccount, req
     const state = await loadState(businessAccountId);
     if (state?.featureOn !== "true") return res.status(400).json({ error: "Switch WooCommerce on in Features first." });
     let storeUrl: string;
+    let choice: ReturnType<typeof readChoice>;
     try {
       storeUrl = normalizeStoreUrl(req.body?.storeUrl);
+      choice = readChoice(req.body, await storage.getWidgetSettings(businessAccountId));
     } catch (e: any) {
       return res.status(400).json({ error: e.message });
     }
@@ -111,7 +142,7 @@ router.post("/api/woocommerce/connect", requireAuth, requireBusinessAccount, req
       await storage.upsertWidgetSettings(businessAccountId, { wooSyncHours: hours });
     }
     // The chat switches to the website's products only if this first sync works.
-    const result = await syncWooCommerce(businessAccountId, "connect", { storeUrl });
+    const result = await syncWooCommerce(businessAccountId, "connect", { storeUrl, ...choice });
     res.json({ success: result.ok, result, message: result.ok ? `Connected. ${result.total} products are now used in chat.` : result.error });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
