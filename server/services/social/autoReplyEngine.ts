@@ -1202,7 +1202,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       let tools: any[] | undefined;
       if (businessAccountId) {
         try {
-          const allProducts = await storage.getAllProducts(businessAccountId);
+          const allProducts = await storage.getChatProducts(businessAccountId);
           const hasProducts = allProducts.length > 0;
           if (hasProducts) {
             const historyForTools = conversationHistory.slice(-6).map(m => ({ role: m.role, content: m.content }));

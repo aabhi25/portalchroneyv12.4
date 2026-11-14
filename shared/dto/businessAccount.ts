@@ -14,8 +14,9 @@ export const isVistaOn = (ba: { productTier: ProductTier | string | null | undef
 export type SystemMode = 'full' | 'essential';
 
 // BusinessAccountDto with normalized boolean feature flags for API/client
-export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "appointmentsEnabled" | "voiceModeEnabled" | "visualSearchEnabled" | "jewelryShowcaseEnabled" | "supportTicketsEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled" | "chroneyEnabled" | "k12EducationEnabled" | "k12ImageUploadEnabled" | "k12ContentOnlyMode" | "k12VerbatimContentMode" | "jobPortalEnabled" | "demoOrdersEnabled" | "whatsappMarketingEnabled" | "leadsExportEnabled" | "leadPhoneMaskingEnabled" | "aiCallingEnabled" | "systemMode"> & {
+export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "wooCommerceEnabled" | "appointmentsEnabled" | "voiceModeEnabled" | "visualSearchEnabled" | "jewelryShowcaseEnabled" | "supportTicketsEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled" | "chroneyEnabled" | "k12EducationEnabled" | "k12ImageUploadEnabled" | "k12ContentOnlyMode" | "k12VerbatimContentMode" | "jobPortalEnabled" | "demoOrdersEnabled" | "whatsappMarketingEnabled" | "leadsExportEnabled" | "leadPhoneMaskingEnabled" | "aiCallingEnabled" | "systemMode"> & {
   shopifyEnabled: boolean;
+  wooCommerceEnabled: boolean;
   appointmentsEnabled: boolean;
   voiceModeEnabled: boolean;
   visualSearchEnabled: boolean;
@@ -48,6 +49,7 @@ export function toBusinessAccountDto(account: BusinessAccount): BusinessAccountD
   return {
     ...account,
     shopifyEnabled: account.shopifyEnabled === "true",
+    wooCommerceEnabled: account.wooCommerceEnabled === "true",
     appointmentsEnabled: account.appointmentsEnabled === "true",
     voiceModeEnabled: account.voiceModeEnabled === "true",
     visualSearchEnabled: account.visualSearchEnabled === "true",
@@ -77,6 +79,7 @@ export function fromBusinessAccountDto(dto: BusinessAccountDto): BusinessAccount
   return {
     ...dto,
     shopifyEnabled: dto.shopifyEnabled ? "true" : "false",
+    wooCommerceEnabled: dto.wooCommerceEnabled ? "true" : "false",
     appointmentsEnabled: dto.appointmentsEnabled ? "true" : "false",
     voiceModeEnabled: dto.voiceModeEnabled ? "true" : "false",
     visualSearchEnabled: dto.visualSearchEnabled ? "true" : "false",

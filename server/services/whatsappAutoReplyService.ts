@@ -1703,7 +1703,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
       const extraToolsOn = !!(businessAccountId && (opts.appointmentsEnabled || opts.ordersEnabled));
       if (businessAccountId && (useProductCatalog || extraToolsOn)) {
         try {
-          const hasProducts = useProductCatalog ? (await storage.getAllProducts(businessAccountId)).length > 0 : false;
+          const hasProducts = useProductCatalog ? (await storage.getChatProducts(businessAccountId)).length > 0 : false;
           if (hasProducts || extraToolsOn) {
             const historyForTools = conversationHistory.slice(-6).map(m => ({ role: m.role, content: m.content }));
             // Same selection as the website. Without appointment / order features this is exactly

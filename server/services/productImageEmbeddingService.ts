@@ -259,6 +259,9 @@ class ProductImageEmbeddingService {
     try {
       const allResults: ProductSearchResult[] = [];
       const seenProductIds = new Set<string>();
+      // Only the products the chat may use (website products while WooCommerce is connected).
+      const { getLiveProductSource, liveProductCondition } = await import('./productSourceSwitch');
+      const liveOnly = liveProductCondition(await getLiveProductSource(businessAccountId));
 
       // First search the multi-item jewelry embeddings table with JOIN to products (avoid N+1)
       try {
@@ -282,12 +285,14 @@ class ProductImageEmbeddingService {
                   eq(productJewelryEmbeddings.businessAccountId, businessAccountId),
                   sql`${productJewelryEmbeddings.embedding} IS NOT NULL`,
                   productHasGeminiFingerprint,
+                  liveOnly,
                   sql`(${productJewelryEmbeddings.jewelryType} = ${jewelryTypeFilter} OR LOWER(${productJewelryEmbeddings.jewelryType}) = 'others')`
                 )
               : and(
                   eq(productJewelryEmbeddings.businessAccountId, businessAccountId),
                   sql`${productJewelryEmbeddings.embedding} IS NOT NULL`,
-                  productHasGeminiFingerprint
+                  productHasGeminiFingerprint,
+                  liveOnly
                 )
           )
           .orderBy(sql`${productJewelryEmbeddings.embedding} <=> ${JSON.stringify(queryEmbedding)}::vector`)
@@ -334,13 +339,15 @@ class ProductImageEmbeddingService {
                 eq(products.businessAccountId, businessAccountId),
                 sql`${products.imageEmbedding} IS NOT NULL`,
                 productHasGeminiFingerprint,
+                liveOnly,
                 // Products fingerprinted from the full photo may have no detected type: keep them in.
                 sql`(${products.detectedJewelryType} = ${jewelryTypeFilter} OR LOWER(${products.detectedJewelryType}) = 'others' OR ${products.detectedJewelryType} IS NULL)`
               )
             : and(
                 eq(products.businessAccountId, businessAccountId),
                 sql`${products.imageEmbedding} IS NOT NULL`,
-                productHasGeminiFingerprint
+                productHasGeminiFingerprint,
+                liveOnly
               )
         )
         .orderBy(sql`${products.imageEmbedding} <=> ${JSON.stringify(queryEmbedding)}::vector`)

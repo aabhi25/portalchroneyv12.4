@@ -44,7 +44,7 @@ class UnifiedVisualSearchService {
         if (match.source === 'erp') continue;
         const score = geminiMatchScore(match.similarity);
         if (score < minSimilarity) continue;
-        const product = await storage.getProduct(match.id, businessAccountId);
+        const product = await storage.getChatProduct(match.id, businessAccountId);
         if (product) results.push({ product, similarity: score, matchType: this.getMatchType(score) });
       }
       return results;

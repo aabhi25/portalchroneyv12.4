@@ -83,6 +83,7 @@ import VoiceEmbed from "@/pages/VoiceEmbed";
 import VoiceOrbEmbed from "@/pages/VoiceOrbEmbed";
 import ImportExcel from "@/pages/ImportExcel";
 import Shopify from "@/pages/Shopify";
+import WooCommerce from "@/pages/WooCommerce";
 import DemoOrders from "@/pages/DemoOrders";
 import ScanDocs from "@/pages/ScanDocs";
 import UrlTraining from "@/pages/UrlTraining";
@@ -404,6 +405,7 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/products" component={AdminProducts} />
                 <Route path="/products/import-excel" component={ImportExcel} />
                 <Route path="/admin/shopify" component={Shopify} />
+                <Route path="/admin/woocommerce" component={WooCommerce} />
                 <Route path="/admin/demo-orders" component={DemoOrders} />
                 <Route path="/admin/smart-discounts" component={SmartDiscountsHub} />
                 <Route path="/admin/smart-discounts/urgency-offers" component={UrgencyOffersSettings} />

@@ -16,6 +16,7 @@ import {
 } from "@shared/schema";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { safeDecrypt } from "./encryptionService";
+import { chatProductsWhere } from "./productSourceSwitch";
 import { marketingCampaignService } from "./marketingCampaignService";
 import { restrictedReplyLanguage, channelConversationKey, checkReplyLanguage, ourText, type ChannelReplyLanguage } from "./language/channelReplyLanguage";
 import { translateFixedText } from "./language/languageText";
@@ -84,7 +85,7 @@ async function buildKnowledgeContext({ campaign, businessAccountId }: BuildConte
         price: products.price,
       })
       .from(products)
-      .where(eq(products.businessAccountId, businessAccountId))
+      .where(await chatProductsWhere(businessAccountId))
       .limit(30);
     if (productRows.length > 0) {
       blocks.push(

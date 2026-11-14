@@ -106,6 +106,8 @@ function cleanLandingUrl(value: unknown): string | undefined {
 }
 import dataRetentionRoutes from "./routes/dataRetention";
 import merittoRoutes from "./routes/meritto";
+import wooCommerceRoutes from "./routes/wooCommerce";
+import { getLiveProductSource, liveProductCondition } from "./services/productSourceSwitch";
 import settingsCopyRoutes from "./routes/settingsCopy";
 import accountArchiveRoutes from "./routes/accountArchive";
 import { imageUsedByOtherAccount } from "./services/settingsCopyService";
@@ -653,6 +655,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(whatsappHandoffRoutes);
   app.use(dataRetentionRoutes);
   app.use(merittoRoutes);
+  app.use(wooCommerceRoutes);
   app.use(settingsCopyRoutes);
   app.use(accountArchiveRoutes);
   app.use(accountSetupRoutes);
@@ -1336,7 +1339,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Get all products for this business with categories/tags
-      const allProducts = await storage.getAllProducts(businessAccountId);
+      const allProducts = await storage.getChatProducts(businessAccountId);
       const productsWithMeta = await Promise.all(
         allProducts.map(async (p) => {
           const categories = await storage.getProductCategories(p.id);
@@ -3102,11 +3105,11 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       
       if (featuredIds && Array.isArray(featuredIds) && featuredIds.length > 0) {
         // Fetch specific featured products
-        const allProducts = await storage.getAllProducts(businessAccountId as string);
+        const allProducts = await storage.getChatProducts(businessAccountId as string);
         products = allProducts.filter(p => featuredIds.includes(p.id));
       } else {
         // Auto-select: Get most recent products with images
-        const allProducts = await storage.getAllProducts(businessAccountId as string);
+        const allProducts = await storage.getChatProducts(businessAccountId as string);
         products = allProducts
           .filter(p => p.imageUrl)
           .slice(0, 6);
@@ -5483,7 +5486,8 @@ If you cannot determine the category or the image doesn't match any category, re
                 and(
                   eq(products.businessAccountId, businessAccountId),
                   sql`${products.fullImageEmbedding} IS NOT NULL`,
-                  productHasGeminiFingerprint
+                  productHasGeminiFingerprint,
+                  liveProductCondition(await getLiveProductSource(businessAccountId))
                 )
               )
               .orderBy(sql`${products.fullImageEmbedding} <=> ${JSON.stringify(fullUploadEmbedding)}::vector`)
@@ -5723,7 +5727,7 @@ If you cannot determine the category or the image doesn't match any category, re
       } else {
         // No embeddings - fall back to all products (limited to 6)
         console.log('[Visual Match] No embeddings found, using all products (limited)');
-        const allProducts = await storage.getAllProducts(businessAccountId);
+        const allProducts = await storage.getChatProducts(businessAccountId);
         candidateProducts = allProducts.slice(0, 6).map((p: any) => ({
           id: p.id,
           name: p.name,
@@ -6209,7 +6213,8 @@ If you cannot determine the category or the image doesn't match any category, re
             and(
               eq(products.businessAccountId, businessAccountId as string),
               sql`${products.fullImageEmbedding} IS NOT NULL`,
-              productHasGeminiFingerprint
+              productHasGeminiFingerprint,
+              liveProductCondition(await getLiveProductSource(businessAccountId as string))
             )
           )
           .orderBy(sql`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`)
@@ -6617,7 +6622,8 @@ If you cannot determine the category or the image doesn't match any category, re
             and(
               eq(products.businessAccountId, businessAccountId as string),
               sql`${products.fullImageEmbedding} IS NOT NULL`,
-              productHasGeminiFingerprint
+              productHasGeminiFingerprint,
+              liveProductCondition(await getLiveProductSource(businessAccountId as string))
             )
           )
           .orderBy(sql`${products.fullImageEmbedding} <=> ${JSON.stringify(clipEmbeddingResult.embedding)}::vector`)
@@ -9780,6 +9786,14 @@ Return ONLY the refined instruction, nothing else.`
         }
         updates.shopifyEnabled = shopifyEnabled ? "true" : "false";
       }
+
+      const { wooCommerceEnabled } = req.body;
+      if (wooCommerceEnabled !== undefined) {
+        if (typeof wooCommerceEnabled !== "boolean") {
+          return res.status(400).json({ error: "wooCommerceEnabled must be a boolean" });
+        }
+        updates.wooCommerceEnabled = wooCommerceEnabled ? "true" : "false";
+      }
       
       if (appointmentsEnabled !== undefined) {
         if (typeof appointmentsEnabled !== "boolean") {
@@ -9912,6 +9926,11 @@ Return ONLY the refined instruction, nothing else.`
       }
       
       const businessAccount = await storage.updateBusinessAccountFeatures(id, updates);
+      // Switching WooCommerce off sends the chat back to the manual products (and on again to the website's).
+      if (updates.wooCommerceEnabled !== undefined) {
+        const { onProductSourceChanged } = await import("./services/productSourceSwitch");
+        await onProductSourceChanged(id);
+      }
       const { toBusinessAccountDto } = await import("@shared/dto/businessAccount");
       res.json(toBusinessAccountDto(businessAccount));
     } catch (error: any) {
@@ -22166,6 +22185,9 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
         ...req.body,
         businessAccountId
       });
+      // Website products are only made by the WooCommerce sync.
+      if (validatedData.source === 'woocommerce') validatedData.source = 'manual';
+      validatedData.externalId = null;
       const product = await storage.createProduct(validatedData);
       
       // Invalidate cached intro since products changed
@@ -22699,6 +22721,9 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       
       // Check if image URL is changing
       const oldProduct = await storage.getProduct(req.params.id, businessAccountId);
+      if (oldProduct?.source === 'woocommerce') {
+        return res.status(400).json({ error: "This product comes from the website. Change it on the website; the next sync brings the change in." });
+      }
       const imageChanging = req.body.imageUrl && req.body.imageUrl !== oldProduct?.imageUrl;
       
       const product = await storage.updateProduct(req.params.id, businessAccountId, req.body);
@@ -22763,6 +22788,12 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
             errors.push(`Skipped Shopify product: ${product.name} (read-only)`);
             continue;
           }
+          // Website products are removed on the website (the next sync removes them here)
+          if (product.source === 'woocommerce') {
+            skippedCount++;
+            errors.push(`Skipped website product: ${product.name} (remove it on the website)`);
+            continue;
+          }
 
           if (product.imageUrl) {
             // Check if it's an R2 URL and delete from R2
@@ -22806,6 +22837,9 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
       
       // Get product first to check for image
       const product = await storage.getProduct(req.params.id, businessAccountId);
+      if (product?.source === 'woocommerce') {
+        return res.status(400).json({ error: "This product comes from the website. Remove it on the website; the next sync removes it here." });
+      }
       if (product?.imageUrl) {
         // Check if it's an R2 URL and delete from R2
         const r2Key = r2Storage.extractKeyFromUrl(product.imageUrl);
@@ -27835,7 +27869,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
 
       // Gather business context
       const [products, faqs, widgetSettings, businessAccount] = await Promise.all([
-        storage.getAllProducts(businessAccountId),
+        storage.getChatProducts(businessAccountId),
         storage.getAllFaqs(businessAccountId),
         storage.getWidgetSettings(businessAccountId),
         storage.getBusinessAccount(businessAccountId)

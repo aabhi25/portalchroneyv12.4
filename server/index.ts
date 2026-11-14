@@ -23,6 +23,7 @@ import { flushUsageRecords } from "./lib/openaiClient";
 import { isShuttingDown, onShutdown } from "./lib/lifecycle";
 import { migrateK12NotesAndVideos } from "./scripts/migrateK12NotesVideos";
 import { shopifySyncScheduler } from "./services/shopifySyncScheduler";
+import { wooCommerceSyncScheduler } from "./services/wooCommerceSync";
 import { leadsquaredRetryWorker } from "./services/leadsquaredRetryWorker";
 import { crmSyncRecoveryWorker } from "./services/crmSyncRecoveryWorker";
 import { startLeadQualificationSweep } from "./services/leadQualificationService";
@@ -53,6 +54,7 @@ onShutdown("ai-usage-flush", () => flushUsageRecords(), "connections");
 // trackTimer; stop() keeps each worker's own state consistent).
 onShutdown("background-workers", () => {
   shopifySyncScheduler.stop();
+  wooCommerceSyncScheduler.stop();
   leadsquaredRetryWorker.stop();
   crmSyncRecoveryWorker.stop();
   dataRetentionWorker.stop();
@@ -350,6 +352,9 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
 
     // Start Shopify auto-sync scheduler
     shopifySyncScheduler.start();
+
+    // WooCommerce product sync: re-reads connected websites every woo_sync_hours (default 24)
+    wooCommerceSyncScheduler.start();
 
     // Start Marketing Campaigns scheduler (auto-launches scheduled campaigns)
     import("./services/marketingCampaignService").then(({ startCampaignScheduler }) => {

@@ -24,6 +24,7 @@ export type MeResponseDto = SafeUser & {
     productTier: ProductTier;
     systemMode: SystemMode;
     shopifyEnabled: boolean;
+    wooCommerceEnabled: boolean;
     appointmentsEnabled: boolean;
     voiceModeEnabled: boolean;
     jewelryShowcaseEnabled: boolean;
@@ -68,6 +69,7 @@ export function toMeResponseDto(
         productTier: businessAccount.productTier,
         systemMode: businessAccount.systemMode,
         shopifyEnabled: businessAccount.shopifyEnabled,
+        wooCommerceEnabled: businessAccount.wooCommerceEnabled,
         appointmentsEnabled: businessAccount.appointmentsEnabled,
         voiceModeEnabled: businessAccount.voiceModeEnabled,
         jewelryShowcaseEnabled: businessAccount.jewelryShowcaseEnabled,

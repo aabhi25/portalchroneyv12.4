@@ -46,7 +46,9 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Package, Upload, Check, ShoppingBag, X, FolderTree, Tags as TagsIcon, FileSpreadsheet, ChevronDown, Loader2, CheckSquare, Square, XCircle } from "lucide-react";
+import { Plus, Pencil, Trash2, Package, Upload, Check, ShoppingBag, X, FolderTree, Tags as TagsIcon, FileSpreadsheet, ChevronDown, Loader2, CheckSquare, Square, XCircle, Globe, ExternalLink, TriangleAlert } from "lucide-react";
+import { format } from "date-fns";
+import { WOO_STATUS_KEY, type WooStatus } from "@/lib/wooCommerce";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -120,6 +122,23 @@ export default function AdminProducts() {
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   
+  // Website (WooCommerce) products and hand-added products are shown on separate tabs once the
+  // account has website products; the tab whose products the chat uses opens first.
+  const { data: wooStatus } = useQuery<WooStatus>({ queryKey: WOO_STATUS_KEY });
+  const showSourceTabs = !!wooStatus && (wooStatus.connected || wooStatus.counts.website > 0);
+  const wooLive = wooStatus?.liveSource === "woocommerce";
+  const [sourceView, setSourceView] = useState<"manual" | "woocommerce">("manual");
+  const sourceViewChosen = useRef(false);
+  useEffect(() => {
+    if (!wooStatus || sourceViewChosen.current) return;
+    sourceViewChosen.current = true;
+    if (wooStatus.liveSource === "woocommerce") setSourceView("woocommerce");
+  }, [wooStatus]);
+  const listSource = showSourceTabs ? sourceView : "manual";
+  const viewingWebsite = listSource === "woocommerce";
+  // The products shown here aren't the ones the chat uses.
+  const viewNotLive = showSourceTabs && (viewingWebsite ? !wooLive : wooLive);
+
   // Infinite scroll state
   const PRODUCTS_PER_PAGE = 20;
   const [currentPage, setCurrentPage] = useState(1);
@@ -133,12 +152,12 @@ export default function AdminProducts() {
     products: Product[];
     pagination: { page: number; limit: number; total: number; totalPages: number; hasMore: boolean };
   }>({
-    queryKey: ["/api/products", "paginated", currentPage],
+    queryKey: ["/api/products", "paginated", listSource, currentPage],
     queryFn: async () => {
       const response = await apiRequest<{
         products: Product[];
         pagination: { page: number; limit: number; total: number; totalPages: number; hasMore: boolean };
-      }>("GET", `/api/products?page=${currentPage}&limit=${PRODUCTS_PER_PAGE}&source=manual`);
+      }>("GET", `/api/products?page=${currentPage}&limit=${PRODUCTS_PER_PAGE}&source=${listSource}`);
       return response;
     },
   });
@@ -170,6 +189,15 @@ export default function AdminProducts() {
     setHasMore(true);
     setIsLoadingMore(false);
   }, []);
+
+  const switchSourceView = (view: "manual" | "woocommerce") => {
+    if (view === sourceView) return;
+    sourceViewChosen.current = true;
+    setSelectionMode(false);
+    setSelectedProductIds(new Set());
+    resetPagination();
+    setSourceView(view);
+  };
 
   // Infinite scroll observer
   const loadMoreRef = useCallback((node: HTMLDivElement | null) => {
@@ -541,7 +569,57 @@ export default function AdminProducts() {
             </TabsList>
 
             <TabsContent value="products" className="mt-6">
-              {!showForm && (
+              {showSourceTabs && wooStatus && (
+                <div className="mb-4 space-y-3">
+                  <div className="rounded-xl border border-purple-200 bg-purple-50/60 px-4 py-3 text-sm dark:border-purple-900 dark:bg-purple-950/30" data-testid="banner-live-in-chat">
+                    {wooLive ? (
+                      <p>
+                        <span className="font-semibold">Live in chat: WooCommerce website</span> · {wooStatus.counts.website} products
+                        {wooStatus.lastSyncedAt && <> · last synced {format(new Date(wooStatus.lastSyncedAt), "d MMM, h:mm a")}</>}
+                      </p>
+                    ) : (
+                      <p>
+                        <span className="font-semibold">Live in chat: your manual products</span> ({wooStatus.counts.manual})
+                        {wooStatus.counts.website > 0 && <> · website products are not used while WooCommerce is disconnected</>}
+                      </p>
+                    )}
+                    {wooLive && wooStatus.lastResult && !wooStatus.lastResult.ok && (
+                      <p className="mt-1 flex items-start gap-1.5 text-amber-800 dark:text-amber-300" data-testid="text-live-sync-warning">
+                        <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        Last sync failed on {format(new Date(wooStatus.lastResult.at), "d MMM, h:mm a")}: {wooStatus.lastResult.error} The chat keeps using the products from the last good sync.
+                      </p>
+                    )}
+                  </div>
+                  <div className="inline-flex flex-wrap gap-1 rounded-lg border bg-muted/40 p-1" role="tablist">
+                    {([
+                      { view: "woocommerce" as const, label: "From WooCommerce", count: wooStatus.counts.website, live: wooLive },
+                      { view: "manual" as const, label: "Added by hand", count: wooStatus.counts.manual, live: !wooLive },
+                    ]).map(t => (
+                      <button
+                        key={t.view}
+                        type="button"
+                        role="tab"
+                        aria-selected={sourceView === t.view}
+                        onClick={() => switchSourceView(t.view)}
+                        className={`rounded-md px-3 py-1.5 text-sm transition-colors ${sourceView === t.view ? "bg-background font-semibold text-purple-900 shadow-sm dark:text-purple-200" : "text-muted-foreground hover:text-foreground"}`}
+                        data-testid={`tab-source-${t.view}`}
+                      >
+                        {t.label} ({t.count})
+                        {!t.live && <span className="ml-1.5 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-300">Not used in chat</span>}
+                      </button>
+                    ))}
+                  </div>
+                  {viewingWebsite && (
+                    <p className="text-sm text-muted-foreground">
+                      These products come from {wooStatus.storeUrl || "the website"}. Change, add or remove them on the website; the next sync brings the changes in.
+                    </p>
+                  )}
+                  {!viewingWebsite && wooLive && (
+                    <p className="text-sm text-muted-foreground">You can still edit these, but the chat won't use them while WooCommerce is connected.</p>
+                  )}
+                </div>
+              )}
+              {!showForm && !viewingWebsite && (
                 <div className="flex justify-between items-center gap-2 mb-4">
                   <div className="flex items-center gap-2">
                     {selectionMode ? (
@@ -913,6 +991,8 @@ export default function AdminProducts() {
                 <p className="text-sm text-muted-foreground">Loading products...</p>
               </div>
             </div>
+          ) : !isLoading && manualProducts.length === 0 && viewingWebsite ? (
+            <div className="py-16 text-center text-sm text-muted-foreground">No website products yet. They appear here after the first sync.</div>
           ) : !isLoading && manualProducts.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 px-4">
               <div className="w-20 h-20 rounded-full bg-gradient-to-br from-purple-100 to-blue-100 dark:from-purple-900/30 dark:to-blue-900/30 flex items-center justify-center mb-4">
@@ -940,7 +1020,7 @@ export default function AdminProducts() {
               {productsWithMeta.map((product) => (
                 <div 
                   key={product.id}
-                  className={`group relative bg-card rounded-2xl overflow-hidden border shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer ${
+                  className={`group relative bg-card rounded-2xl overflow-hidden border shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer ${viewNotLive ? 'opacity-60 hover:opacity-90' : ''} ${
                     selectionMode && selectedProductIds.has(product.id) 
                       ? 'border-purple-500 ring-2 ring-purple-500/50' 
                       : 'border-border/50 hover:border-purple-200 dark:hover:border-purple-800'
@@ -1015,11 +1095,36 @@ export default function AdminProducts() {
                               Manual
                             </Badge>
                           )}
+                          {product.source === 'woocommerce' && (
+                            <Badge className="text-[10px] bg-purple-600/90 hover:bg-purple-600 text-white border-0 shadow-sm backdrop-blur-sm" data-testid={`badge-website-${product.id}`}>
+                              <Globe className="w-2.5 h-2.5 mr-1" />
+                              WooCommerce
+                            </Badge>
+                          )}
+                          {product.stockStatus === 'out_of_stock' && (
+                            <Badge className="text-[10px] bg-red-600/90 hover:bg-red-600 text-white border-0 shadow-sm backdrop-blur-sm">
+                              Out of stock
+                            </Badge>
+                          )}
                         </>
                       )}
                     </div>
                     
-                    {!selectionMode && (
+                    {!selectionMode && product.source === 'woocommerce' && product.productUrl && (
+                      <div className="absolute top-3 right-3 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
+                        <a
+                          href={product.productUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="View on website"
+                          className="grid h-8 w-8 place-items-center rounded-full shadow-lg bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm hover:bg-white dark:hover:bg-gray-800"
+                          data-testid={`link-website-${product.id}`}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      </div>
+                    )}
+                    {!selectionMode && product.source !== 'woocommerce' && (
                       <div className="absolute top-3 right-3 flex gap-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
                         <Button
                           size="sm"
@@ -1233,6 +1338,7 @@ export default function AdminProducts() {
                   <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Price</Label>
                   <p className="text-base text-muted-foreground">
                     {viewingProduct.price ? `${currencySymbol}${viewingProduct.price}` : "Price available upon inquiry"}
+                    {viewingProduct.stockStatus === 'out_of_stock' && <span className="ml-2 text-sm font-medium text-red-600">Out of stock</span>}
                   </p>
                 </div>
               </div>
@@ -1242,6 +1348,16 @@ export default function AdminProducts() {
             <Button variant="outline" onClick={() => setViewDialogOpen(false)}>
               Close
             </Button>
+            {viewingProduct?.source === 'woocommerce' ? (
+              viewingProduct.productUrl && (
+                <Button asChild className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
+                  <a href={viewingProduct.productUrl} target="_blank" rel="noreferrer" data-testid="button-view-on-website">
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    View on website
+                  </a>
+                </Button>
+              )
+            ) : (
             <Button 
               onClick={() => {
                 if (viewingProduct) {
@@ -1254,6 +1370,7 @@ export default function AdminProducts() {
               <Pencil className="h-4 w-4 mr-2" />
               Edit
             </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

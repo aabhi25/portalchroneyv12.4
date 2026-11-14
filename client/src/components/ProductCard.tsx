@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ShoppingBag, ShoppingCart, Check, GitCompare, ChevronRight, Loader2, Sparkles } from "lucide-react";
+import { ShoppingBag, ShoppingCart, Check, GitCompare, ChevronRight, Loader2, Sparkles, ExternalLink } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import {
   Dialog,
@@ -22,6 +22,9 @@ interface Product {
   matchLabel?: string;
   matchQuality?: 'perfect_match' | 'very_similar' | 'somewhat_similar';
   displayLabel?: string;
+  /** Products read from the business's website (WooCommerce). */
+  productUrl?: string;
+  stockStatus?: string;
 }
 
 interface ProductPagination {
@@ -269,6 +272,9 @@ export function ProductCard({
                     </span>
                   </div>
                 )}
+                {product.stockStatus === 'out_of_stock' && (
+                  <div className="mb-2 -mt-1 text-xs font-medium text-red-600 dark:text-red-400">Out of stock</div>
+                )}
 
                 <div className="flex gap-1.5">
                   {whatsappEnabled && whatsappNumber && (
@@ -396,6 +402,9 @@ export function ProductCard({
                   <p className="text-lg text-gray-500 dark:text-gray-400">Price on inquiry</p>
                 </div>
               )}
+              {selectedProduct.stockStatus === 'out_of_stock' && (
+                <p className="-mt-2 text-sm font-medium text-red-600 dark:text-red-400">Out of stock</p>
+              )}
 
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Description</p>
@@ -412,6 +421,14 @@ export function ProductCard({
               </div>
 
               <div className="flex gap-3">
+                {selectedProduct.productUrl && (
+                  <Button asChild variant="outline" className="flex-1">
+                    <a href={selectedProduct.productUrl} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="w-4 h-4 mr-2" />
+                      View on website
+                    </a>
+                  </Button>
+                )}
                 {whatsappEnabled && whatsappNumber && (
                   <Button
                     onClick={(e) => handleWhatsAppOrder(selectedProduct, e)}

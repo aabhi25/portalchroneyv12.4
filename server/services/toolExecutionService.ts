@@ -9,6 +9,7 @@ import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 import { updateLeadWithTopics } from './topicExtractionService';
 import { extractUtmCampaign, extractUtmSource, extractUtmMedium } from './leadsquaredService';
 import { productTextEmbeddingService } from './productTextEmbeddingService';
+import { liveProductExtras } from './productSourceSwitch';
 import { productQueryParserService } from './productQueryParserService';
 import { describePhoneRule, validatePhoneNumber } from '../../shared/validation/phone';
 import {
@@ -364,6 +365,7 @@ export class ToolExecutionService {
                 description: vr.description,
                 price: vr.price,
                 imageUrl: vr.imageUrl,
+                ...liveProductExtras(vr),
                 categories: categories.map(c => ({ id: c.id, name: c.name })),
                 tags: tags.map(t => ({ id: t.id, name: t.name, color: t.color }))
               };
@@ -386,7 +388,7 @@ export class ToolExecutionService {
   ): Promise<any[]> {
     try {
       const typeLower = productType.toLowerCase();
-      const allProducts = await storage.getAllProducts(businessAccountId);
+      const allProducts = await storage.getChatProducts(businessAccountId);
       
       // Fetch categories/tags for ALL products in PARALLEL
       const productsWithMeta = await Promise.all(
@@ -430,6 +432,7 @@ export class ToolExecutionService {
           description: p.description,
           price: p.price,
           imageUrl: p.imageUrl,
+          ...liveProductExtras(p),
           categories: categories.map(c => ({ id: c.id, name: c.name })),
           tags: tags.map(t => ({ id: t.id, name: t.name, color: t.color }))
         }));
@@ -467,7 +470,7 @@ export class ToolExecutionService {
       console.log(`[Product Search] Browse intent detected for: "${params.search}" - returning random products`);
       
       // Get all products and return random selection
-      const allProducts = await storage.getAllProducts(context.businessAccountId);
+      const allProducts = await storage.getChatProducts(context.businessAccountId);
       
       if (allProducts.length > 0) {
         // Shuffle products for random selection
@@ -494,6 +497,7 @@ export class ToolExecutionService {
               description: p.description,
               price: p.price,
               imageUrl: p.imageUrl,
+              ...liveProductExtras(p),
               categories: categories.map(c => ({ id: c.id, name: c.name })),
               tags: tags.map(t => ({ id: t.id, name: t.name, color: t.color }))
             };
@@ -587,7 +591,7 @@ export class ToolExecutionService {
     // Fall back to AI-based semantic search if vector search didn't work or no search query
     if (!usedVectorSearch) {
       // Get products filtered by business account at database level
-      const businessProducts = await storage.getAllProducts(context.businessAccountId);
+      const businessProducts = await storage.getChatProducts(context.businessAccountId);
 
       // Fetch categories and tags for ALL products first (needed for search)
       const productsWithMeta = await Promise.all(
@@ -603,6 +607,7 @@ export class ToolExecutionService {
             description: p.description,
             price: p.price,
             imageUrl: p.imageUrl,
+            ...liveProductExtras(p),
             categories: categories.map(c => ({ id: c.id, name: c.name })),
             tags: tags.map(t => ({ id: t.id, name: t.name, color: t.color }))
           };

@@ -2,7 +2,7 @@ import { brandName } from "@/lib/brand";
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
-import { Briefcase, Calendar, Camera, CheckCircle2, GraduationCap, Headphones, LayoutGrid, Link2, Loader2, Megaphone, Mic, PackageOpen, School, ShoppingBag, TriangleAlert, Video } from "lucide-react";
+import { Briefcase, Calendar, Camera, CheckCircle2, Globe, GraduationCap, Headphones, LayoutGrid, Link2, Loader2, Megaphone, Mic, PackageOpen, School, ShoppingBag, TriangleAlert, Video } from "lucide-react";
 import { isJewelryTier, isVistaOn as vistaOn, type BusinessAccountDto, type ProductTier, type SystemMode } from "@shared/dto";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -34,7 +34,7 @@ import { callingApi, callingKeys, errorStatus, type SuperAdminCallingState } fro
 type FlagField =
   | "chroneyEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled"
   | "whatsappMarketingEnabled" | "voiceModeEnabled" | "supportTicketsEnabled"
-  | "appointmentsEnabled" | "demoOrdersEnabled" | "shopifyEnabled" | "visualSearchEnabled"
+  | "appointmentsEnabled" | "demoOrdersEnabled" | "shopifyEnabled" | "wooCommerceEnabled" | "visualSearchEnabled"
   | "k12EducationEnabled" | "jobPortalEnabled";
 
 const accountKey = (id: string) => ["/api/business-accounts", id];
@@ -435,6 +435,14 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
         >
           {setUpButton("shopify")}
           {flagSwitch("shopifyEnabled", "Shopify")}
+        </Row>
+        <Row
+          icon={Globe} tint="bg-purple-600" label="WooCommerce"
+          description="Use the products on the business's WooCommerce website in chat, instead of the manual products"
+          hint={!hasProducts ? "Needs Website chat, WhatsApp or Jewelry Showcase switched on to show up." : null}
+          below={ba.wooCommerceEnabled ? <p className="mt-1 text-[12px] text-gray-500" data-testid="text-woocommerce-feature-note">Connect the website in Products › WooCommerce while viewing this account. Switching this off sends the chat back to the manual products.</p> : undefined}
+        >
+          {flagSwitch("wooCommerceEnabled", "WooCommerce")}
         </Row>
       </Group>
 

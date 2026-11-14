@@ -2390,7 +2390,7 @@ Response:`;
           storage.getBusinessAccount(context.businessAccountId),
           storage.getWidgetSettings(context.businessAccountId),
           storage.getLeadByConversation(conversationId, context.businessAccountId),
-          storage.getAllProducts(context.businessAccountId)
+          storage.getChatProducts(context.businessAccountId)
         ])
       ]);
       systemContext += ragContext;
@@ -3411,7 +3411,7 @@ Response:`;
       const accountConfigP = quiet(Promise.all([
         storage.getBusinessAccount(context.businessAccountId),
         storage.getWidgetSettings(context.businessAccountId),
-        storage.getAllProducts(context.businessAccountId),
+        storage.getChatProducts(context.businessAccountId),
       ]));
       const hasActiveJourneysP = context.skipLeadTraining || context.skipJourneys
         ? Promise.resolve(false)
@@ -5874,7 +5874,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
         chatMenuItemsResult
       ] = await Promise.allSettled([
         storage.getWidgetSettings(context.businessAccountId),
-        storage.getAllProducts(context.businessAccountId),
+        storage.getChatProducts(context.businessAccountId),
         storage.getAllFaqs(context.businessAccountId),
         (async () => {
           const { websiteAnalysisService } = await import("./websiteAnalysisService");
@@ -5988,6 +5988,9 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
       // This reduces prompt size by ~80% and speeds up responses
       if (products.length > 0) {
         enrichedContext += `PRODUCT AVAILABILITY:\nThis business has ${products.length} products in their catalog. Use the get_products tool to search and retrieve products when customers ask about products, pricing, or recommendations.\n\n`;
+        if (products.some(p => p.source === 'woocommerce')) {
+          enrichedContext += `Products come from the business's website. When a product's availability is "Out of stock", say clearly that it is currently out of stock (you may still describe it and suggest in-stock alternatives). When a product has a productUrl, you may share it as the link to view or buy it on the website.\n\n`;
+        }
       }
 
       // OPTIMIZATION: FAQ dump removed from base context  

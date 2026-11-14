@@ -105,8 +105,12 @@ export class ProductTextEmbeddingService {
     businessAccountId: string, 
     limit: number = 5,
     threshold: number = 0.4
-  ): Promise<Array<{id: string, name: string, description: string, price: string | null, imageUrl: string | null, similarity: number}>> {
+  ): Promise<Array<{id: string, name: string, description: string, price: string | null, imageUrl: string | null, productUrl: string | null, stockStatus: string | null, regularPrice: string | null, similarity: number}>> {
     const startTime = Date.now();
+    // Only the products the chat may use (website products while WooCommerce is connected).
+    const { getLiveProductSource } = await import('./productSourceSwitch');
+    const live = await getLiveProductSource(businessAccountId);
+    const liveOnly = live === 'woocommerce' ? sql`source = 'woocommerce'` : sql`source <> 'woocommerce'`;
     
     // Generate embedding for the query
     const queryEmbedding = await embeddingService.generateEmbedding(query, businessAccountId);
@@ -120,9 +124,13 @@ export class ProductTextEmbeddingService {
         description, 
         price::text as price, 
         image_url,
+        product_url,
+        stock_status,
+        regular_price::text as regular_price,
         1 - (text_embedding <=> ${embeddingStr}::vector) as similarity
       FROM products
       WHERE business_account_id = ${businessAccountId}
+        AND ${liveOnly}
         AND text_embedding IS NOT NULL
         AND 1 - (text_embedding <=> ${embeddingStr}::vector) >= ${threshold}
       ORDER BY text_embedding <=> ${embeddingStr}::vector
@@ -138,6 +146,9 @@ export class ProductTextEmbeddingService {
       description: row.description as string,
       price: row.price as string | null,
       imageUrl: row.image_url as string | null,
+      productUrl: row.product_url as string | null,
+      stockStatus: row.stock_status as string | null,
+      regularPrice: row.regular_price as string | null,
       similarity: parseFloat(row.similarity) as number,
     }));
   }

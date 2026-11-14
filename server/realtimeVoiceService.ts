@@ -2856,7 +2856,7 @@ export class RealtimeVoiceService {
 
     // Load comprehensive product catalog (both Shopify and custom products)
     try {
-      const products = await storage.getAllProducts(businessAccountId);
+      const products = await storage.getChatProducts(businessAccountId);
       
       // Get widget settings for currency symbol
       const widgetSettings = await storage.getWidgetSettings(businessAccountId);
@@ -2877,7 +2877,8 @@ export class RealtimeVoiceService {
           }
           
           // Add source information (Shopify or Custom)
-          context += ` [Source: ${product.source === 'shopify' ? 'Shopify' : 'Custom'}]`;
+          context += ` [Source: ${product.source === 'shopify' ? 'Shopify' : product.source === 'woocommerce' ? 'Website' : 'Custom'}]`;
+          if (product.stockStatus === 'out_of_stock') context += ' [Out of stock]';
           
           // Add full description
           if (product.description) {

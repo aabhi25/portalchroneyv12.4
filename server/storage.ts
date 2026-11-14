@@ -322,6 +322,10 @@ export interface IStorage {
   createProduct(product: InsertProduct): Promise<Product>;
   getProduct(id: string, businessAccountId: string): Promise<Product | undefined>;
   getAllProducts(businessAccountId: string): Promise<Product[]>;
+  /** The products the chat may use: website products while WooCommerce is connected, otherwise the rest. */
+  getChatProducts(businessAccountId: string): Promise<Product[]>;
+  /** One product, only if the chat may use it (see getChatProducts). */
+  getChatProduct(id: string, businessAccountId: string): Promise<Product | undefined>;
   updateProduct(id: string, businessAccountId: string, product: Partial<InsertProduct>): Promise<Product>;
   deleteProduct(id: string, businessAccountId: string): Promise<void>;
 
@@ -2050,6 +2054,24 @@ export class DatabaseStorage implements IStorage {
       .from(products)
       .where(eq(products.businessAccountId, businessAccountId))
       .orderBy(desc(products.createdAt));
+  }
+
+  async getChatProducts(businessAccountId: string): Promise<Product[]> {
+    const { chatProductsWhere } = await import('./services/productSourceSwitch');
+    return await db
+      .select()
+      .from(products)
+      .where(await chatProductsWhere(businessAccountId))
+      .orderBy(desc(products.createdAt));
+  }
+
+  async getChatProduct(id: string, businessAccountId: string): Promise<Product | undefined> {
+    const { chatProductsWhere } = await import('./services/productSourceSwitch');
+    const [product] = await db
+      .select()
+      .from(products)
+      .where(and(eq(products.id, id), await chatProductsWhere(businessAccountId)));
+    return product || undefined;
   }
 
   async updateProduct(id: string, businessAccountId: string, productData: Partial<InsertProduct>): Promise<Product> {

@@ -52,6 +52,7 @@ export const businessAccounts = pgTable("business_accounts", {
   shopifyLastSyncedAt: timestamp("shopify_last_synced_at"), // When products were last synced from Shopify
   shopifySyncStatus: text("shopify_sync_status").default("idle"), // 'idle' | 'syncing' | 'completed' | 'failed'
   shopifyEnabled: text("shopify_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Shopify features (text for consistency with other flags)
+  wooCommerceEnabled: text("woocommerce_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle: products can come from the business's WooCommerce website
   appointmentsEnabled: text("appointments_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Appointment features (text for consistency with other flags)
   voiceModeEnabled: text("voice_mode_enabled").notNull().default("true"), // 'true' | 'false' - SuperAdmin toggle for Voice Mode feature (text for consistency with other flags)
   visualSearchEnabled: text("visual_search_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Visual Product Search feature (default OFF)
@@ -656,6 +657,13 @@ export const products = pgTable("products", {
   shopifyProductId: text("shopify_product_id"), // Original Shopify product ID
   shopifyLastSyncedAt: timestamp("shopify_last_synced_at"), // When last synced from Shopify
   isEditable: text("is_editable").notNull().default("true"), // 'true' | 'false' - Whether user can edit this product
+  // Products read from the business's own website (source 'woocommerce'), see server/services/wooCommerceSync.ts
+  externalId: text("external_id"), // The product's id on the website
+  productUrl: text("product_url"), // The product's page on the website
+  stockStatus: text("stock_status"), // 'in_stock' | 'out_of_stock' | 'on_backorder'; null = not tracked (manual products)
+  regularPrice: numeric("regular_price", { precision: 10, scale: 2 }), // Price before a sale, only while on sale
+  sku: text("sku"),
+  externalSyncedAt: timestamp("external_synced_at"), // When the website last sent this product
   visualDescription: text("visual_description"), // AI-generated visual description of product image
   imageEmbedding: vector768("image_embedding"), // Gemini photo fingerprint (768 dimensions) - stores CROPPED jewelry fingerprint when jewelry detection is enabled
   fullImageEmbedding: vector768("full_image_embedding"), // Vector embedding of the FULL original product image (uncropped) for exact match detection
@@ -671,6 +679,7 @@ export const products = pgTable("products", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
   businessUpdatedIdx: index("products_business_updated_idx").on(table.businessAccountId, table.updatedAt),
+  businessExternalIdx: uniqueIndex("products_business_source_external_idx").on(table.businessAccountId, table.source, table.externalId),
 }));
 
 // Product Jewelry Embeddings - Store multiple jewelry item embeddings per product
@@ -1003,6 +1012,16 @@ export const widgetSettings = pgTable("widget_settings", {
   merittoCreateUrl: text("meritto_create_url"), // null = https://api.nopaperforms.io/lead/v1/create
   merittoUpdateUrl: text("meritto_update_url"), // null = https://api.nopaperforms.io/lead/v1/update
   merittoEnabledAt: timestamp("meritto_enabled_at"), // leads captured from this moment on are sent
+
+  // WooCommerce product sync - reads the website's public product list (no keys). While connected, the chat
+  // uses only the website's products; manual products are kept but not used (server/services/productSourceSwitch.ts).
+  wooStoreUrl: text("woo_store_url"), // e.g. "https://accurex.net"
+  wooConnected: text("woo_connected").notNull().default("false"), // 'true' once the first sync worked; 'false' after Disconnect
+  wooSyncHours: integer("woo_sync_hours").notNull().default(24), // Re-read the website every N hours
+  wooSyncStatus: text("woo_sync_status").notNull().default("idle"), // 'idle' | 'syncing' | 'completed' | 'failed'
+  wooSyncStartedAt: timestamp("woo_sync_started_at"), // A 'syncing' older than an hour is treated as stuck
+  wooLastSyncedAt: timestamp("woo_last_synced_at"), // Last successful sync
+  wooLastResult: jsonb("woo_last_result"), // WooSyncResult of the last attempt (server/services/wooCommerceSync.ts)
 
   // LeadSquared AI URL Extraction Config
   lsqExtractionDomain: text("lsq_extraction_domain"), // Domain to restrict extraction to, e.g. "jaroeducation.com"

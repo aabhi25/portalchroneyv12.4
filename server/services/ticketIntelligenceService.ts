@@ -190,7 +190,7 @@ Respond with ONLY valid JSON matching this exact structure:
     
     // Get business context (products, FAQs) for better resolution
     const [products, faqs, businessAccount] = await Promise.all([
-      storage.getAllProducts(businessAccountId),
+      storage.getChatProducts(businessAccountId),
       storage.getAllFaqs(businessAccountId),
       storage.getBusinessAccount(businessAccountId)
     ]);
@@ -299,7 +299,7 @@ Guidelines for proposedSolution:
     
     // Get business context
     const [products, faqs, businessAccount] = await Promise.all([
-      storage.getAllProducts(businessAccountId),
+      storage.getChatProducts(businessAccountId),
       storage.getAllFaqs(businessAccountId),
       storage.getBusinessAccount(businessAccountId)
     ]);
