@@ -33,7 +33,7 @@ function expect(cond: any, label: string, detail?: unknown) {
 const textOf = (c: any) => (typeof c === "string" ? c : c == null ? "" : JSON.stringify(c));
 
 // ── Fake OpenAI: searches only when forced ──
-interface Call { main: boolean; followUp: boolean; toolChoice: any; tools: string[]; lastUser: string }
+interface Call { main: boolean; followUp: boolean; toolChoice: any; tools: string[]; lastUser: string; systemText: string }
 const calls: Call[] = [];
 function answer(body: any): any {
   const msgs: any[] = body.messages || [];
@@ -42,7 +42,7 @@ function answer(body: any): any {
   const lastUser = textOf([...msgs].reverse().find(m => m.role === "user")?.content);
   const main = /responding to customer inquiries via WhatsApp|AI AGENT PERSONA/.test(sys0);
   const followUp = msgs.some(m => m.role === "tool");
-  calls.push({ main, followUp, toolChoice: body.tool_choice, tools: (body.tools || []).map((t: any) => t?.function?.name), lastUser });
+  calls.push({ main, followUp, toolChoice: body.tool_choice, tools: (body.tools || []).map((t: any) => t?.function?.name), lastUser, systemText: msgs.filter(m => m.role === "system").map(m => textOf(m.content)).join("\n") });
   if (/You are a message classifier/.test(all)) return { role: "assistant", content: /strips|analy[sz]er|kit|have|price|show/i.test(lastUser) ? "YES" : "NO" };
   if (/You are a product search assistant/.test(all)) return { role: "assistant", content: "[1, 2, 3]" };
   if (/language detector/i.test(sys0)) return { role: "assistant", content: "en" };
@@ -135,6 +135,9 @@ async function main() {
   const card1 = car?.action?.cards?.[0];
   expect(/^\*Glucose/.test(card1?.body?.text) && /₹/.test(card1?.body?.text) && !/Overview/.test(card1?.body?.text) && /Fast results in the lab\./.test(card1?.body?.text), "card text: name, price, clean short line", card1?.body?.text);
   expect(card1?.action?.buttons?.map((b: any) => b.quick_reply.title).join("|") === "Know more (1)|Book consultation", "card buttons: Know more (1) + Book consultation", card1?.action?.buttons);
+  const follow1 = r1.calls.find(c => c.main && c.followUp);
+  expect(/Do NOT ask the user to reply with a number/.test(follow1?.systemText || "") && !/End with "Reply with a number/.test(follow1?.systemText || ""), "carousel: the AI is told not to ask for a number");
+  expect(car?.body?.text === "Swipe to see the products, then tap Know more for details.", "carousel text points to Know more", car?.body?.text);
 
   // 2. Greeting → not forced
   const r2 = await reply("hey");
@@ -156,12 +159,18 @@ async function main() {
   const btnGap = r4.sent[r4.sent.length - 1].at - imgs[imgs.length - 1].at;
   expect(gaps.every(g => g >= 2400) && btnGap >= 4900, "cards ~2.5 s apart, buttons ~5 s after the last card", { gaps, btnGap });
   expect(/^\*1\. Glucose/.test(imgs[0].body.caption) && !/Overview/.test(imgs[0].body.caption), "fallback caption: no Overview heading", imgs[0].body.caption);
+  const cta4 = r4.sent[r4.sent.length - 1].body?.interactive?.body?.text;
+  expect(/Reply with a product's number to know more/.test(cta4 || ""), "refused carousel → the closing buttons say to reply with a number", cta4);
   refuseCarousel = false;
 
   // 5. Switched off → cards
   process.env.WHATSAPP_PRODUCT_CAROUSEL = "0";
   const r5 = await reply("do you have glucose strips");
   expect(!r5.sent.some(s => s.kind === "interactive:carousel") && r5.sent.filter(s => s.kind === "image").length === 3, "WHATSAPP_PRODUCT_CAROUSEL=0 → photo cards", r5.sent.map(s => s.kind));
+  const follow5 = r5.calls.find(c => c.main && c.followUp);
+  expect(/End with "Reply with a number to know more!"/.test(follow5?.systemText || ""), "numbered photo cards: the AI still ends with \"Reply with a number to know more!\"");
+  const cta5 = r5.sent[r5.sent.length - 1].body?.interactive?.body?.text;
+  expect(cta5 === "Interested in any of these? Let us help you further!", "cards without a carousel attempt keep the usual closing text", cta5);
   delete process.env.WHATSAPP_PRODUCT_CAROUSEL;
 
   await pool.end().catch(() => {});

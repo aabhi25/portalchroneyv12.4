@@ -663,10 +663,14 @@ export class WhatsappAutoReplyService {
         // One swipeable carousel message (can't arrive out of order); the separate photo cards below
         // are the fallback when it can't be sent (MSG91 / WhatsApp refuses it, or only one product).
         let carouselSent = false;
+        let carouselTried = false;
         if (carouselEnabled() && cardsWithImages.length >= CAROUSEL_MIN_CARDS) {
+          carouselTried = true;
           try {
             const formatPrice = (n: number) => `₹${n.toLocaleString('en-IN')}`;
-            let bodyText = aiResult.hasMoreProducts ? "Swipe to see the products. Reply \"more\" for more options." : "Swipe to see the products.";
+            let bodyText = aiResult.hasMoreProducts
+              ? "Swipe to see the products, then tap Know more for details. Reply \"more\" for more options."
+              : "Swipe to see the products, then tap Know more for details.";
             let knowMore = "Know more";
             let book = "Book consultation";
             if (replyLanguage) {
@@ -743,7 +747,10 @@ export class WhatsappAutoReplyService {
             if (aiResult.hasMoreProducts) {
               ctaButtons.push({ id: "view_more", title: "View More Options" });
             }
-            let ctaBody = "Interested in any of these? Let us help you further!";
+            // The reply text didn't ask for a number when a carousel was planned: say it here instead.
+            let ctaBody = carouselTried
+              ? "Reply with a product's number to know more, or tap below."
+              : "Interested in any of these? Let us help you further!";
             if (replyLanguage) {
               // Restricted reply language: our button texts in the reply language. Button ids are
               // unchanged; a title stays English when its translation exceeds WhatsApp's 20 characters.
@@ -1968,9 +1975,14 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
             content: `WHATSAPP FORMAT — PRODUCT SELECTION RESPONSE: The user selected a specific product by number. Give a detailed, enthusiastic response about this product. Include the full description, key features, and price if available. End by offering next steps like "Would you like to book a free consultation?" or "Want to explore customization options?" Do NOT say "Reply with a number" — they already selected. Do NOT include image URLs or links. Use *bold* for the product name. Keep it conversational and helpful.`
           });
         } else if (usedProductTool) {
+          // 2+ products with photos go out as a carousel with "Know more" buttons (unnumbered cards),
+          // so the intro must not ask for a number; the numbered photo cards (fallback) still do.
+          const carouselExpected = carouselEnabled() && collectedProductCards.slice(0, 4).filter(c => c.imageUrl && /^https?:\/\/.+\..+/.test(c.imageUrl)).length >= CAROUSEL_MIN_CARDS;
           toolMessages.push({
             role: "system",
-            content: `WHATSAPP FORMAT: Do NOT list individual product names or descriptions — those details will be sent separately as image captions. Instead, write a brief, friendly intro message (e.g., "Here are some wardrobe designs for you!") that naturally references what the user asked for. End with "Reply with a number to know more!" Keep it to 2-3 short sentences max. Do NOT include image URLs or links.`
+            content: carouselExpected
+              ? `WHATSAPP FORMAT: Do NOT list individual product names or descriptions — they will be sent right after your message as swipeable product cards with "Know more" and "Book consultation" buttons. Instead, write a brief, friendly intro message (e.g., "Here are some wardrobe designs for you!") that naturally references what the user asked for. Do NOT ask the user to reply with a number and do NOT mention buttons or cards. Keep it to 2-3 short sentences max. Do NOT include image URLs or links.`
+              : `WHATSAPP FORMAT: Do NOT list individual product names or descriptions — those details will be sent separately as image captions. Instead, write a brief, friendly intro message (e.g., "Here are some wardrobe designs for you!") that naturally references what the user asked for. End with "Reply with a number to know more!" Keep it to 2-3 short sentences max. Do NOT include image URLs or links.`
           });
         }
         if (usedExtraTools.size > 0) {
