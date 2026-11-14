@@ -199,8 +199,8 @@ router.get(`${BASE}/questions/search`, ...superAdmin, async (req, res) => {
   try {
     const scope = scopeFrom(req.query);
     if (!scope) return res.status(400).json({ error: "Choose a board, medium and grade." });
-    const results = await searchQuestions(accountId(req), scope, String(req.query.q ?? ""), await getSettings(accountId(req)));
-    res.json({ results: await withSavedMarks(req, results) });
+    const found = await searchQuestions(accountId(req), scope, String(req.query.q ?? ""), await getSettings(accountId(req)));
+    res.json({ results: await withSavedMarks(req, found.results), looked: found.looked, summary: found.summary });
   } catch (e) { fail(res, "search", e); }
 });
 

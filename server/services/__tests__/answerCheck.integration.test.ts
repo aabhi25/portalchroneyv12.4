@@ -122,7 +122,7 @@ async function main() {
     expect(pick.question?.questionText === "Explain refraction of light with one example." && pick.question?.modelAnswer.startsWith("Refraction is the bending"), "question and model answer come without HTML", pick.question);
     expect(pick.question?.subject === "Science" && pick.question?.grade === "10" && pick.question?.chapter === "Light", "class, subject and chapter come with it");
     expect((pick.question?.maxMarks ?? 0) >= 2 && (pick.question?.maxMarks ?? 9) <= 5, "max marks suggested inside the 2–5 range", pick.question?.maxMarks);
-    expect(pick.looked.questions === 3 && pick.looked.writtenQuestions === 1, "it reports how many written questions it saw", pick.looked);
+    expect(pick.looked.questions === 3 && pick.looked.written === 1 && pick.looked.objective === 2, "it reports how many written and objective questions it saw", pick.looked);
 
     const without = await questions.pickRandomQuestion(B, settings, null, Math.random, new Set(["cms:cp-sci:q-written"]));
     expect(!without.question, "a question already on the paper is not picked again", without.question?.questionKey);
@@ -139,7 +139,7 @@ async function main() {
     expect(calls.some(c => c.kind === "question" && c.user.includes("ax + b = c")), "the AI got the chapter's notes");
     const missing = await questions.pickRandomQuestion(B, { ...settings, scopes: [{ board: "ICSE", medium: "Hindi", grade: "7", subject: "" }] }, null);
     expect(!missing.question && /None of the chosen/.test(missing.note), "chosen classes with no content → told to change Settings", missing.note);
-    const found = await questions.searchQuestions(B, { board: "CBSE", medium: "English", grade: "10", subject: "Science" }, "refraction", settings);
+    const found = (await questions.searchQuestions(B, { board: "CBSE", medium: "English", grade: "10", subject: "Science" }, "refraction", settings)).results;
     expect(found.length === 1 && found[0].questionKey === "cms:cp-sci:q-written", "search finds written questions only", found.map(f => f.questionKey));
     const scopes = await questions.scopeOptions(B);
     expect(scopes.length === 2 && scopes.some(s => s.grade === "10" && s.subjects.join() === "Science"), "class list comes from the synced packs (as the Widget Tester), not the documents", scopes);
@@ -148,10 +148,13 @@ async function main() {
     const chapters = await questions.chaptersFor(B, { board: "CBSE", medium: "English", grade: "10", subject: "Science" });
     expect(chapters.join("|") === "Electricity|Light", "chapters of a subject, from the content store", chapters);
     const sci = { board: "CBSE", medium: "English", grade: "10", subject: "Science" };
-    const inChapter = await questions.searchQuestions(B, { ...sci, chapter: "Electricity" }, "", settings);
+    const inChapter = (await questions.searchQuestions(B, { ...sci, chapter: "Electricity" }, "", settings)).results;
     expect(inChapter.length === 1 && inChapter[0].questionKey === "cms:cp-sci:q-ohm" && inChapter[0].grade === "10" && inChapter[0].board === "CBSE", "search inside one chapter; class labels come from the pack", inChapter.map(x => [x.questionKey, x.grade]));
-    const allSci = await questions.searchQuestions(B, { ...sci, chapter: "" }, "", settings);
+    const allSciFound = await questions.searchQuestions(B, { ...sci, chapter: "" }, "", settings);
+    const allSci = allSciFound.results;
     expect(allSci.length === 2, "the whole subject when no chapter is chosen", allSci.map(x => x.questionKey));
+    expect(allSciFound.looked.questions === 4 && allSciFound.looked.written === 2 && allSciFound.looked.objective === 2 && allSciFound.looked.withOptions === 1, "the search counts every question it looked at", allSciFound.looked);
+    expect(/Looked at 4 questions in Science: 2 written-answer, 2 multiple choice or other objective \(1 with answer options\)/.test(allSciFound.summary) && /Question types: .*True\/False 1/.test(allSciFound.summary), "and says so in plain words, with the CMS's question types", allSciFound.summary);
     const seen = new Set<string>();
     for (let i = 0; i < 6; i++) {
       const r = await questions.pickRandomQuestion(B, settings, null, Math.random, new Set(), { ...sci, chapter: "Light" });
@@ -159,7 +162,23 @@ async function main() {
     }
     expect(seen.size === 1 && seen.has("cms:cp-sci:q-written"), "Random question limited to a chosen chapter", Array.from(seen));
     const emptyChapter = await questions.pickRandomQuestion(B, settings, null, Math.random, new Set(), { board: "CBSE", medium: "English", grade: "9", subject: "Mathematics", chapter: "Linear equations" });
-    expect(!emptyChapter.question && /chapter "Linear equations"/.test(emptyChapter.note), "a chapter with no written questions says so by name", emptyChapter.note);
+    expect(!emptyChapter.question && /chapter "Linear equations"/.test(emptyChapter.note) && /no questions at all/.test(emptyChapter.note), "a chapter with no written questions says so by name, and why", emptyChapter.note);
+
+    // A big pack: 230 multiple-choice items first, then 2 written questions (beyond the first 100).
+    for (let i = 0; i < 230; i++) {
+      await insert({ business_account_id: B, board: null, medium: null, cp_id: "cp-big", content_type: "question", subject: "Civics", chapter: "Democracy", grade: null, content_text: `Which of these is true about democracy? (${i})`, source_ref: `mcq-${i}`, metadata: { questionType: "MCQ", options: [{ text: "a" }, { text: "b" }] } });
+    }
+    for (const n of [1, 2]) {
+      await insert({ business_account_id: B, board: null, medium: null, cp_id: "cp-big", content_type: "question", subject: "Civics", chapter: "Democracy", grade: null, content_text: `Explain two features of democracy (${n}).`, source_ref: `w-${n}`, metadata: { questionType: "Subjective", solution: "Free and fair elections; rule of law." } });
+    }
+    const { sql: q2 } = await import("drizzle-orm");
+    await db.execute(q2`INSERT INTO topscholar_cp_mappings (business_account_id, cp_id, board, medium, grade, subject) VALUES (${B}, 'cp-big', 'CBSE', 'English', '10', 'Civics')`);
+    await db.execute(q2`INSERT INTO topscholar_content_sync (business_account_id, cp_id, status, chunk_count) VALUES (${B}, 'cp-big', 'completed', 232)`);
+    const civics = await questions.searchQuestions(B, { board: "CBSE", medium: "English", grade: "10", subject: "Civics", chapter: "" }, "", settings);
+    expect(civics.results.length === 2 && civics.looked.questions === 232 && civics.looked.objective === 230, "written questions after 230 multiple-choice ones are still found (every page is read)", { found: civics.results.length, looked: civics.looked.questions });
+    expect(/MCQ 230, Subjective 2/.test(civics.summary), "question types counted, most common first", civics.summary);
+    const civicsPick = await questions.pickRandomQuestion(B, settings, null, Math.random, new Set(), { board: "CBSE", medium: "English", grade: "10", subject: "Civics", chapter: "" });
+    expect(!!civicsPick.question && civicsPick.question.questionKey.startsWith("cms:cp-big:w-"), "Random question also finds them", civicsPick.question?.questionKey);
   }
 
   console.log("Marking schemes");
