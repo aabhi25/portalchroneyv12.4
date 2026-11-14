@@ -664,6 +664,10 @@ export const products = pgTable("products", {
   regularPrice: numeric("regular_price", { precision: 10, scale: 2 }), // Price before a sale, only while on sale
   sku: text("sku"),
   externalSyncedAt: timestamp("external_synced_at"), // When the website last sent this product
+  // WhatsApp / Instagram / Facebook only take JPEG or PNG photos (WhatsApp up to 5 MB). Website photos in other
+  // formats (e.g. WebP) get a JPEG copy in our storage, made during the sync (server/services/messagingImages.ts).
+  messagingImageUrl: text("messaging_image_url"), // the photo to send on those channels; null = use image_url
+  messagingImageFor: text("messaging_image_for"), // the image_url that was last checked (re-checked when the photo changes)
   visualDescription: text("visual_description"), // AI-generated visual description of product image
   imageEmbedding: vector768("image_embedding"), // Gemini photo fingerprint (768 dimensions) - stores CROPPED jewelry fingerprint when jewelry detection is enabled
   fullImageEmbedding: vector768("full_image_embedding"), // Vector embedding of the FULL original product image (uncropped) for exact match detection

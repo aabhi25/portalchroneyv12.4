@@ -32,6 +32,8 @@ import { resolveProfile } from "../customerProfileService";
 import { composeCrossPlatformContext, triggerSnapshotUpdate } from "../crossPlatformMemoryService";
 import { selectRelevantTools } from "../../aiTools";
 import { ToolExecutionService } from "../toolExecutionService";
+import { channelProductSummary } from "../productSourceSwitch";
+import { messagingImageOf } from "../messagingImages";
 import { createOpenAI, OPENAI_TIMEOUTS } from "../../lib/openaiClient";
 import type { SocialPlatformId } from "./types";
 import {
@@ -1272,26 +1274,24 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
 
                 let toolResultStr: string;
                 if (result.success && result.data && Array.isArray(result.data)) {
-                  const productSummaries = result.data.slice(0, 5).map((p: any, idx: number) => {
-                    const parts = [`${idx + 1}. ${p.name}`];
-                    if (p.price && Number(p.price) > 0) parts.push(`Price: ₹${Number(p.price).toLocaleString('en-IN')}`);
-                    if (p.description) parts.push(p.description.substring(0, 100));
-                    return parts.join(' | ');
-                  });
+                  const { lines: productSummaries, note: websiteNote } = channelProductSummary(result.data.slice(0, 5));
                   toolResultStr = `Found ${result.data.length} product(s):\n${productSummaries.join('\n')}`;
                   if (result.pagination?.hasMore) {
                     toolResultStr += `\n(More products available)`;
                   }
+                  toolResultStr += websiteNote;
 
                   for (const p of result.data.slice(0, 5)) {
-                    if (p.imageUrl) {
-                      collectedProductImages.push(p.imageUrl);
+                    // A JPEG copy when the website photo is a format these apps can't take (e.g. WebP).
+                    const photo = messagingImageOf(p);
+                    if (photo) {
+                      collectedProductImages.push(photo);
                     }
                     collectedProductCards.push({
                       name: p.name,
                       description: p.description?.substring(0, 200),
                       price: p.price ? Number(p.price) : undefined,
-                      imageUrl: p.imageUrl,
+                      imageUrl: photo,
                     });
                   }
                 } else {

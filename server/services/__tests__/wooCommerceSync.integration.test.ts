@@ -13,7 +13,9 @@
  *  - the timer only syncs connected accounts whose time has come; one sync at a time;
  *  - reading with the website's keys (WooCommerce REST API): wrong keys, drafts and hidden products skipped,
  *    servers that drop the Authorization header, no keys sent after a redirect to another website,
- *    keys saved encrypted only when Connect works, switching between the two ways keeps the same products.
+ *    keys saved encrypted only when Connect works, switching between the two ways keeps the same products;
+ *  - photos for WhatsApp / Instagram / Facebook: JPEG / PNG used as they are, WebP and too-large photos get
+ *    a JPEG copy once, copies replaced when the photo changes and removed with the product; stock + link lines.
  *
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55571/postgres?sslmode=disable \
  *   WOO_SYNC_TEST_DB=1 npx tsx server/services/__tests__/wooCommerceSync.integration.test.ts
@@ -82,7 +84,22 @@ function startFakeOpenAI(): Promise<{ baseUrl: string; close: () => void; calls:
 }
 
 // ── Stand-in WooCommerce website (Store API) ──
-interface FakeProduct { id: number; name: string; price: number; cats: string[]; tags?: string[]; inStock?: boolean; sale?: number; html?: string; options?: string[]; draft?: boolean; hidden?: boolean }
+interface FakeProduct { id: number; name: string; price: number; cats: string[]; tags?: string[]; inStock?: boolean; sale?: number; html?: string; options?: string[]; draft?: boolean; hidden?: boolean; img?: 'webp' | 'jpg' | 'png' | 'photon' | 'big' }
+const imgSrc = (p: FakeProduct, base: string) => p.img === 'photon' ? `${base}/photon/${p.id}.jpg` : p.img === 'big' ? `${base}/img/${p.id}-big.png` : `${base}/img/${p.id}.${p.img ?? 'webp'}`;
+const imageCache = new Map<string, Buffer>();
+async function fakeImage(kind: 'webp' | 'jpeg' | 'png' | 'big'): Promise<Buffer> {
+  if (!imageCache.has(kind)) {
+    const sharp = (await import('sharp')).default;
+    if (kind === 'big') {
+      // Noise does not compress: a PNG over WhatsApp's 5 MB limit.
+      imageCache.set(kind, await sharp(crypto.randomBytes(1600 * 1300 * 3), { raw: { width: 1600, height: 1300, channels: 3 } }).png({ compressionLevel: 0 }).toBuffer());
+    } else {
+      const img = sharp({ create: { width: 40, height: 40, channels: 3, background: { r: 200, g: 30, b: 30 } } });
+      imageCache.set(kind, await (kind === 'webp' ? img.webp() : kind === 'png' ? img.png() : img.jpeg()).toBuffer());
+    }
+  }
+  return imageCache.get(kind)!;
+}
 const TEST_KEY = 'ck_test_key_0001';
 const TEST_SECRET = 'cs_test_secret_0001';
 const store = {
@@ -92,6 +109,8 @@ const store = {
   requests: 0,
   stripAuthHeader: false, // like servers that drop the Authorization header
   keyedVia: [] as string[],
+  imageRequests: 0,
+  copies: new Map<string, Buffer>(), // stand-in storage for JPEG copies
 };
 const visible = (list: FakeProduct[]) => list.filter(p => !p.draft && !p.hidden);
 function restJson(p: FakeProduct, base: string) {
@@ -103,7 +122,7 @@ function restJson(p: FakeProduct, base: string) {
     stock_status: p.inStock === false ? 'outofstock' : 'instock',
     categories: p.cats.map((name, i) => ({ id: i + 1, name, slug: name.toLowerCase() })),
     tags: (p.tags || []).map((name, i) => ({ id: 100 + i, name, slug: name.toLowerCase() })),
-    images: [{ id: p.id * 10, src: `${base}/img/${p.id}.webp`, name: '', alt: '' }],
+    images: [{ id: p.id * 10, src: imgSrc(p, base), name: '', alt: '' }],
     attributes: p.options ? [{ id: 1, name: 'Pack size', variation: true, visible: true, options: p.options }] : [],
   };
 }
@@ -119,7 +138,7 @@ function storeJson(p: FakeProduct, base: string) {
       price: paise(p.sale ?? p.price), regular_price: paise(p.price), sale_price: paise(p.sale ?? p.price), price_range: range,
       currency_code: store.currency, currency_symbol: '₹', currency_minor_unit: 2,
     },
-    images: [{ id: p.id * 10, src: `${base}/img/${p.id}.webp`, thumbnail: `${base}/img/${p.id}-t.webp`, alt: '' }],
+    images: [{ id: p.id * 10, src: imgSrc(p, base), thumbnail: imgSrc(p, base), alt: '' }],
     categories: p.cats.map((name, i) => ({ id: i + 1, name, slug: name.toLowerCase(), link: '' })),
     tags: (p.tags || []).map((name, i) => ({ id: 100 + i, name, slug: name.toLowerCase(), link: '' })),
     attributes: p.options ? [{ id: 1, name: 'Pack size', taxonomy: null, has_variations: true, terms: p.options.map((o, i) => ({ id: i, name: o, slug: o })) }] : [],
@@ -132,6 +151,18 @@ function startFakeStore(): Promise<{ base: string; close: () => void }> {
     const server = http.createServer((req, res) => {
       const u = new URL(req.url || '/', 'http://x');
       const base = `http://${req.headers.host}`;
+      if (u.pathname.startsWith('/img/') || u.pathname.startsWith('/photon/') || u.pathname.startsWith('/copies/')) {
+        if (u.pathname.startsWith('/copies/')) {
+          const copy = store.copies.get(u.pathname);
+          res.writeHead(copy ? 200 : 404, { 'content-type': 'image/jpeg' }); res.end(copy); return;
+        }
+        store.imageRequests++;
+        // Like WordPress's picture service: WebP only for clients that ask for it.
+        const kind = u.pathname.startsWith('/photon/') ? (String(req.headers.accept).includes('image/webp') ? 'webp' : 'jpeg')
+          : u.pathname.endsWith('-big.png') ? 'big' : u.pathname.endsWith('.jpg') ? 'jpeg' : u.pathname.endsWith('.png') ? 'png' : 'webp';
+        fakeImage(kind as any).then(buf => { res.writeHead(200, { 'content-type': `image/${kind === 'big' ? 'png' : kind}` }); res.end(buf); });
+        return;
+      }
       if (u.pathname === '/old-shop/wp-json/wc/store/v1/products') {
         res.writeHead(301, { location: `${base}/wp-json/wc/store/v1/products${u.search}` }); res.end(); return;
       }
@@ -202,6 +233,13 @@ async function main() {
   const { businessAccounts, products, categories, widgetSettings, productCategories } = await import('@shared/schema');
   const { normalizeStoreUrl, mapStoreProduct, mapRestProduct, testStore, WooStoreError } = await import('../wooCommerceStore');
   const { decrypt } = await import('../encryptionService');
+  const { prepareMessagingImages, setMessagingImageStore, messagingImageOf } = await import('../messagingImages');
+  const { channelProductSummary } = await import('../productSourceSwitch');
+  let copyNo = 0;
+  setMessagingImageStore({
+    async save(jpeg) { const path = `/copies/${++copyNo}.jpg`; store.copies.set(path, jpeg); return `${site.base}${path}`; },
+    async remove(url) { store.copies.delete(new URL(url).pathname); },
+  });
   const { syncWooCommerce, disconnectWooCommerce, wooCommerceSyncScheduler } = await import('../wooCommerceSync');
   const { getLiveProductSource, onProductSourceChanged } = await import('../productSourceSwitch');
   const { productTextEmbeddingService } = await import('../productTextEmbeddingService');
@@ -423,6 +461,48 @@ async function main() {
   const backPublic = await syncWooCommerce(A, 'connect', { storeUrl: site.base, readMode: 'public' });
   const afterPublic = await storage.getWidgetSettings(A);
   expect(backPublic.ok && backPublic.added === 0 && afterPublic?.wooReadMode === 'public' && !afterPublic?.wooConsumerKey && !afterPublic?.wooConsumerSecret, 'back to the website link only: same products, saved keys forgotten', backPublic);
+
+  // ── 10. Photos for WhatsApp / Instagram / Facebook ──
+  const sharpLib = (await import('sharp')).default;
+  store.products = store.products.filter(p => !p.draft && !p.hidden);
+  store.products[20] = { ...store.products[20], img: 'jpg' };
+  store.products[21] = { ...store.products[21], img: 'png' };
+  store.products[22] = { ...store.products[22], img: 'photon' };
+  store.products[23] = { ...store.products[23], img: 'big' };
+  await syncWooCommerce(A, 'manual');
+  await prepareMessagingImages(A);
+  const byExt = async (id: number) => (await storage.getAllProducts(A)).find(p => p.externalId === String(id))!;
+  const webpP = await byExt(store.products[0].id);
+  expect(webpP.messagingImageUrl?.includes('/copies/') && webpP.messagingImageFor === webpP.imageUrl, 'WebP photo → a JPEG copy for WhatsApp, website link kept for the site', [webpP.imageUrl, webpP.messagingImageUrl]);
+  const copyBuf = store.copies.get(new URL(webpP.messagingImageUrl!).pathname)!;
+  expect((await sharpLib(copyBuf).metadata()).format === 'jpeg', 'the copy really is a JPEG');
+  const jpgP = await byExt(store.products[20].id), pngP = await byExt(store.products[21].id), photonP = await byExt(store.products[22].id), bigP = await byExt(store.products[23].id);
+  expect(jpgP.messagingImageUrl === jpgP.imageUrl && pngP.messagingImageUrl === pngP.imageUrl, 'JPEG and PNG photos are sent as they are (no copy)');
+  expect(photonP.messagingImageUrl === photonP.imageUrl, 'a picture service that can send JPEG is used as it is (asked for JPEG/PNG)');
+  expect(bigP.messagingImageUrl?.includes('/copies/'), 'a PNG over 5 MB gets a smaller JPEG copy');
+  expect(copyBuf.length < 5 * 1024 * 1024 && store.copies.get(new URL(bigP.messagingImageUrl!).pathname)!.length < 5 * 1024 * 1024, 'copies are under WhatsApp\'s 5 MB limit');
+
+  const imgReqs = store.imageRequests;
+  await syncWooCommerce(A, 'manual');
+  await prepareMessagingImages(A);
+  expect(store.imageRequests === imgReqs, 'a later sync with the same photos downloads nothing', store.imageRequests - imgReqs);
+
+  const oldCopyPath = new URL(webpP.messagingImageUrl!).pathname;
+  store.products[0] = { ...store.products[0], img: 'png' };
+  const goneP = await byExt(store.products[1].id);
+  const goneCopyPath = new URL(goneP.messagingImageUrl!).pathname;
+  store.products.splice(1, 1);
+  await syncWooCommerce(A, 'manual');
+  await prepareMessagingImages(A);
+  const changedP = await byExt(store.products[0].id);
+  expect(changedP.imageUrl?.endsWith('.png') && changedP.messagingImageUrl === changedP.imageUrl && !store.copies.has(oldCopyPath), 'photo changed on the website → old copy removed, new photo checked', [changedP.messagingImageUrl]);
+  expect(!store.copies.has(goneCopyPath), 'product removed on the website → its copy removed too');
+
+  expect(messagingImageOf({ imageUrl: 'https://a/x.webp', messagingImageUrl: 'https://c/x.jpg' }) === 'https://c/x.jpg' && messagingImageOf({ imageUrl: 'https://a/y.jpg' }) === 'https://a/y.jpg', 'channels send the copy, or the photo itself when there is none');
+  const summ = channelProductSummary([{ name: 'Kit', price: '2500.00', availability: 'Out of stock', productUrl: 'https://x.test/p/1', description: 'Rapid kit' }, { name: 'Strips', price: '100', availability: 'In stock', productUrl: 'https://x.test/p/2' }]);
+  expect(/Out of stock/.test(summ.lines[0]) && /Link: https:\/\/x\.test\/p\/1/.test(summ.lines[0]) && !/In stock/.test(summ.lines[1]) && /say so clearly/.test(summ.note), 'WhatsApp/Instagram/Facebook AI sees stock + link and the instruction', summ);
+  const manualSumm = channelProductSummary([{ name: 'Manual kit', price: '10', description: 'x' }]);
+  expect(manualSumm.note === '' && manualSumm.lines[0] === '1. Manual kit | Price: ₹10 | x', 'manual products: same lines as before, no extra instruction', manualSumm);
 
   site.close();
   openai.close();

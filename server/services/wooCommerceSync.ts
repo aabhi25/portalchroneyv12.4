@@ -6,6 +6,7 @@ import { storage } from "../storage";
 import { fetchStoreProducts, normalizeStoreUrl, WooStoreError, type WooKeys, type WooProduct } from "./wooCommerceStore";
 import { decrypt, encrypt } from "./encryptionService";
 import { onProductSourceChanged } from "./productSourceSwitch";
+import { prepareMessagingImages, removeMessagingImages } from "./messagingImages";
 
 /**
  * Brings a business's WooCommerce website products into its catalog (source 'woocommerce') and keeps them
@@ -186,6 +187,7 @@ export async function syncWooCommerce(
     const problems: { name: string; message: string }[] = [];
     let added = 0, updated = 0, unchanged = 0;
     const seen = new Set<string>();
+    const staleCopies: { imageUrl: string | null; messagingImageUrl: string | null }[] = [];
 
     for (const wp of fetched.products) {
       seen.add(wp.externalId);
@@ -217,10 +219,11 @@ export async function syncWooCommerce(
                 updatedAt: now,
                 // A new name/description needs a new search fingerprint (made in one batch below).
                 ...(textChanged ? { textEmbedding: null, textEmbeddingGeneratedAt: null } : {}),
-                // A new photo needs new photo fingerprints (only used by photo search).
-                ...(!same(current.imageUrl, fields.imageUrl) ? { imageEmbedding: null, fullImageEmbedding: null, imageHash: null, visualDescription: null } : {}),
+                // A new photo needs new photo fingerprints (only used by photo search) and a new check for WhatsApp.
+                ...(!same(current.imageUrl, fields.imageUrl) ? { imageEmbedding: null, fullImageEmbedding: null, imageHash: null, visualDescription: null, messagingImageUrl: null, messagingImageFor: null } : {}),
               })
               .where(eq(products.id, current.id));
+            if (!same(current.imageUrl, fields.imageUrl)) staleCopies.push(current);
             updated++;
           } else if (labelsChanged) {
             updated++;
@@ -238,8 +241,10 @@ export async function syncWooCommerce(
       }
     }
 
-    // Gone from the website (deleted, unpublished or hidden): remove from the catalog.
-    const gone = existing.filter(p => !p.externalId || !seen.has(p.externalId)).map(p => p.id);
+    // Gone from the website (deleted, unpublished or hidden): remove from the catalog (and their WhatsApp photo copies).
+    const goneRows = existing.filter(p => !p.externalId || !seen.has(p.externalId));
+    await removeMessagingImages([...staleCopies, ...goneRows]);
+    const gone = goneRows.map(p => p.id);
     for (let i = 0; i < gone.length; i += 200) {
       await db.delete(products).where(and(eq(products.businessAccountId, businessAccountId), inArray(products.id, gone.slice(i, i + 200))));
     }
@@ -263,6 +268,9 @@ export async function syncWooCommerce(
       wooConsumerSecret: keys ? encrypt(keys.secret) : null,
     } : {});
     if (trigger === "connect" || added || updated || gone.length) await onProductSourceChanged(businessAccountId);
+
+    // New or changed photos: check them for WhatsApp / Instagram / Facebook (JPEG copy only when needed).
+    void prepareMessagingImages(businessAccountId);
 
     // Search fingerprints for new/changed products, a few at a time (not one call per product at once).
     if (added || updated) {

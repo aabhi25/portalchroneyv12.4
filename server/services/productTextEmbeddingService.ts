@@ -105,7 +105,7 @@ export class ProductTextEmbeddingService {
     businessAccountId: string, 
     limit: number = 5,
     threshold: number = 0.4
-  ): Promise<Array<{id: string, name: string, description: string, price: string | null, imageUrl: string | null, productUrl: string | null, stockStatus: string | null, regularPrice: string | null, similarity: number}>> {
+  ): Promise<Array<{id: string, name: string, description: string, price: string | null, imageUrl: string | null, productUrl: string | null, stockStatus: string | null, regularPrice: string | null, messagingImageUrl: string | null, similarity: number}>> {
     const startTime = Date.now();
     // Only the products the chat may use (website products while WooCommerce is connected).
     const { getLiveProductSource } = await import('./productSourceSwitch');
@@ -127,6 +127,7 @@ export class ProductTextEmbeddingService {
         product_url,
         stock_status,
         regular_price::text as regular_price,
+        messaging_image_url,
         1 - (text_embedding <=> ${embeddingStr}::vector) as similarity
       FROM products
       WHERE business_account_id = ${businessAccountId}
@@ -149,6 +150,7 @@ export class ProductTextEmbeddingService {
       productUrl: row.product_url as string | null,
       stockStatus: row.stock_status as string | null,
       regularPrice: row.regular_price as string | null,
+      messagingImageUrl: row.messaging_image_url as string | null,
       similarity: parseFloat(row.similarity) as number,
     }));
   }

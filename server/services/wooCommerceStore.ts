@@ -163,6 +163,45 @@ async function getJson(urlString: string, opts: { keys?: WooKeys; keysInQuery?: 
   throw new WooStoreError("The website redirected too many times");
 }
 
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Downloads one product photo from the website (public addresses only, redirects checked), asking for the
+ * formats messaging apps take, so a picture service that can send JPEG instead of WebP does so.
+ */
+export async function fetchWebsiteImage(urlString: string): Promise<Buffer> {
+  let url = new URL(urlString);
+  if (url.protocol !== "https:" && !(allowLocal() && (url.hostname === "localhost" || url.hostname === "127.0.0.1"))) {
+    throw new WooStoreError("The photo address must start with https://");
+  }
+  for (let hop = 0; hop < 4; hop++) {
+    await assertPublicHost(url);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        redirect: "manual",
+        headers: { Accept: "image/jpeg,image/png;q=0.9,*/*;q=0.5", "User-Agent": USER_AGENT },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      throw new WooStoreError("The photo could not be downloaded");
+    }
+    if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
+      const next = new URL(res.headers.get("location")!, url);
+      const local = next.hostname === "localhost" || next.hostname === "127.0.0.1";
+      if (next.protocol !== "https:" && !(local && allowLocal())) throw new WooStoreError("The photo redirected to a non-https address");
+      url = next;
+      continue;
+    }
+    if (!res.ok) throw new WooStoreError(`The photo could not be downloaded (${res.status})`);
+    if (Number(res.headers.get("content-length")) > MAX_IMAGE_BYTES) throw new WooStoreError("The photo is too large");
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_IMAGE_BYTES) throw new WooStoreError("The photo is too large");
+    return buf;
+  }
+  throw new WooStoreError("The photo redirected too many times");
+}
+
 /** Keyed request: Basic auth first; servers that drop the Authorization header get the keys as parameters. */
 async function getWithKeys(urlString: string, keys: WooKeys): Promise<{ body: unknown; headers: Headers }> {
   try {
