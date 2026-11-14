@@ -9,6 +9,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { SearchQuestions, TypeQuestion } from "./CheckAnswerPage";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
+import { EMPTY_SCOPE, ScopePicker, scopeReady, type Scope } from "./ScopePicker";
 import { ASSESS_PATH,
   API, KIND_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, fmtCost, fmtMarks, paperRunning, photoToDataUrl, scopeLabel,
   type PaperSummary, type QuestionInput, type SchemeView,
@@ -45,6 +46,7 @@ export default function PapersPage() {
   const [adding, setAdding] = useState<"" | "search" | "type">("");
   const [preparing, setPreparing] = useState(0);
   const [randomCount, setRandomCount] = useState(5);
+  const [randomScope, setRandomScope] = useState<Scope>(EMPTY_SCOPE);
   const [photos, setPhotos] = useState<string[]>([]);
   const [busy, setBusy] = useState<"" | "check" | "practice" | "random">("");
   const [error, setError] = useState("");
@@ -84,7 +86,7 @@ export default function PapersPage() {
   async function addRandom() {
     setBusy("random"); setError("");
     try {
-      const res = await apiRequest<{ questions: QuestionInput[]; notes: string[] }>("POST", `${API}/papers/random-questions`, { count: randomCount });
+      const res = await apiRequest<{ questions: QuestionInput[]; notes: string[] }>("POST", `${API}/papers/random-questions`, { count: randomCount, ...(scopeReady(randomScope) ? { scope: randomScope } : {}) });
       if (!res.questions.length) setError(res.notes[0] || "No questions found.");
       else await addQuestions(res.questions);
       if (res.notes.length && res.questions.length) toast({ title: "Note", description: res.notes.join(" ") });
@@ -164,6 +166,7 @@ export default function PapersPage() {
           </div>
         )}
         {preparing > 0 && <p className="mb-3 flex items-center gap-2 text-[13px] text-gray-600" data-testid="paper-preparing"><Loader2 className="h-4 w-4 animate-spin" />The AI is writing the answer key for {preparing} question{preparing === 1 ? "" : "s"}…</p>}
+        <div className="mb-3"><ScopePicker value={randomScope} onChange={setRandomScope} anyLabel="Any (from Settings)" /></div>
         <div className="flex flex-wrap items-center gap-2">
           <select className={selectClass} value={randomCount} onChange={e => setRandomCount(Number(e.target.value))} aria-label="How many random questions" data-testid="paper-random-count">
             {[1, 2, 3, 4, 5, 6, 8, 10].map(n => <option key={n} value={n}>{n}</option>)}

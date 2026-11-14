@@ -28,7 +28,7 @@ import {
   schemeView,
 } from "../services/answerCheck/engine";
 import { ImageError, imageBytes, MAX_PAGES, MAX_PAPER_PAGES, prepareUpload } from "../services/answerCheck/images";
-import { customQuestionKey, pickRandomQuestion, pickRandomQuestions, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
+import { chaptersFor, customQuestionKey, pickRandomQuestion, pickRandomQuestions, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
 import { cleanQuestionList, createPaper, createPracticePaper, deletePaper, listPapers, PaperError, paperView, rerunPaper } from "../services/answerCheck/papers";
 import { answerPapers } from "@shared/schema";
 
@@ -39,7 +39,8 @@ import { answerPapers } from "@shared/schema";
  * calls the AI; history, settings and photos stay viewable while it is off.
  *
  *   GET  /api/answer-checking/overview            account, on/off, settings
- *   GET  /api/answer-checking/scopes              the account's classes and subjects
+ *   GET  /api/answer-checking/scopes              the account's classes and subjects (synced packs, as the Widget Tester)
+ *   GET  /api/answer-checking/chapters            one class and subject's chapters
  *   PUT  /api/answer-checking/settings
  *   POST /api/answer-checking/questions/random     a written-answer question from the curriculum
  *   GET  /api/answer-checking/questions/search
@@ -141,6 +142,24 @@ router.get(`${BASE}/overview`, ...superAdmin, async (req, res) => {
   } catch (e) { fail(res, "overview", e); }
 });
 
+/** A class / subject / chapter chosen on the page (query or body); null when incomplete. */
+function scopeFrom(src: any): { board: string; medium: string; grade: string; subject: string; chapter: string } | null {
+  const s = (k: string) => (typeof src?.[k] === "string" ? src[k].trim() : "");
+  if (!s("board") || !s("medium") || !s("grade")) return null;
+  return { board: s("board"), medium: s("medium"), grade: s("grade"), subject: s("subject"), chapter: s("subject") ? s("chapter") : "" };
+}
+
+router.get(`${BASE}/chapters`, ...superAdmin, async (req, res) => {
+  try {
+    const scope = scopeFrom(req.query);
+    if (!scope?.subject) return res.status(400).json({ error: "Choose a board, medium, grade and subject." });
+    res.json({ chapters: await chaptersFor(accountId(req), scope) });
+  } catch (e: any) {
+    console.warn("[Answer Check] chapters:", e?.message || e);
+    res.json({ chapters: [], error: "Could not load the chapters from the content store." });
+  }
+});
+
 // The account's classes and subjects; separate from the overview because a large content store can be slow.
 router.get(`${BASE}/scopes`, ...superAdmin, async (req, res) => {
   try { res.json({ scopes: await scopeOptions(accountId(req)), error: null }); }
@@ -161,16 +180,16 @@ router.post(`${BASE}/questions/random`, ...superAdmin, async (req, res) => {
     const id = accountId(req);
     const settings = await getSettings(id);
     const ai = await createAnswerCheckAi(id).catch(() => null);
-    const picked = await pickRandomQuestion(id, settings, ai);
+    const picked = await pickRandomQuestion(id, settings, ai, Math.random, new Set(), scopeFrom(req.body?.scope) ?? undefined);
     res.json({ ...picked, question: picked.question ? (await withSavedMarks(req, [picked.question]))[0] : null });
   } catch (e) { fail(res, "random question", e); }
 });
 
 router.get(`${BASE}/questions/search`, ...superAdmin, async (req, res) => {
   try {
-    const q = (k: string) => String(req.query[k] ?? "").trim();
-    if (!q("board") || !q("medium") || !q("grade")) return res.status(400).json({ error: "Choose a board, medium and grade." });
-    const results = await searchQuestions(accountId(req), { board: q("board"), medium: q("medium"), grade: q("grade"), subject: q("subject") }, q("q"), await getSettings(accountId(req)));
+    const scope = scopeFrom(req.query);
+    if (!scope) return res.status(400).json({ error: "Choose a board, medium and grade." });
+    const results = await searchQuestions(accountId(req), scope, String(req.query.q ?? ""), await getSettings(accountId(req)));
     res.json({ results: await withSavedMarks(req, results) });
   } catch (e) { fail(res, "search", e); }
 });
@@ -349,7 +368,7 @@ router.post(`${BASE}/papers/random-questions`, ...superAdmin, async (req, res) =
     if (!(await requireOn(req, res))) return;
     const count = Math.min(10, Math.max(1, Math.round(Number(req.body?.count) || 5)));
     const ai = await createAnswerCheckAi(accountId(req)).catch(() => null);
-    const picked = await pickRandomQuestions(accountId(req), await getSettings(accountId(req)), ai, count);
+    const picked = await pickRandomQuestions(accountId(req), await getSettings(accountId(req)), ai, count, Math.random, scopeFrom(req.body?.scope) ?? undefined);
     res.json({ ...picked, questions: await withSavedMarks(req, picked.questions) });
   } catch (e) { fail(res, "paper random questions", e); }
 });

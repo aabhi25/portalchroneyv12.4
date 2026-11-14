@@ -32,6 +32,8 @@ import { fetchCurriculumImage } from "../services/topscholar/mediaProxy";
 import { resolveCpIdsForScope } from "../services/topscholar/scopeResolver";
 import {
   reconcileSubjectNamesFromContentStore,
+  listSyncedScopeMetadata,
+  syncedCpIdsForScope,
   type StoredCurriculumScope,
 } from "../services/topscholar/testerContentScopes";
 import { testContentBundleConnection } from "../services/topscholar/cmsConnector";
@@ -1599,71 +1601,9 @@ router.get("/api/topscholar/students", ...topscholarGuards, async (req: Request,
   res.json(students);
 });
 
-function sameScopeValue(left: string, right: string): boolean {
-  return left.trim().localeCompare(right.trim(), undefined, { sensitivity: "accent" }) === 0;
-}
-
-/**
- * Metadata-only read model for Tester navigation. A row becomes eligible only
- * after its CP has completed a content-store sync; deleting content also removes
- * that sync row. This avoids grouping every embedding document just to build
- * dropdowns, while leaving the narrow chapter check against the active content
- * store in place before a preview is authorized.
- */
-async function listTesterScopeMetadata(businessAccountId: string): Promise<StoredCurriculumScope[]> {
-  const rows = await db
-    .select({
-      cpId: topscholarCpMappings.cpId,
-      board: topscholarCpMappings.board,
-      medium: topscholarCpMappings.medium,
-      grade: topscholarCpMappings.grade,
-      subject: topscholarCpMappings.subject,
-      cpName: topscholarCpMappings.cpName,
-    })
-    .from(topscholarCpMappings)
-    .innerJoin(
-      topscholarContentSync,
-      and(
-        eq(topscholarContentSync.businessAccountId, topscholarCpMappings.businessAccountId),
-        eq(topscholarContentSync.cpId, topscholarCpMappings.cpId),
-      ),
-    )
-    .where(
-      and(
-        eq(topscholarCpMappings.businessAccountId, businessAccountId),
-        eq(topscholarContentSync.status, "completed"),
-        gt(topscholarContentSync.chunkCount, 0),
-      ),
-    );
-
-  return rows
-    .map((row) => ({
-      cpId: row.cpId.trim(),
-      board: row.board?.trim() || "",
-      medium: row.medium?.trim() || "",
-      grade: row.grade?.trim() || "",
-      subject: row.subject?.trim() || row.cpName?.trim() || "",
-    }))
-    .filter((row) => !!(row.cpId && row.board && row.medium && row.grade && row.subject));
-}
-
-function storedCpIdsForScope(
-  scopes: StoredCurriculumScope[],
-  selection: { board: string; medium: string; grade: string; subject: string },
-): string[] {
-  return Array.from(
-    new Set(
-      scopes
-        .filter((scope) =>
-          sameScopeValue(scope.board, selection.board) &&
-          sameScopeValue(scope.medium, selection.medium) &&
-          sameScopeValue(scope.grade, selection.grade) &&
-          sameScopeValue(scope.subject, selection.subject),
-        )
-        .map((scope) => scope.cpId),
-    ),
-  );
-}
+// The Tester's class and subject choices come from the synced CP mappings (shared with AI assessment).
+const listTesterScopeMetadata = listSyncedScopeMetadata;
+const storedCpIdsForScope = syncedCpIdsForScope;
 
 router.get("/api/topscholar/scope-options", ...topscholarGuards, async (req: Request, res: Response) => {
   const businessAccountId = getBusinessAccountId(req);

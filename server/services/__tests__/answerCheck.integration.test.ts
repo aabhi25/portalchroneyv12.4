@@ -106,6 +106,15 @@ async function main() {
     await insert({ ...base, cp_id: "cp-sci", content_type: "question", subject: "Science", chapter: "Light", grade: "10", content_text: "True or false: light travels in straight lines.", source_ref: "q-tf", metadata: { questionType: "True/False" } });
     await insert({ ...base, cp_id: "cp-sci", content_type: "question", subject: "Science", chapter: "Light", grade: "10", content_text: "<p>Explain <b>refraction</b> of light with one example.</p>", source_ref: "q-written", metadata: { questionType: "subjective", solution: "<p>Refraction is the bending of light when it passes from one medium to another, e.g. a pencil in water looks bent.</p>" } });
     await insert({ ...base, cp_id: "cp-math", content_type: "note", subject: "Mathematics", chapter: "Linear equations", grade: "9", content_text: "A linear equation in one variable has the form ax + b = c. To solve it, move constants to one side and divide by the coefficient.", source_ref: "n1" });
+    // As after a real sync: the class of each pack is in the CP mappings (with a completed sync),
+    // while the content store's documents carry no class labels (as in the live MongoDB store).
+    const { sql: q } = await import("drizzle-orm");
+    for (const [cp, grade, subject] of [["cp-sci", "10", "Science"], ["cp-math", "9", "Mathematics"]]) {
+      await db.execute(q`INSERT INTO topscholar_cp_mappings (business_account_id, cp_id, board, medium, grade, subject) VALUES (${B}, ${cp}, 'CBSE', 'English', ${grade}, ${subject})`);
+      await db.execute(q`INSERT INTO topscholar_content_sync (business_account_id, cp_id, status, chunk_count) VALUES (${B}, ${cp}, 'completed', 3)`);
+    }
+    await db.execute(q`INSERT INTO topscholar_cp_mappings (business_account_id, cp_id, board, medium, grade, subject) VALUES (${B}, 'cp-unsynced', 'ICSE', 'English', '7', 'History')`);
+    await db.execute(q`UPDATE topscholar_content_chunks SET board = NULL, medium = NULL, grade = NULL WHERE business_account_id = ${B}`);
 
     const settings = await engine.getSettings(B);
     const pick = await questions.pickRandomQuestion(B, settings, null);
@@ -133,7 +142,24 @@ async function main() {
     const found = await questions.searchQuestions(B, { board: "CBSE", medium: "English", grade: "10", subject: "Science" }, "refraction", settings);
     expect(found.length === 1 && found[0].questionKey === "cms:cp-sci:q-written", "search finds written questions only", found.map(f => f.questionKey));
     const scopes = await questions.scopeOptions(B);
-    expect(scopes.length === 2 && scopes.some(s => s.grade === "10" && s.subjects.join() === "Science"), "class list for Settings", scopes);
+    expect(scopes.length === 2 && scopes.some(s => s.grade === "10" && s.subjects.join() === "Science"), "class list comes from the synced packs (as the Widget Tester), not the documents", scopes);
+    expect(!scopes.some(s => s.board === "ICSE"), "a pack that never finished syncing is not offered");
+    await insert({ business_account_id: B, board: null, medium: null, cp_id: "cp-sci", content_type: "question", subject: "Science", chapter: "Electricity", grade: null, content_text: "State Ohm's law.", source_ref: "q-ohm", metadata: { questionType: "Short Answer", solution: "Current is proportional to voltage at constant temperature." } });
+    const chapters = await questions.chaptersFor(B, { board: "CBSE", medium: "English", grade: "10", subject: "Science" });
+    expect(chapters.join("|") === "Electricity|Light", "chapters of a subject, from the content store", chapters);
+    const sci = { board: "CBSE", medium: "English", grade: "10", subject: "Science" };
+    const inChapter = await questions.searchQuestions(B, { ...sci, chapter: "Electricity" }, "", settings);
+    expect(inChapter.length === 1 && inChapter[0].questionKey === "cms:cp-sci:q-ohm" && inChapter[0].grade === "10" && inChapter[0].board === "CBSE", "search inside one chapter; class labels come from the pack", inChapter.map(x => [x.questionKey, x.grade]));
+    const allSci = await questions.searchQuestions(B, { ...sci, chapter: "" }, "", settings);
+    expect(allSci.length === 2, "the whole subject when no chapter is chosen", allSci.map(x => x.questionKey));
+    const seen = new Set<string>();
+    for (let i = 0; i < 6; i++) {
+      const r = await questions.pickRandomQuestion(B, settings, null, Math.random, new Set(), { ...sci, chapter: "Light" });
+      if (r.question) seen.add(r.question.questionKey);
+    }
+    expect(seen.size === 1 && seen.has("cms:cp-sci:q-written"), "Random question limited to a chosen chapter", Array.from(seen));
+    const emptyChapter = await questions.pickRandomQuestion(B, settings, null, Math.random, new Set(), { board: "CBSE", medium: "English", grade: "9", subject: "Mathematics", chapter: "Linear equations" });
+    expect(!emptyChapter.question && /chapter "Linear equations"/.test(emptyChapter.note), "a chapter with no written questions says so by name", emptyChapter.note);
   }
 
   console.log("Marking schemes");

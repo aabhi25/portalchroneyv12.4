@@ -6,15 +6,16 @@ import { subjectKindOf, suggestMaxMarks, type AnswerCheckSettings, type Question
 import { getTopscholarConfig, type TopscholarConfig } from "../topscholar/config";
 import { getChunks, type ChunkPage, type ChunkQueryOptions, type ContentChunkItem } from "../topscholar/contentReader";
 import { getMongoChunks } from "../topscholar/mongoContentReader";
-import { listStoredCurriculumScopes, type StoredCurriculumScope } from "../topscholar/testerContentScopes";
+import { chapterNamesForCpIds, listSyncedScopeMetadata, syncedCpIdsForScope, type StoredCurriculumScope } from "../topscholar/testerContentScopes";
 import { htmlToText } from "../topscholar/htmlContent";
 import { ANSWER_CHECK_MODEL, type AnswerCheckAi } from "./ai";
 import { guessQuestionKind, isObjectiveQuestion, parseQuestionFromNotes, QUESTION_FROM_NOTES_SYSTEM, questionFromNotesUserText } from "./prompts";
 
 /**
  * Answer checking pilot — questions from the account's own curriculum (Top Scholar's synced
- * CMS content): the scopes it has, a search, and the "Random question" button, which picks a
- * written-answer question (never multiple choice) from the chosen scopes and question kinds.
+ * CMS content): the classes it has (the same synced-pack list the Widget Tester uses), each
+ * subject's chapters, a search, and the "Random question" button, which picks a written-answer
+ * question (never multiple choice) from the chosen class / subject / chapter and question kinds.
  * When a scope has no written-answer questions, the AI sets one from a chapter's notes.
  */
 
@@ -55,9 +56,7 @@ export interface ScopeOption {
 
 /** Board · medium · grade combinations with their subjects, for the settings and the search. */
 export async function scopeOptions(businessAccountId: string): Promise<ScopeOption[]> {
-  const cfg = await accountContentConfig(businessAccountId);
-  if (!cfg) return [];
-  const rows = await listStoredCurriculumScopes(cfg, businessAccountId);
+  const rows = await listSyncedScopeMetadata(businessAccountId);
   const map = new Map<string, ScopeOption>();
   for (const r of rows) {
     const key = `${r.board}|${r.medium}|${r.grade}`.toLowerCase();
@@ -71,6 +70,15 @@ export async function scopeOptions(businessAccountId: string): Promise<ScopeOpti
 }
 
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** Chapter names of one class and subject, as the Widget Tester lists them. */
+export async function chaptersFor(businessAccountId: string, scope: ScopePick): Promise<string[]> {
+  const cfg = await accountContentConfig(businessAccountId);
+  if (!cfg || !scope.subject) return [];
+  const cpIds = syncedCpIdsForScope(await listSyncedScopeMetadata(businessAccountId), scope);
+  const names = await chapterNamesForCpIds(cfg, businessAccountId, cpIds);
+  return names.filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
 
 /** Stored scope rows that match the chosen scopes (a scope with no subject matches every subject). */
 export function matchingScopeRows(rows: StoredCurriculumScope[], picks: ScopePick[]): StoredCurriculumScope[] {
@@ -122,47 +130,49 @@ export interface PickResult {
  * Random written-answer question from the chosen scopes and kinds. Tries up to 8 content packs,
  * 40 questions from a random spot in each; when none fits, the AI sets one from a chapter's notes.
  */
-export async function pickRandomQuestion(businessAccountId: string, settings: AnswerCheckSettings, ai: AnswerCheckAi | null, rand: () => number = Math.random, exclude: Set<string> = new Set()): Promise<PickResult> {
+export async function pickRandomQuestion(businessAccountId: string, settings: AnswerCheckSettings, ai: AnswerCheckAi | null, rand: () => number = Math.random, exclude: Set<string> = new Set(), only?: ScopePick & { chapter?: string }): Promise<PickResult> {
   const looked = { packs: 0, questions: 0, writtenQuestions: 0 };
   const cfg = await accountContentConfig(businessAccountId);
   if (!cfg) return { question: null, note: "Account not found.", looked };
-  const all = await listStoredCurriculumScopes(cfg, businessAccountId);
-  const rows = shuffle(matchingScopeRows(all, settings.scopes), rand);
+  const all = await listSyncedScopeMetadata(businessAccountId);
+  // A class / subject / chapter chosen on the page wins over the Settings list.
+  const rows = shuffle(matchingScopeRows(all, only ? [only] : settings.scopes), rand);
+  const chapter = only?.chapter || undefined;
   if (!rows.length) {
     return { question: null, note: all.length ? "None of the chosen classes and subjects has content. Change them in Settings." : "This account has no curriculum content yet.", looked };
   }
   // Prefer packs with more written questions left: try every chosen pack before giving up.
   for (const scope of rows.slice(0, exclude.size ? 30 : 8)) {
     looked.packs++;
-    const first = await readChunks(cfg, businessAccountId, { cpId: scope.cpId, contentType: "question", page: 1, pageSize: 1 });
+    const first = await readChunks(cfg, businessAccountId, { cpId: scope.cpId, contentType: "question", chapter, page: 1, pageSize: 1 });
     if (!first.total) continue;
     const pageSize = 40;
     const pages = Math.max(1, Math.ceil(first.total / pageSize));
     const page = 1 + Math.floor(rand() * pages);
-    const batch = await readChunks(cfg, businessAccountId, { cpId: scope.cpId, contentType: "question", page, pageSize });
+    const batch = await readChunks(cfg, businessAccountId, { cpId: scope.cpId, contentType: "question", chapter, page, pageSize });
     looked.questions += batch.items.length;
     const candidates = batch.items.map(c => questionFromChunk(c, scope, settings)).filter((q): q is QuestionInput => !!q);
     looked.writtenQuestions += candidates.length;
     const fits = candidates.filter(q => (!q.questionKind || settings.questionKinds.includes(q.questionKind)) && !exclude.has(q.questionKey));
     if (fits.length) return { question: fits[Math.floor(rand() * fits.length)], note: "", looked };
   }
-  if (!ai) return { question: null, note: "No written-answer questions found in the chosen classes and subjects.", looked };
+  if (!ai) return { question: null, note: chapter ? `No written-answer questions found in the chapter "${chapter}".` : "No written-answer questions found in the chosen classes and subjects.", looked };
 
   // Fall back: the AI sets a question from one chapter's notes.
   for (const scope of rows.slice(0, 4)) {
-    const first = await readChunks(cfg, businessAccountId, { cpId: scope.cpId, contentType: "note", page: 1, pageSize: 1 });
+    const first = await readChunks(cfg, businessAccountId, { cpId: scope.cpId, contentType: "note", chapter, page: 1, pageSize: 1 });
     if (!first.total) continue;
     const page = 1 + Math.floor(rand() * Math.max(1, Math.ceil(first.total / 3)));
-    const notes = await readChunks(cfg, businessAccountId, { cpId: scope.cpId, contentType: "note", page, pageSize: 3 });
+    const notes = await readChunks(cfg, businessAccountId, { cpId: scope.cpId, contentType: "note", chapter, page, pageSize: 3 });
     if (!notes.items.length) continue;
-    const chapter = notes.items[0].chapter;
-    const text = notes.items.filter(n => n.chapter === chapter).map(n => n.contentText).join("\n\n");
+    const notesChapter = notes.items[0].chapter;
+    const text = notes.items.filter(n => n.chapter === notesChapter).map(n => n.contentText).join("\n\n");
     const kind = settings.questionKinds[Math.floor(rand() * settings.questionKinds.length)];
     const maxMarks = suggestMaxMarks(kind, "", settings);
     const reply = await ai.json({
       model: ANSWER_CHECK_MODEL,
       system: QUESTION_FROM_NOTES_SYSTEM,
-      user: questionFromNotesUserText({ ...scope, chapter }, kind, maxMarks, text),
+      user: questionFromNotesUserText({ ...scope, chapter: notesChapter }, kind, maxMarks, text),
       maxTokens: 1500,
       temperature: 0.7,
     });
@@ -175,24 +185,24 @@ export async function pickRandomQuestion(businessAccountId: string, settings: An
         questionText: q.question,
         modelAnswer: q.modelAnswer,
         questionKind: q.questionKind || kind,
-        board: scope.board, medium: scope.medium, grade: scope.grade, subject: scope.subject, chapter,
+        board: scope.board, medium: scope.medium, grade: scope.grade, subject: scope.subject, chapter: notesChapter,
         maxMarks,
       },
       note: `No written-answer question was found in ${scope.board} ${scope.grade} ${scope.subject}, so the AI set one from the chapter notes.`,
       looked,
     };
   }
-  return { question: null, note: "No written-answer questions or chapter notes found in the chosen classes and subjects.", looked };
+  return { question: null, note: chapter ? `No written-answer questions or notes found in the chapter "${chapter}".` : "No written-answer questions or chapter notes found in the chosen classes and subjects.", looked };
 }
 
-/** Written-answer questions matching a search, from one class and subject (first 30). */
-export async function searchQuestions(businessAccountId: string, scope: ScopePick, q: string, settings: AnswerCheckSettings): Promise<QuestionInput[]> {
+/** Written-answer questions of one class and subject (optionally one chapter, optionally matching words; first 30). */
+export async function searchQuestions(businessAccountId: string, scope: ScopePick & { chapter?: string }, q: string, settings: AnswerCheckSettings): Promise<QuestionInput[]> {
   const cfg = await accountContentConfig(businessAccountId);
   if (!cfg) return [];
-  const rows = matchingScopeRows(await listStoredCurriculumScopes(cfg, businessAccountId), [scope]);
+  const rows = matchingScopeRows(await listSyncedScopeMetadata(businessAccountId), [scope]);
   const out: QuestionInput[] = [];
   for (const row of rows.slice(0, 6)) {
-    const page = await readChunks(cfg, businessAccountId, { cpId: row.cpId, contentType: "question", q: q.trim() || undefined, page: 1, pageSize: 60 });
+    const page = await readChunks(cfg, businessAccountId, { cpId: row.cpId, contentType: "question", chapter: scope.chapter || undefined, q: q.trim() || undefined, page: 1, pageSize: 100 });
     for (const c of page.items) {
       const question = questionFromChunk(c, row, settings);
       if (question && !out.some(o => o.questionKey === question.questionKey)) out.push(question);
@@ -204,11 +214,11 @@ export async function searchQuestions(businessAccountId: string, scope: ScopePic
 
 
 /** Several different random questions for a paper (fewer when the content runs out). */
-export async function pickRandomQuestions(businessAccountId: string, settings: AnswerCheckSettings, ai: AnswerCheckAi | null, count: number, rand: () => number = Math.random): Promise<{ questions: QuestionInput[]; notes: string[] }> {
+export async function pickRandomQuestions(businessAccountId: string, settings: AnswerCheckSettings, ai: AnswerCheckAi | null, count: number, rand: () => number = Math.random, only?: ScopePick & { chapter?: string }): Promise<{ questions: QuestionInput[]; notes: string[] }> {
   const questions: QuestionInput[] = [];
   const notes: string[] = [];
   for (let tries = 0; questions.length < count && tries < count * 3; tries++) {
-    const pick = await pickRandomQuestion(businessAccountId, settings, ai, rand, new Set(questions.map(q => q.questionKey)));
+    const pick = await pickRandomQuestion(businessAccountId, settings, ai, rand, new Set(questions.map(q => q.questionKey)), only);
     if (!pick.question) { if (pick.note && !notes.includes(pick.note)) notes.push(pick.note); if (!ai) break; continue; }
     if (questions.some(q => q.questionKey === pick.question!.questionKey || q.questionText === pick.question!.questionText)) continue;
     questions.push(pick.question);

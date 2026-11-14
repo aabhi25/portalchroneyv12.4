@@ -12,6 +12,7 @@ import { Panel } from "@/components/agency/agencyUi";
 import { PRACTICE_LEVELS, QUESTION_KINDS, type PracticeLevel, type QuestionKind } from "@shared/answerCheck";
 import { SchemeEditor } from "./SchemeEditor";
 import { AssessmentOffBanner, useScopes } from "./AssessmentSwitch";
+import { EMPTY_SCOPE, ScopePicker, scopeReady, type Scope } from "./ScopePicker";
 import { ASSESS_PATH,
   API, KIND_LABEL, LEVEL_LABEL, OVERVIEW_KEY, STATUS_LABEL, STATUS_STYLE, fmtMarks, isRunning, photoToDataUrl, scopeLabel,
   type ChecksResponse, type Overview, type QuestionInput, type SchemeView,
@@ -133,11 +134,12 @@ function QuestionPicker({ overview, off, onPrepared }: { overview: Overview | un
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<"" | "random" | "prepare" | "search">("");
   const [error, setError] = useState("");
+  const [randomScope, setRandomScope] = useState<Scope>(EMPTY_SCOPE);
 
   async function pickRandom() {
     setBusy("random"); setError(""); setNote("");
     try {
-      const res = await apiRequest<{ question: QuestionInput | null; note: string; looked: { packs: number; questions: number; writtenQuestions: number } }>("POST", `${API}/questions/random`);
+      const res = await apiRequest<{ question: QuestionInput | null; note: string; looked: { packs: number; questions: number; writtenQuestions: number } }>("POST", `${API}/questions/random`, scopeReady(randomScope) ? { scope: randomScope } : {});
       if (!res.question) { setCandidate(null); setError(res.note || "No question found."); return; }
       setCandidate(res.question);
       setNote(res.note);
@@ -169,9 +171,12 @@ function QuestionPicker({ overview, off, onPrepared }: { overview: Overview | un
         {tab("type", "Type your own", Type)}
       </div>
       {mode === "random" && !candidate && (
-        <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={pickRandom} disabled={!!busy || off} data-testid="pick-random">{busy === "random" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Shuffle className="mr-1.5 h-4 w-4" />}Pick a random question</Button>
-          <span className="text-[13px] text-gray-500">From the classes, subjects and question types chosen in Settings.</span>
+        <div className="space-y-3">
+          <ScopePicker value={randomScope} onChange={setRandomScope} anyLabel="Any (from Settings)" />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onClick={pickRandom} disabled={!!busy || off} data-testid="pick-random">{busy === "random" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Shuffle className="mr-1.5 h-4 w-4" />}Pick a random question</Button>
+            <span className="text-[13px] text-gray-500">{scopeReady(randomScope) ? "From the class, subject and chapter chosen above." : "From the classes, subjects and question types chosen in Settings."}</span>
+          </div>
         </div>
       )}
       {mode === "search" && !candidate && <SearchQuestions overview={overview} onPick={setCandidate} />}
@@ -220,24 +225,18 @@ function CandidateCard({ q, note, busy, off, onChange, onUse, onAnother, another
   );
 }
 
-export function SearchQuestions({ overview, onPick }: { overview: Overview | undefined; onPick: (q: QuestionInput) => void }) {
-  const { scopes, error: scopesError, loading } = useScopes();
-  const [scopeIdx, setScopeIdx] = useState(0);
-  const [subject, setSubject] = useState("");
+export function SearchQuestions({ onPick }: { overview?: Overview | undefined; onPick: (q: QuestionInput) => void }) {
+  const [scope, setScope] = useState<Scope>(EMPTY_SCOPE);
   const [text, setText] = useState("");
   const [results, setResults] = useState<QuestionInput[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const scope = scopes[scopeIdx];
-  if (loading) return <p className="text-[14px] text-gray-500">Loading the classes and subjects…</p>;
-  if (scopesError) return <p className="text-[14px] text-red-600">{scopesError}</p>;
-  if (!scopes.length) return <p className="text-[14px] text-gray-500">This account has no curriculum content yet.</p>;
 
   async function run() {
-    if (!scope) return;
+    if (!scopeReady(scope, true)) return;
     setBusy(true); setError("");
     try {
-      const p = new URLSearchParams({ board: scope.board, medium: scope.medium, grade: scope.grade, subject, q: text });
+      const p = new URLSearchParams({ ...scope, q: text });
       const res = await apiRequest<{ results: QuestionInput[] }>("GET", `${API}/questions/search?${p}`);
       setResults(res.results);
     } catch (e: any) { setError(e.message); }
@@ -246,24 +245,14 @@ export function SearchQuestions({ overview, onPick }: { overview: Overview | und
 
   return (
     <div className="space-y-3">
+      <ScopePicker value={scope} onChange={s => { setScope(s); setResults(null); }} needSubject />
       <div className="flex flex-wrap items-end gap-2">
-        <label className="text-[13px] font-medium text-gray-700">Class
-          <select className={`${selectClass} mt-1 block`} value={scopeIdx} onChange={e => { setScopeIdx(Number(e.target.value)); setSubject(""); }} data-testid="search-scope">
-            {scopes.map((s, i) => <option key={i} value={i}>{scopeLabel(s)}</option>)}
-          </select>
-        </label>
-        <label className="text-[13px] font-medium text-gray-700">Subject
-          <select className={`${selectClass} mt-1 block`} value={subject} onChange={e => setSubject(e.target.value)} data-testid="search-subject">
-            <option value="">All subjects</option>
-            {scope?.subjects.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </label>
         <Input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === "Enter" && run()} placeholder="Words in the question (optional)" className="w-64" data-testid="search-text" />
-        <Button onClick={run} disabled={busy} data-testid="search-run">{busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Search className="mr-1.5 h-4 w-4" />}Search</Button>
+        <Button onClick={run} disabled={busy || !scopeReady(scope, true)} data-testid="search-run">{busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Search className="mr-1.5 h-4 w-4" />}Show questions</Button>
       </div>
       {error && <p className="text-[14px] text-red-600">{error}</p>}
       {results && (results.length === 0
-        ? <p className="text-[14px] text-gray-500" data-testid="search-empty">No written-answer questions found. Multiple-choice and true/false questions are left out.</p>
+        ? <p className="text-[14px] text-gray-500" data-testid="search-empty">No written-answer questions found{scope.chapter ? " in this chapter" : ""}. Multiple-choice and true/false questions are left out.</p>
         : (
           <ul className="max-h-[420px] divide-y divide-black/[0.05] overflow-y-auto rounded-xl border border-black/[0.06]" data-testid="search-results">
             {results.map(r => (

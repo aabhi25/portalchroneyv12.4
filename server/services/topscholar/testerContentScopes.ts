@@ -1,9 +1,10 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { db } from "../../db";
-import { topscholarCpMappings } from "@shared/schema";
+import { topscholarContentSync, topscholarCpMappings } from "@shared/schema";
 import { ensureContentSchema, getContentPool } from "./contentDb";
-import { getMongoCollection } from "./mongoContentDb";
-import type { TopscholarConfig } from "./config";
+import { getMongoChapterNames, getMongoCollection } from "./mongoContentDb";
+import { getChapterNamesForCpIds } from "./contentReader";
+import { isMongoConnectionString, type TopscholarConfig } from "./config";
 
 export interface StoredCurriculumScope {
   board: string;
@@ -385,4 +386,77 @@ export async function resolveStoredScopeCpIds(
         .map((row) => row.cpId),
     ),
   );
+}
+/**
+ * The synced content packs with their board / medium / grade / subject, read from Chroney's own
+ * database (CP mappings with a completed, non-empty sync). Used by the Widget Tester and AI
+ * assessment to build the class and subject choices without grouping every document of the
+ * content store; a pack becomes eligible only after its sync completed.
+ */
+export async function listSyncedScopeMetadata(businessAccountId: string): Promise<StoredCurriculumScope[]> {
+  const rows = await db
+    .select({
+      cpId: topscholarCpMappings.cpId,
+      board: topscholarCpMappings.board,
+      medium: topscholarCpMappings.medium,
+      grade: topscholarCpMappings.grade,
+      subject: topscholarCpMappings.subject,
+      cpName: topscholarCpMappings.cpName,
+    })
+    .from(topscholarCpMappings)
+    .innerJoin(
+      topscholarContentSync,
+      and(
+        eq(topscholarContentSync.businessAccountId, topscholarCpMappings.businessAccountId),
+        eq(topscholarContentSync.cpId, topscholarCpMappings.cpId),
+      ),
+    )
+    .where(
+      and(
+        eq(topscholarCpMappings.businessAccountId, businessAccountId),
+        eq(topscholarContentSync.status, "completed"),
+        gt(topscholarContentSync.chunkCount, 0),
+      ),
+    );
+
+  return rows
+    .map((row) => ({
+      cpId: row.cpId.trim(),
+      board: row.board?.trim() || "",
+      medium: row.medium?.trim() || "",
+      grade: row.grade?.trim() || "",
+      subject: row.subject?.trim() || row.cpName?.trim() || "",
+    }))
+    .filter((row) => !!(row.cpId && row.board && row.medium && row.grade && row.subject));
+}
+
+function sameScopeValue(left: string, right: string): boolean {
+  return left.trim().localeCompare(right.trim(), undefined, { sensitivity: "accent" }) === 0;
+}
+
+/** CP IDs of the synced packs for one board / medium / grade / subject. */
+export function syncedCpIdsForScope(
+  scopes: StoredCurriculumScope[],
+  selection: { board: string; medium: string; grade: string; subject: string },
+): string[] {
+  return Array.from(
+    new Set(
+      scopes
+        .filter((scope) =>
+          sameScopeValue(scope.board, selection.board) &&
+          sameScopeValue(scope.medium, selection.medium) &&
+          sameScopeValue(scope.grade, selection.grade) &&
+          sameScopeValue(scope.subject, selection.subject),
+        )
+        .map((scope) => scope.cpId),
+    ),
+  );
+}
+
+/** Chapter names of some packs, from whichever content store the account uses. */
+export async function chapterNamesForCpIds(cfg: TopscholarConfig, businessAccountId: string, cpIds: string[]): Promise<string[]> {
+  if (!cpIds.length) return [];
+  return isMongoConnectionString(cfg.contentDbUrl)
+    ? getMongoChapterNames({ connectionString: cfg.contentDbUrl!, dbName: cfg.contentDbName, collection: cfg.contentDbCollection }, businessAccountId, cpIds)
+    : getChapterNamesForCpIds(cfg, businessAccountId, cpIds);
 }
