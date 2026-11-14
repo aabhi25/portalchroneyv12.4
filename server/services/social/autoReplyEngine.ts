@@ -34,6 +34,7 @@ import { selectRelevantTools } from "../../aiTools";
 import { ToolExecutionService } from "../toolExecutionService";
 import { channelProductSummary } from "../productSourceSwitch";
 import { messagingImageOf } from "../messagingImages";
+import { captionExcerpt } from "../whatsappProductCarousel";
 import { createOpenAI, OPENAI_TIMEOUTS } from "../../lib/openaiClient";
 import type { SocialPlatformId } from "./types";
 import {
@@ -1289,7 +1290,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
                     }
                     collectedProductCards.push({
                       name: p.name,
-                      description: p.description?.substring(0, 200),
+                      description: captionExcerpt(p.description, 300),
                       price: p.price ? Number(p.price) : undefined,
                       imageUrl: photo,
                     });

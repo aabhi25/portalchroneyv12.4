@@ -231,6 +231,8 @@ export function decodeEntities(s: string): string {
 export function htmlToText(html: string): string {
   const text = html
     .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, "")
+    // Line breaks inside the HTML source are just spaces (as in a browser); only tags start new lines.
+    .replace(/\s+/g, " ")
     .replace(/<li[^>]*>/gi, "\n• ")
     .replace(/<(br|\/p|\/h[1-6]|\/div|\/li|\/tr)[^>]*>/gi, "\n")
     .replace(/<[^>]+>/g, "");

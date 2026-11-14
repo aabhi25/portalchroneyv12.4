@@ -35,6 +35,7 @@ import { selectRelevantTools, getToolByName } from "../aiTools";
 import { ToolExecutionService } from "./toolExecutionService";
 import { channelProductSummary } from "./productSourceSwitch";
 import { messagingImageOf } from "./messagingImages";
+import { CAROUSEL_MIN_CARDS, captionExcerpt, carouselEnabled, carouselInteractive, carouselTapToNumber, knowMoreTitle } from "./whatsappProductCarousel";
 import { isSessionActive, isSessionExpiredError, markSessionExpired, sendTemplateMessage } from "./whatsappSessionService";
 import { resolveChatContextMode } from "./chatContext/config";
 import { buildBusinessProfile, type KnowledgePassage } from "./chatContext/businessProfile";
@@ -294,6 +295,8 @@ export class WhatsappAutoReplyService {
     const timings: Record<string, number> = {};
     const startTime = Date.now();
     let replySent = false;
+    // A tap on a product carousel's "Know more (N)" means the same as replying with the product's number.
+    userMessage = carouselTapToNumber(userMessage);
     try {
       console.log(`[WhatsApp Auto-Reply] Processing message from ${senderPhone}`);
       
@@ -657,12 +660,55 @@ export class WhatsappAutoReplyService {
           }
         }
 
-        let imagesSent = 0;
-        for (const card of cardsWithImages) {
+        // One swipeable carousel message (can't arrive out of order); the separate photo cards below
+        // are the fallback when it can't be sent (MSG91 / WhatsApp refuses it, or only one product).
+        let carouselSent = false;
+        if (carouselEnabled() && cardsWithImages.length >= CAROUSEL_MIN_CARDS) {
           try {
+            const formatPrice = (n: number) => `₹${n.toLocaleString('en-IN')}`;
+            let bodyText = aiResult.hasMoreProducts ? "Swipe to see the products. Reply \"more\" for more options." : "Swipe to see the products.";
+            let knowMore = "Know more";
+            let book = "Book consultation";
+            if (replyLanguage) {
+              bodyText = await ourText(businessAccountId, bodyText, replyLanguage);
+              const km = (await ourText(businessAccountId, knowMore, replyLanguage)).trim();
+              if (km && km.length <= 15) knowMore = km;
+              const bk = (await ourText(businessAccountId, book, replyLanguage)).trim();
+              if (bk && bk.length <= 20) book = bk;
+            }
+            const interactive = carouselInteractive(bodyText, cardsWithImages.map(c => ({
+              number: c.originalIndex + 1,
+              name: c.name,
+              price: c.price,
+              description: translatedDescriptions?.get(c.originalIndex) || c.description,
+              imageUrl: c.imageUrl!,
+              outOfStock: c.outOfStock,
+            })), formatPrice, { knowMore, book });
             await new Promise(resolve => setTimeout(resolve, 500));
+            const carouselResult = await this.sendWhatsAppInteractive(settings, senderPhone, interactive);
+            if (carouselResult.success) {
+              carouselSent = true;
+              this.storeOutgoingMessage(businessAccountId, senderPhone, `[Product carousel] ${cardsWithImages.map((c, i) => `${i + 1}. ${c.name}`).join(', ')}`).catch(err =>
+                console.error('[WhatsApp Auto-Reply] Failed to store carousel message:', err)
+              );
+              console.log(`[WhatsApp Auto-Reply] Product carousel sent (${cardsWithImages.length} cards)`);
+            } else {
+              console.log(`[WhatsApp Auto-Reply] Product carousel refused, sending separate cards instead: ${JSON.stringify(carouselResult.error)?.slice(0, 300)}`);
+            }
+          } catch (carouselErr) {
+            console.error(`[WhatsApp Auto-Reply] Product carousel error, sending separate cards instead:`, carouselErr);
+          }
+        }
+
+        let imagesSent = 0;
+        for (const card of carouselSent ? [] : cardsWithImages) {
+          try {
+            // Photo messages are delivered once WhatsApp has fetched the photo, so close together
+            // they can overtake each other: leave each one time to arrive.
+            await new Promise(resolve => setTimeout(resolve, imagesSent === 0 ? 500 : 2500));
             const captionParts: string[] = [`*${card.originalIndex + 1}. ${card.name}*`];
-            if (card.price && card.price > 0) captionParts.push(`₹${card.price.toLocaleString('en-IN')}`);
+            if (card.price && card.price > 0) captionParts.push(card.outOfStock ? `₹${card.price.toLocaleString('en-IN')} · Out of stock` : `₹${card.price.toLocaleString('en-IN')}`);
+            else if (card.outOfStock) captionParts.push('Out of stock');
             const desc = translatedDescriptions?.get(card.originalIndex) || card.description;
             if (desc) captionParts.push(desc);
             const caption = captionParts.join('\n');
@@ -689,7 +735,8 @@ export class WhatsappAutoReplyService {
 
         if (imagesSent > 0) {
           try {
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            // Longer than between cards: this text message needs no photo, so it would overtake them.
+            await new Promise(resolve => setTimeout(resolve, 5000));
             const ctaButtons: { id: string; title: string }[] = [
               { id: "book_consultation", title: "Book Consultation" },
             ];
@@ -1385,7 +1432,7 @@ export class WhatsappAutoReplyService {
     useCaseMode?: string,
     useProductCatalog: boolean = true,
     opts: WhatsappBrainOptions = {}
-  ): Promise<{ text: string; productImages?: string[]; productCards?: { name: string; description?: string; price?: number; imageUrl?: string }[]; isProductSelection?: boolean; hasMoreProducts?: boolean } | null> {
+  ): Promise<{ text: string; productImages?: string[]; productCards?: { name: string; description?: string; price?: number; imageUrl?: string; outOfStock?: boolean }[]; isProductSelection?: boolean; hasMoreProducts?: boolean } | null> {
     try {
       // Bounded so a hung request can't leave the customer without any answer.
       const openai = createOpenAI({ businessAccountId, apiKey, timeout: 45_000, maxRetries: 1 });
@@ -1790,7 +1837,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
         ];
 
         const collectedProductImages: string[] = [];
-        const collectedProductCards: { name: string; description?: string; price?: number; imageUrl?: string }[] = [];
+        const collectedProductCards: { name: string; description?: string; price?: number; imageUrl?: string; outOfStock?: boolean }[] = [];
         let hasMoreProducts = false;
 
         let usedProductTool = false;
@@ -1845,9 +1892,10 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
                     }
                     collectedProductCards.push({
                       name: p.name,
-                      description: p.description?.substring(0, 200),
+                      description: captionExcerpt(p.description, 300),
                       price: p.price ? Number(p.price) : undefined,
                       imageUrl: photo,
+                      outOfStock: p.stockStatus === 'out_of_stock',
                     });
                   }
                 } else {
@@ -2220,6 +2268,35 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
     } catch (error) {
       console.error(`[WhatsApp Auto-Reply] Failed to store outgoing message:`, error);
     }
+  }
+
+  /** Any WhatsApp interactive message (e.g. a product carousel) through MSG91's outbound API. */
+  private async sendWhatsAppInteractive(
+    settings: WhatsappSettings,
+    recipientPhone: string,
+    interactive: Record<string, unknown>,
+  ): Promise<{ success: boolean; error?: unknown }> {
+    if (!settings.msg91AuthKey || !settings.msg91IntegratedNumberId) {
+      return { success: false, error: "MSG91 credentials not configured" };
+    }
+    const response = await fetch("https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/", {
+      method: "POST",
+      signal: AbortSignal.timeout(15_000),
+      headers: { "accept": "application/json", "authkey": settings.msg91AuthKey, "content-type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_number: recipientPhone.replace(/\D/g, ""),
+        integrated_number: settings.msg91IntegratedNumberId,
+        content_type: "interactive",
+        interactive,
+      }),
+    });
+    const responseData: any = await response.json().catch(() => ({}));
+    console.log(`[WhatsApp Auto-Reply] MSG91 interactive (${String((interactive as any).type)}) response:`, responseData);
+    if (!response.ok || responseData.status === 'fail' || responseData.hasError) {
+      return { success: false, error: responseData.errors || responseData.message || `MSG91 error: ${response.status}` };
+    }
+    return { success: true };
   }
 
   async sendInteractiveButtons(
