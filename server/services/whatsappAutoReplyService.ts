@@ -48,7 +48,7 @@ import { embeddingService } from "./embeddingService";
 import { appliesToChannel } from "@shared/knowledgeChannels";
 import { effectiveUseCaseMode, resolveAnswerStyle, websiteInstructionsApply } from "./whatsapp/aiReplySettings";
 import {
-  WHATSAPP_EXTRA_TOOL_NAMES, formatSlotsForWhatsapp, formatOrdersForWhatsapp, toWhatsAppText,
+  WHATSAPP_EXTRA_TOOL_NAMES, formatSlotsForWhatsapp, formatOrdersForWhatsapp, toWhatsAppText, tidyWhatsAppProductText,
   whatsappAppointmentTools, resolveWhatsappModel, processWhatsappFallbackTemplate, WHATSAPP_HISTORY_LIMITS, isModelUnavailableError,
 } from "./whatsapp/aiReplyHelpers";
 import {
@@ -192,6 +192,18 @@ function looksLikeSlotPick(userMessage: string, history: Array<{ role: string; c
   if (!isPick) return false;
   const lastAssistant = [...history].reverse().find(m => m.role === "assistant");
   return !!lastAssistant && /\b1\.\s.*\d{1,2}:\d{2}\s*(am|pm)/i.test(lastAssistant.content);
+}
+
+/**
+ * The customer is picking one of the products we just showed ("2", "option 2", or a carousel's
+ * "Know more (2)" tap, which arrives as "2"). Too short for the product-intent check, so without this
+ * the AI got no catalog search and described the product from memory.
+ */
+function looksLikeProductPick(userMessage: string, history: Array<{ role: string; content: string }>): boolean {
+  const msg = userMessage.trim().toLowerCase().replace(/[^\w\s]/g, "").trim();
+  if (!/^(option|number|item|choice|product)?\s*\d{1,2}$/.test(msg)) return false;
+  if (looksLikeSlotPick(userMessage, history)) return false;
+  return history.slice(-8).some(m => m.role === "assistant" && /\[(Products shown|Product carousel)/.test(m.content || ""));
 }
 
 /** Conditional Train Chroney instructions triggered by this message (keywords), for the final note. */
@@ -1777,7 +1789,10 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
               false,
               !!opts.ordersEnabled
             );
-            const productTool = hasProducts ? selectedTools.find((t: any) => t.function?.name === 'get_products') : undefined;
+            const productTool = hasProducts
+              ? selectedTools.find((t: any) => t.function?.name === 'get_products')
+                || (looksLikeProductPick(userMessage, conversationHistory) ? getToolByName('get_products') : undefined)
+              : undefined;
             if (productTool) {
               const whatsappProductTool = JSON.parse(JSON.stringify(productTool));
               whatsappProductTool.function.description = 'Search and retrieve products from the catalog when the user asks about products, items, or wants to browse. Returns product details including name, price, and description. Product images will be sent as separate image messages automatically. Keep to 3-5 products max.';
@@ -1894,7 +1909,10 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
 
                 let toolResultStr: string;
                 if (result.success && result.data && Array.isArray(result.data)) {
-                  const { lines: productSummaries, note: websiteNote } = channelProductSummary(result.data.slice(0, 5));
+                  // A product picked by number ("2", or a "Know more (2)" tap) is described in full: give the AI
+                  // the whole description so it doesn't fill gaps with made-up features.
+                  const pickedByNumber = /^\d{1,2}$/.test(userMessage.trim().replace(/[^\w\s]/g, '').trim());
+                  const { lines: productSummaries, note: websiteNote } = channelProductSummary(result.data.slice(0, 5), { descMax: pickedByNumber ? 1200 : 100 });
                   toolResultStr = `Found ${result.data.length} product(s):\n${productSummaries.join('\n')}`;
                   if (result.pagination?.hasMore) {
                     toolResultStr += `\n(More products available)`;
@@ -1972,7 +1990,20 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
         if (isNumberSelection) {
           toolMessages.push({
             role: "system",
-            content: `WHATSAPP FORMAT — PRODUCT SELECTION RESPONSE: The user selected a specific product by number. Give a detailed, enthusiastic response about this product. Include the full description, key features, and price if available. End by offering next steps like "Would you like to book a free consultation?" or "Want to explore customization options?" Do NOT say "Reply with a number" — they already selected. Do NOT include image URLs or links. Use *bold* for the product name. Keep it conversational and helpful.`
+            content: `WHATSAPP FORMAT — PRODUCT SELECTION RESPONSE: The user selected a specific product by number. Describe this product clearly using ONLY facts from the product details (never invent features, pack sizes or claims). Use exactly this layout:
+*<Product name>*
+<price, e.g. ₹5,656> (add " · Out of stock" if it is out of stock)
+
+<1–2 short sentences: what it is and what it is used for>
+
+• <key point>
+• <key point>
+• <key point> (2–4 bullets, one short line each, no sub-bullets, no headings, no "Purpose:"-style labels)
+
+<If the product has a Link, one line: "View on website: <link>">
+
+<one short next-step question, e.g. "Would you like to book a consultation?">
+WhatsApp formatting only: *bold* with single asterisks (never **), "• " for bullets, no markdown headings or tables. Do NOT say "Reply with a number" — they already selected. Do NOT include image URLs.`
           });
         } else if (usedProductTool) {
           // 2+ products with photos go out as a carousel with "Know more" buttons (unnumbered cards),
@@ -2002,7 +2033,7 @@ SCRIPT RULE: If the user's message contains ONLY Latin/Roman characters → resp
 
           const rawText = followUpResponse.choices[0]?.message?.content;
           if (!rawText) return null;
-          const text = usedExtraTools.size > 0 ? toWhatsAppText(rawText) : rawText;
+          const text = usedProductTool ? tidyWhatsAppProductText(rawText) : usedExtraTools.size > 0 ? toWhatsAppText(rawText) : rawText;
           return { 
             text, 
             productImages: collectedProductImages.length > 0 ? collectedProductImages : undefined,

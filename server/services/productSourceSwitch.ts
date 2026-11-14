@@ -75,12 +75,13 @@ export function liveProductExtras(p: { productUrl?: string | null; stockStatus?:
  * One line per product for the AI on WhatsApp / Instagram / Facebook, plus a closing note when products come
  * from the website (stock and link), so these channels answer like website chat.
  */
-export function channelProductSummary(list: any[]): { lines: string[]; note: string } {
+export function channelProductSummary(list: any[], opts: { descMax?: number } = {}): { lines: string[]; note: string } {
+  const descMax = opts.descMax ?? 100;
   const lines = list.map((p: any, idx: number) => {
     const parts = [`${idx + 1}. ${p.name}`];
     if (p.price && Number(p.price) > 0) parts.push(`Price: ₹${Number(p.price).toLocaleString('en-IN')}`);
     if (p.availability && p.availability !== "In stock") parts.push(p.availability);
-    if (p.description) parts.push(String(p.description).substring(0, 100));
+    if (p.description) parts.push(String(p.description).replace(/\s*\n\s*/g, " ").substring(0, descMax));
     if (p.productUrl) parts.push(`Link: ${p.productUrl}`);
     return parts.join(' | ');
   });

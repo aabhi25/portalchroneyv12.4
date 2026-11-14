@@ -152,6 +152,33 @@ export function toWhatsAppText(text: string): string {
 }
 
 /**
+ * Product replies on WhatsApp: markdown cleaned up (toWhatsAppText), every list line — "-", "*", "•",
+ * nested or not — as a flat "• " bullet, no empty lines between bullets, at most one empty line elsewhere.
+ */
+export function tidyWhatsAppProductText(text: string): string {
+  if (!text) return text;
+  const lines = toWhatsAppText(text).split("\n").map(l => {
+    const m = /^\s*(?:[-•▪◦]|\*(?=\s)|\d+[.)])\s+(.*)$/.exec(l);
+    return m ? `• ${m[1].trim()}` : l.trimEnd();
+  });
+  const isBullet = (l: string | undefined) => !!l && l.startsWith("• ");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l.trim()) {
+      // Drop blank lines inside a list and repeated blank lines.
+      const prev = out[out.length - 1];
+      const next = lines.slice(i + 1).find(x => x.trim());
+      if (!prev || !prev.trim() || (isBullet(prev) && isBullet(next))) continue;
+      out.push("");
+    } else {
+      out.push(l);
+    }
+  }
+  return out.join("\n").trim();
+}
+
+/**
  * A Train Chroney fallback template for WhatsApp: the phone is always known there, name and email
  * are treated as not yet known ({{if_missing_name}}…{{/if_missing_name}} kept).
  */

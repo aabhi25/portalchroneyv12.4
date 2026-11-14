@@ -8,7 +8,9 @@
  *    Book Consultation message); cards carry "Know more (N)" + "Book consultation";
  *  - MSG91 refusing the carousel → separate photo cards, spaced out, then the Book Consultation buttons;
  *  - a "Know more (2)" tap reaches the AI as "2" (product pick);
- *  - a greeting is not forced to search; WHATSAPP_PRODUCT_CAROUSEL=0 sends cards.
+ *  - a greeting is not forced to search; WHATSAPP_PRODUCT_CAROUSEL=0 sends cards;
+ *  - a picked product's details: the AI gets the full description and a fixed layout, and its text is
+ *    tidied for WhatsApp (**bold** → *bold*, nested "-" lists → flat "• " bullets, no gaps inside lists).
  *
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55571/postgres?sslmode=disable \
  *   WA_PRODUCT_TEST_DB=1 npx tsx server/services/__tests__/whatsappProductReply.integration.test.ts
@@ -48,6 +50,10 @@ function answer(body: any): any {
   if (/language detector/i.test(sys0)) return { role: "assistant", content: "en" };
   if (body.response_format?.type === "json_object") return { role: "assistant", content: "{}" };
   if (!main) return { role: "assistant", content: "OK" };
+  if (followUp && lastUser === "2") {
+    // A sloppy model: markdown bold, headings, nested lists with blank lines between.
+    return { role: "assistant", content: "Great choice! Here are the details for the **Glucose Meter Kit**:\n\n### Overview\n\n- **Purpose**: Checks glucose.\n\n- **Key Features**:\n  - Fast results\n\n  - In the lab\n\n\n\nWould you like to book a consultation?" };
+  }
   if (followUp) return { role: "assistant", content: "Here are our options." };
   if (body.tool_choice?.function?.name === "get_products") {
     return { role: "assistant", content: null, tool_calls: [{ id: "p1", type: "function", function: { name: "get_products", arguments: JSON.stringify({ search: lastUser }) } }] };
@@ -112,14 +118,14 @@ async function main() {
 
   const svc = new WhatsappAutoReplyService();
   let seq = 0;
-  async function reply(text: string) {
-    const phone = `9198${tag.replace(/\D/g, "").padEnd(4, "7").slice(0, 4)}${String(++seq).padStart(4, "0")}`;
+  async function reply(text: string, samePhone?: string) {
+    const phone = samePhone || `9198${tag.replace(/\D/g, "").padEnd(4, "7").slice(0, 4)}${String(++seq).padStart(4, "0")}`;
     await updateSession(A, phone);
     await whatsappService.processTextMessage(A, `m-${tag}-${seq}`, phone, text);
     businessContextCache.invalidateBusinessCache(A);
     const c0 = calls.length, s0 = sent.length;
     const res = await svc.generateAndSendReply(A, phone, text);
-    return { res, calls: calls.slice(c0), sent: sent.slice(s0) };
+    return { res, phone, calls: calls.slice(c0), sent: sent.slice(s0) };
   }
 
   // 1. Product question → search forced → one carousel
@@ -146,8 +152,18 @@ async function main() {
   expect(r2.sent.every(s => s.kind === "text"), "greeting: just the text reply", r2.sent.map(s => s.kind));
 
   // 3. Know more (2) tap → AI sees "2"
-  const r3 = await reply("Know more (2)");
+  const r3 = await reply("Know more (2)", r1.phone);
+  const main3 = r3.calls.find(c => c.main && !c.followUp);
+  expect(main3?.toolChoice?.function?.name === "get_products", "a pick right after the carousel searches the catalog for that product", main3?.toolChoice);
+  expect(!r3.sent.some(s => s.kind === "interactive:carousel" || s.kind === "image"), "a pick gets the details only (no new carousel)", r3.sent.map(s => s.kind));
   expect(r3.calls.some(c => c.main && c.lastUser === "2"), "a Know more (2) tap reaches the AI as \"2\"", r3.calls.map(c => c.lastUser));
+
+  const detail = String((r3.res as any)?.reply || "");
+  const follow3 = r3.calls.find(c => c.main && c.followUp);
+  expect(/Use exactly this layout/.test(follow3?.systemText || ""), "product details: the AI gets the fixed WhatsApp layout");
+  expect(/\*Glucose Meter Kit\*/.test(detail) && !/\*\*/.test(detail) && !/#/.test(detail), "details text: single-asterisk bold, no markdown leftovers", detail);
+  expect(detail.includes("• *Purpose*: Checks glucose.\n• *Key Features*:\n• Fast results\n• In the lab"), "details text: flat • bullets with no gaps between them", detail);
+  expect(!/\n\n\n/.test(detail), "details text: never more than one empty line", detail);
 
   // 4. Carousel refused → spaced photo cards, then buttons
   refuseCarousel = true;
