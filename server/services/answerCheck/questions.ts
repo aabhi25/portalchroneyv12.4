@@ -21,7 +21,7 @@ import { guessQuestionKind, isObjectiveQuestion, parseQuestionFromNotes, QUESTIO
 
 export interface QuestionInput {
   questionKey: string;
-  source: "cms" | "custom" | "generated";
+  source: "cms" | "custom" | "generated" | "assessment";
   questionText: string;
   modelAnswer: string;
   questionKind: QuestionKind | null;

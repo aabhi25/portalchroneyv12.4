@@ -30,7 +30,9 @@ export default function PaperDetailPage({ paperId }: { paperId: string }) {
     refetchOnMount: "always",
   });
   const p = data?.paper;
-  const back = { label: "Whole paper", href: `${ASSESS_PATH}/papers` };
+  const back = p?.assessmentId
+    ? { label: "Back to the assessment", href: `${ASSESS_PATH}/${p.assessmentId}` }
+    : { label: "Assessment", href: ASSESS_PATH };
 
   async function act(name: string, fn: () => Promise<unknown>, done?: string) {
     setBusy(name);
@@ -46,8 +48,8 @@ export default function PaperDetailPage({ paperId }: { paperId: string }) {
         icon={FileCheck2}
         tint="bg-orange-500"
         kind="Assessment · whole paper"
-        title={p ? `${p.title || "Paper"}${p.studentLabel ? ` — ${p.studentLabel}` : ""}` : "Paper"}
-        subtitle={p ? `${p.questions.length} questions · ${p.pages.length} page${p.pages.length === 1 ? "" : "s"}${p.source === "practice" ? " · practice sheet written by the AI" : ""}` : undefined}
+        title={p ? `${p.studentLabel || "Student"}${p.rollNo ? ` (roll no. ${p.rollNo})` : ""}` : "Answer sheet"}
+        subtitle={p ? `${p.title || "Paper"} · ${p.questions.length} questions · ${p.pages.length} page${p.pages.length === 1 ? "" : "s"}${p.source === "practice" ? " · sample sheet written by the AI" : ""}` : undefined}
         back={back}
         actions={
           <div className="flex flex-wrap items-center gap-2">

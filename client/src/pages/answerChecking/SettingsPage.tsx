@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { FileCheck2, Loader2 } from "lucide-react";
+import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,30 +10,25 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
-import { QUESTION_KINDS, SCORE_BANDS, STRICTNESS, SUBJECT_KINDS, type AnswerCheckSettings, type ScopePick, type SubjectKind } from "@shared/answerCheck";
-import { API, KIND_LABEL, OVERVIEW_KEY, scopeLabel, type Overview } from "./answerCheckApi";
-import { AssessmentOffBanner, useScopes } from "./AssessmentSwitch";
+import { SCORE_BANDS, STRICTNESS, SUBJECT_KINDS, type AnswerCheckSettings, type SubjectKind } from "@shared/answerCheck";
+import { API, ASSESS_PATH, OVERVIEW_KEY, type Overview } from "./answerCheckApi";
+import { AssessmentOffBanner } from "./AssessmentSwitch";
 
 const SUBJECT_LABEL: Record<SubjectKind, string> = { maths: "Maths", science: "Science", social_science: "Social Science", english: "English & languages", other: "Other subjects" };
 const BAND_LABEL: Record<string, string> = { full: "Full marks", high: "High marks (75 % +)", partial: "Partial marks (40–75 %)", low: "Low marks", zero: "Zero" };
 const selectClass = "h-9 rounded-md border border-input bg-white px-2 text-[14px]";
 
-const sameScope = (a: ScopePick, b: ScopePick) => a.board === b.board && a.medium === b.medium && a.grade === b.grade && a.subject === b.subject;
 
-/** Super admin › Answer checking › Settings: what the random question picks from, subject rules, when a teacher must look, feedback tone. */
+/** Education › Assessment › Marking rules: per-subject rules, when a teacher must look, feedback tone. */
 export default function SettingsPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const { data } = useQuery<Overview>({ queryKey: OVERVIEW_KEY, staleTime: 0, refetchOnMount: "always" });
-  const { scopes, error: scopesError } = useScopes();
   const [s, setS] = useState<AnswerCheckSettings | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (data?.settings && !s) setS(data.settings); }, [data]);
   if (!s) return <p className="text-[14px] text-gray-500">Loading…</p>;
 
-  const allScopes: ScopePick[] = scopes.flatMap(o => o.subjects.map(subject => ({ board: o.board, medium: o.medium, grade: o.grade, subject })));
-  const chosen = (p: ScopePick) => s.scopes.some(x => sameScope(x, p));
-  const toggleScope = (p: ScopePick, on: boolean) => setS({ ...s, scopes: on ? [...s.scopes, p] : s.scopes.filter(x => !sameScope(x, p)) });
   const setRule = (k: SubjectKind, patch: Partial<AnswerCheckSettings["subjectRules"][SubjectKind]>) => setS({ ...s, subjectRules: { ...s.subjectRules, [k]: { ...s.subjectRules[k], ...patch } } });
 
   async function save() {
@@ -47,36 +43,11 @@ export default function SettingsPage() {
   }
 
   return (
+    <div className="min-h-full bg-[#f5f5f7]">
+    <SaHeader icon={FileCheck2} tint="bg-orange-500" kind="Education · AI assessment (pilot)" title="Marking rules" subtitle="Used for every question, on top of each question's own answer key." back={{ label: "Assessment", href: ASSESS_PATH }} />
+    <SaBody>
     <div className="space-y-5" data-testid="settings-page">
       {data && !data.enabled && <AssessmentOffBanner accountName={data.account?.name} />}
-      <Panel title="Random question" subtitle="Which classes and subjects the Random question button picks from. None ticked = all of them.">
-        {scopesError && <p className="mb-3 text-[14px] text-red-600">{scopesError}</p>}
-        {!allScopes.length && !scopesError && <p className="text-[14px] text-gray-500">This account has no curriculum content yet.</p>}
-        {allScopes.length > 0 && (
-          <div className="mb-4 grid max-h-72 gap-1.5 overflow-y-auto rounded-xl border border-black/[0.06] p-3 md:grid-cols-2" data-testid="settings-scopes">
-            {allScopes.map(p => (
-              <label key={`${p.board}|${p.medium}|${p.grade}|${p.subject}`} className="flex items-center gap-2 text-[14px] text-gray-800">
-                <Checkbox checked={chosen(p)} onCheckedChange={v => toggleScope(p, !!v)} />{scopeLabel(p)}
-              </label>
-            ))}
-          </div>
-        )}
-        <div className="flex flex-wrap items-end gap-6">
-          <div>
-            <p className="mb-1.5 text-[13px] font-medium text-gray-700">Question types</p>
-            <div className="flex gap-4">
-              {QUESTION_KINDS.map(k => (
-                <label key={k} className="flex items-center gap-2 text-[14px]">
-                  <Checkbox checked={s.questionKinds.includes(k)} onCheckedChange={v => setS({ ...s, questionKinds: v ? [...s.questionKinds, k] : s.questionKinds.filter(x => x !== k) })} data-testid={`settings-kind-${k}`} />{KIND_LABEL[k]}
-                </label>
-              ))}
-            </div>
-          </div>
-          <label className="text-[13px] font-medium text-gray-700">Marks from<Input value={s.minMarks} onChange={e => setS({ ...s, minMarks: Number(e.target.value) || 0 })} inputMode="numeric" className="mt-1 w-20" data-testid="settings-min" /></label>
-          <label className="text-[13px] font-medium text-gray-700">to<Input value={s.maxMarks} onChange={e => setS({ ...s, maxMarks: Number(e.target.value) || 0 })} inputMode="numeric" className="mt-1 w-20" data-testid="settings-max" /></label>
-        </div>
-      </Panel>
-
       <Panel title="Marking rules by subject" subtitle="Used for every question in the subject, on top of each question's own marking scheme.">
         <div className="space-y-5">
           {SUBJECT_KINDS.map(k => {
@@ -130,6 +101,8 @@ export default function SettingsPage() {
       <div className="sticky bottom-4 flex justify-end">
         <Button onClick={save} disabled={busy} className="shadow-lg" data-testid="settings-save">{busy && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}Save settings</Button>
       </div>
+    </div>
+    </SaBody>
     </div>
   );
 }

@@ -539,3 +539,61 @@ export function assembleAnswers(questions: PaperQuestion[], parts: SheetPart[], 
 export function unplacedAnswerParts(m: PaperMatching): PaperMatching["unassigned"] {
   return m.unassigned.filter(u => !/^\((heading|rough work)\)/i.test(u.text.trim()) && !/heading|rough|name|roll|date/i.test(u.reason));
 }
+
+// ---- Importing a question paper -----------------------------------------------------------------
+
+export const IMPORT_SYSTEM = `You turn a school exam question paper — often with its answer key or model answers — into a list of questions for an examiner.
+- Keep each question's wording exactly as written (fix only broken line breaks). Keep its own number (1, 2, 3a, …).
+- marks: the marks printed for the question ("[2]", "(3 marks)", "2M"); null if none is shown.
+- modelAnswer: the answer from the document's answer key / solutions, copied faithfully. Only when the document gives no answer for a question, write a concise model answer suitable for the grade and set "modelAnswerFrom" to "ai".
+- objective: true for multiple choice, true/false, fill in the blanks and match the following.
+- Questions with parts that are marked separately (2a, 2b) are separate questions; a question whose parts share one mark total stays one question.
+- Leave out instructions, headings and general notes.
+Reply with JSON only:
+{"title": "paper title or empty", "board": "", "grade": "", "medium": "", "subject": "", "questions": [{"number": "1", "question": "...", "marks": 2, "modelAnswer": "...", "modelAnswerFrom": "document|ai", "objective": false}]}`;
+
+export interface ImportedQuestion {
+  number: string;
+  question: string;
+  marks: number | null;
+  modelAnswer: string;
+  modelAnswerByAi: boolean;
+  objective: boolean;
+}
+
+export interface ImportedPaper {
+  title: string;
+  board: string;
+  grade: string;
+  medium: string;
+  subject: string;
+  questions: ImportedQuestion[];
+}
+
+/** The AI's reading of a question paper, cleaned: empty questions dropped, numbers unique, marks sane. */
+export function parseImport(raw: Record<string, any> | null): ImportedPaper {
+  const r = raw || {};
+  const seen = new Set<string>();
+  const questions: ImportedQuestion[] = [];
+  const list: any[] = Array.isArray(r.questions) ? r.questions : [];
+  for (let i = 0; i < list.length; i++) {
+    const q = list[i];
+    if (!q || typeof q !== "object") continue;
+    const question = str(q.question);
+    if (question.length < 3) continue;
+    let number = str(typeof q.number === "number" ? String(q.number) : q.number).replace(/^(q|que|question)\.?\s*/i, "").replace(/[).:\s]+$/, "").slice(0, 10) || String(i + 1);
+    while (seen.has(number.toLowerCase())) number = `${number}′`;
+    seen.add(number.toLowerCase());
+    const marks = num(q.marks, NaN);
+    questions.push({
+      number,
+      question: question.slice(0, 4000),
+      marks: Number.isFinite(marks) && marks > 0 && marks <= 100 ? Math.round(marks * 2) / 2 : null,
+      modelAnswer: str(q.modelAnswer).slice(0, 10000),
+      modelAnswerByAi: q.modelAnswerFrom === "ai",
+      objective: q.objective === true,
+    });
+    if (questions.length >= 60) break;
+  }
+  return { title: str(r.title).slice(0, 120), board: str(r.board).slice(0, 60), grade: str(r.grade).slice(0, 20), medium: str(r.medium).slice(0, 40), subject: str(r.subject).slice(0, 80), questions };
+}

@@ -64,13 +64,13 @@ const BillingCompany = lazy(() => import("@/pages/billing/BillingCompanyPage"));
 const BillingRevenue = lazy(() => import("@/pages/billing/RevenuePage"));
 const InvoiceEditor = lazy(() => import("@/pages/billing/InvoiceEditorPage"));
 // AI assessment pilot (Education › Assessment, super admins viewing an account) loads on first visit.
-const AnswerCheckPage = lazy(() => import("@/pages/answerChecking/CheckAnswerPage"));
+const AssessmentsHome = lazy(() => import("@/pages/answerChecking/AssessmentsHome"));
+const AssessmentEditor = lazy(() => import("@/pages/answerChecking/AssessmentEditor"));
+const AssessmentPage = lazy(() => import("@/pages/answerChecking/AssessmentPage"));
+const AssessmentRules = lazy(() => import("@/pages/answerChecking/SettingsPage"));
+const AssessmentEarlier = lazy(() => import("@/pages/answerChecking/EarlierPapersPage"));
 const AnswerCheckDetail = lazy(() => import("@/pages/answerChecking/CheckDetailPage"));
-const AnswerCheckHistory = lazy(() => import("@/pages/answerChecking/HistoryPage"));
-const AnswerCheckSettings = lazy(() => import("@/pages/answerChecking/SettingsPage"));
-const AnswerCheckPapers = lazy(() => import("@/pages/answerChecking/PapersPage"));
 const AnswerCheckPaper = lazy(() => import("@/pages/answerChecking/PaperDetailPage"));
-const AssessmentFrame = lazy(() => import("@/pages/answerChecking/AssessmentFrame").then(m => ({ default: m.AssessmentFrame })));
 const billingPage = (page: ReactNode) => <Suspense fallback={<p className="text-sm text-gray-500">Loading…</p>}>{page}</Suspense>;
 import { AgencyClientsPage, AgencyClientPage, AgencyStatementPage, AgencyTeamPage, AgencyBrandPage, AgencyPackagesPage, AgencyEmailPage } from "@/pages/agency/AgencyPortal";
 import { AgencyViewingBanner } from "@/components/agency/AgencyViewingBanner";
@@ -414,12 +414,14 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 {/* AI assessment (pilot): super admins viewing an account with the feature switched on. */}
                 {isSuperAdminImpersonating && user?.businessAccount?.answerCheckingEnabled && (
                   <>
-                    <Route path="/admin/assessment">{() => billingPage(<AssessmentFrame tab="check"><AnswerCheckPage /></AssessmentFrame>)}</Route>
-                    <Route path="/admin/assessment/papers">{() => billingPage(<AssessmentFrame tab="papers"><AnswerCheckPapers /></AssessmentFrame>)}</Route>
-                    <Route path="/admin/assessment/history">{() => billingPage(<AssessmentFrame tab="history"><AnswerCheckHistory /></AssessmentFrame>)}</Route>
-                    <Route path="/admin/assessment/settings">{() => billingPage(<AssessmentFrame tab="settings"><AnswerCheckSettings /></AssessmentFrame>)}</Route>
+                    <Route path="/admin/assessment">{() => billingPage(<AssessmentsHome />)}</Route>
+                    <Route path="/admin/assessment/new">{() => billingPage(<AssessmentEditor />)}</Route>
+                    <Route path="/admin/assessment/rules">{() => billingPage(<AssessmentRules />)}</Route>
+                    <Route path="/admin/assessment/earlier">{() => billingPage(<AssessmentEarlier />)}</Route>
                     <Route path="/admin/assessment/papers/:paperId">{({ paperId }) => billingPage(<AnswerCheckPaper key={paperId} paperId={paperId} />)}</Route>
                     <Route path="/admin/assessment/checks/:checkId">{({ checkId }) => billingPage(<AnswerCheckDetail key={checkId} checkId={checkId} />)}</Route>
+                    <Route path="/admin/assessment/:assessmentId/edit">{({ assessmentId }) => billingPage(<AssessmentEditor key={assessmentId} assessmentId={assessmentId} />)}</Route>
+                    <Route path="/admin/assessment/:assessmentId">{({ assessmentId }) => billingPage(<AssessmentPage key={assessmentId} assessmentId={assessmentId} />)}</Route>
                   </>
                 )}
                 <Route path="/admin/jobs" component={JobPortalJobs} />

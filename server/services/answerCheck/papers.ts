@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../../db";
 import { answerCheckImages, answerChecks, answerMarkingSchemes, answerPapers, type AnswerMarkingSchemeRow, type AnswerPaperRow } from "@shared/schema";
 import { applyJudgement, type PracticeLevel } from "@shared/answerCheck";
@@ -70,12 +70,15 @@ export function cleanQuestionList(raw: unknown): PaperQuestionRef[] {
   return list;
 }
 
-export async function createPaper(opts: { businessAccountId: string; title: string; studentLabel: string; questions: PaperQuestionRef[]; photos: Buffer[]; userId: string | null }): Promise<AnswerPaperRow> {
+export async function createPaper(opts: { businessAccountId: string; title: string; studentLabel: string; questions: PaperQuestionRef[]; photos: Buffer[]; userId: string | null; assessmentId?: string | null; rollNo?: string | null; pageHashes?: string[] }): Promise<AnswerPaperRow> {
   await schemesFor(opts.businessAccountId, opts.questions);
   const [paper] = await db.insert(answerPapers).values({
     businessAccountId: opts.businessAccountId,
     title: opts.title.slice(0, 120),
     studentLabel: opts.studentLabel.slice(0, 80),
+    assessmentId: opts.assessmentId ?? null,
+    rollNo: opts.rollNo?.trim().slice(0, 40) || null,
+    pageHashes: opts.pageHashes ?? [],
     status: "reading",
     source: "upload",
     questions: opts.questions as any,
@@ -109,10 +112,11 @@ export function practicePlan(numbers: string[]): { plan: PracticePlanItem[]; wri
   return { plan, writtenOrder };
 }
 
-export async function createPracticePaper(opts: { businessAccountId: string; title: string; studentLabel: string; questions: PaperQuestionRef[]; userId: string | null }): Promise<AnswerPaperRow> {
+export async function createPracticePaper(opts: { businessAccountId: string; title: string; studentLabel: string; questions: PaperQuestionRef[]; userId: string | null; assessmentId?: string | null }): Promise<AnswerPaperRow> {
   await schemesFor(opts.businessAccountId, opts.questions);
   const [paper] = await db.insert(answerPapers).values({
     businessAccountId: opts.businessAccountId,
+    assessmentId: opts.assessmentId ?? null,
     title: opts.title.slice(0, 120),
     studentLabel: (opts.studentLabel || "Practice student").slice(0, 80),
     status: "writing",
@@ -336,6 +340,8 @@ export async function paperView(paper: AnswerPaperRow) {
     id: paper.id,
     title: paper.title,
     studentLabel: paper.studentLabel,
+    assessmentId: paper.assessmentId,
+    rollNo: paper.rollNo,
     source: paper.source,
     status: paperStatus(paper, checks),
     questions,
@@ -353,11 +359,17 @@ export async function paperView(paper: AnswerPaperRow) {
   };
 }
 
-export async function listPapers(businessAccountId: string, limit = 100) {
-  const papers = await db.select().from(answerPapers).where(eq(answerPapers.businessAccountId, businessAccountId)).orderBy(desc(answerPapers.createdAt)).limit(limit);
+/** Papers of an account: one assessment's sheets, or (`assessmentId: null`) the ones checked before assessments existed. */
+export async function listPapers(businessAccountId: string, opts: { assessmentId?: string | null; limit?: number } = {}) {
+  const where = opts.assessmentId === undefined
+    ? eq(answerPapers.businessAccountId, businessAccountId)
+    : opts.assessmentId === null
+      ? and(eq(answerPapers.businessAccountId, businessAccountId), isNull(answerPapers.assessmentId))
+      : and(eq(answerPapers.businessAccountId, businessAccountId), eq(answerPapers.assessmentId, opts.assessmentId));
+  const papers = await db.select().from(answerPapers).where(where).orderBy(desc(answerPapers.createdAt)).limit(opts.limit ?? 200);
   return Promise.all(papers.map(async p => {
     const v = await paperView(p);
-    return { id: v.id, title: v.title, studentLabel: v.studentLabel, source: v.source, status: v.status, questionCount: v.questions.length, pageCount: v.pages.length, totals: v.totals, costUsd: v.costUsd, createdAt: v.createdAt };
+    return { id: v.id, title: v.title, studentLabel: v.studentLabel, rollNo: v.rollNo, source: v.source, status: v.status, questionCount: v.questions.length, pageCount: v.pages.length, totals: v.totals, costUsd: v.costUsd, createdAt: v.createdAt };
   }));
 }
 

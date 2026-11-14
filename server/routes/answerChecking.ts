@@ -31,6 +31,8 @@ import { ImageError, imageBytes, MAX_PAGES, MAX_PAPER_PAGES, prepareUpload } fro
 import { chaptersFor, customQuestionKey, pickRandomQuestion, pickRandomQuestions, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
 import { cleanQuestionList, createPaper, createPracticePaper, deletePaper, listPapers, PaperError, paperView, rerunPaper } from "../services/answerCheck/papers";
 import { answerPapers } from "@shared/schema";
+import { AssessmentError, assessmentView, checkSheet, deleteAssessment, getAssessment, importQuestions, listAssessments, sampleSheet, saveAssessment } from "../services/answerCheck/assessments";
+import { readDataUrls } from "../services/answerCheck/files";
 
 /**
  * AI assessment (answer checking pilot): a business account's Education › Assessment, for super
@@ -38,6 +40,14 @@ import { answerPapers } from "@shared/schema";
  * account's feature switch (Settings › Features, "AI assessment") must be on for anything that
  * calls the AI; history, settings and photos stay viewable while it is off.
  *
+ *   GET  /api/answer-checking/assessments         assessments (mock test papers) with sheets counted
+ *   POST /api/answer-checking/assessments         create (answer keys drafted for each question)
+ *   GET  /api/answer-checking/assessments/:id     questions with answer keys, students' sheets, accuracy
+ *   PUT  /api/answer-checking/assessments/:id     update (changed questions get a new answer key)
+ *   DELETE /api/answer-checking/assessments/:id   with its sheets
+ *   POST /api/answer-checking/assessments/import  question paper / answer key (PDF, Word, photos, text) → questions to review
+ *   POST /api/answer-checking/assessments/:id/sheets   a student's answer sheet (photos or PDF) → checked as a whole paper
+ *   POST /api/answer-checking/assessments/:id/sample   a sample sheet written by the AI, checked the same way
  *   GET  /api/answer-checking/overview            account, on/off, settings
  *   GET  /api/answer-checking/scopes              the account's classes and subjects (synced packs, as the Widget Tester)
  *   GET  /api/answer-checking/chapters            one class and subject's chapters
@@ -94,7 +104,7 @@ function userId(req: Request): string | null {
 }
 
 function fail(res: Response, where: string, error: unknown) {
-  if (error instanceof SchemeEditError) return res.status(400).json({ error: error.message, problems: error.problems });
+  if (error instanceof SchemeEditError || error instanceof AssessmentError) return res.status(400).json({ error: error.message, problems: error.problems });
   if (error instanceof ImageError || error instanceof AnswerCheckAiError || error instanceof PaperError) return res.status(400).json({ error: (error as Error).message });
   console.error(`[Answer Check] ${where}:`, error);
   return res.status(500).json({ error: "Something went wrong. Please try again." });
@@ -361,6 +371,75 @@ router.get(`${BASE}/images/:id`, ...superAdmin, async (req, res) => {
   } catch (e) { fail(res, "image", e); }
 });
 
+// ---- Assessments --------------------------------------------------------------------------------
+
+router.get(`${BASE}/assessments`, ...superAdmin, async (req, res) => {
+  try {
+    const earlier = (await listPapers(accountId(req), { assessmentId: null, limit: 50 })).length;
+    res.json({ assessments: await listAssessments(accountId(req)), earlierPapers: earlier });
+  } catch (e) { fail(res, "list assessments", e); }
+});
+
+router.post(`${BASE}/assessments/import`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(req, res))) return;
+    const files = readDataUrls(req.body?.files, req.body?.names);
+    res.json(await importQuestions(accountId(req), { text: typeof req.body?.text === "string" ? req.body.text : "", files }));
+  } catch (e) { fail(res, "import questions", e); }
+});
+
+router.post(`${BASE}/assessments`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(req, res))) return;
+    const row = await saveAssessment(accountId(req), req.body ?? {}, userId(req));
+    res.json({ assessment: await assessmentView(row) });
+  } catch (e) { fail(res, "create assessment", e); }
+});
+
+router.get(`${BASE}/assessments/:id`, ...superAdmin, async (req, res) => {
+  try {
+    const row = await getAssessment(accountId(req), req.params.id);
+    if (!row) return res.status(404).json({ error: "Assessment not found." });
+    res.json({ assessment: await assessmentView(row) });
+  } catch (e) { fail(res, "get assessment", e); }
+});
+
+router.put(`${BASE}/assessments/:id`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(req, res))) return;
+    const row = await saveAssessment(accountId(req), req.body ?? {}, userId(req), req.params.id);
+    res.json({ assessment: await assessmentView(row) });
+  } catch (e) { fail(res, "update assessment", e); }
+});
+
+router.delete(`${BASE}/assessments/:id`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await deleteAssessment(accountId(req), req.params.id))) return res.status(404).json({ error: "Assessment not found." });
+    res.json({ ok: true });
+  } catch (e) { fail(res, "delete assessment", e); }
+});
+
+router.post(`${BASE}/assessments/:id/sheets`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(req, res))) return;
+    const row = await getAssessment(accountId(req), req.params.id);
+    if (!row) return res.status(404).json({ error: "Assessment not found." });
+    const files = readDataUrls(req.body?.files, req.body?.names);
+    const out = await checkSheet({ businessAccountId: accountId(req), assessment: row, files, studentName: String(req.body?.studentName || ""), rollNo: String(req.body?.rollNo || ""), userId: userId(req) });
+    res.json({ id: out.paper.id, pages: out.pages, warnings: out.warnings });
+  } catch (e) { fail(res, "check sheet", e); }
+});
+
+router.post(`${BASE}/assessments/:id/sample`, ...superAdmin, async (req, res) => {
+  try {
+    if (!(await requireOn(req, res))) return;
+    const row = await getAssessment(accountId(req), req.params.id);
+    if (!row) return res.status(404).json({ error: "Assessment not found." });
+    const paper = await sampleSheet(accountId(req), row, userId(req));
+    res.json({ id: paper.id });
+  } catch (e) { fail(res, "sample sheet", e); }
+});
+
 // ---- Whole papers ------------------------------------------------------------------------------
 
 router.post(`${BASE}/papers/random-questions`, ...superAdmin, async (req, res) => {
@@ -394,7 +473,7 @@ router.post(`${BASE}/papers/practice`, ...superAdmin, async (req, res) => {
 });
 
 router.get(`${BASE}/papers`, ...superAdmin, async (req, res) => {
-  try { res.json({ papers: await listPapers(accountId(req)) }); }
+  try { res.json({ papers: await listPapers(accountId(req), { assessmentId: req.query.earlier === "1" ? null : undefined }) }); }
   catch (e) { fail(res, "list papers", e); }
 });
 

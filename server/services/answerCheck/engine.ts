@@ -130,9 +130,13 @@ export function schemeOf(row: Pick<AnswerMarkingSchemeRow, "scheme" | "maxMarks"
  * The question's current scheme, drafted by the AI when the question is new or its maximum
  * marks changed (a new version — earlier checks keep the version they were marked with).
  */
-export async function prepareQuestion(businessAccountId: string, q: QuestionInput, userId: string | null): Promise<AnswerMarkingSchemeRow> {
+export async function prepareQuestion(businessAccountId: string, q: QuestionInput, userId: string | null, opts: { redraftIfChanged?: boolean } = {}): Promise<AnswerMarkingSchemeRow> {
   const existing = await currentScheme(businessAccountId, q.questionKey);
-  if (existing && n(existing.maxMarks) === q.maxMarks) return existing;
+  // A blank model answer keeps the one the AI wrote earlier (it isn't a change).
+  const incomingAnswer = q.modelAnswer.trim();
+  const changed = !!existing && (existing.questionText.trim() !== q.questionText.trim()
+    || (incomingAnswer ? existing.modelAnswer.trim() !== incomingAnswer : !existing.modelAnswerByAi));
+  if (existing && n(existing.maxMarks) === q.maxMarks && !(opts.redraftIfChanged && changed)) return existing;
   const settings = await getSettings(businessAccountId);
   const ctx: QuestionContext = {
     questionText: q.questionText, modelAnswer: q.modelAnswer, maxMarks: q.maxMarks, subject: q.subject, subjectKind: subjectKindOf(q.subject),

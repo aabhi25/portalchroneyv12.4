@@ -5935,6 +5935,26 @@ export const answerMarkingSchemes = pgTable("answer_marking_schemes", {
   uniqueIndex("answer_marking_schemes_question_version_idx").on(table.businessAccountId, table.questionKey, table.version),
 ]);
 
+// An assessment (a mock test paper): its numbered questions, each with marks, a model answer and
+// its own answer key (answer_marking_schemes). Students' answer sheets are answer_papers rows
+// with this assessment_id.
+export const answerAssessments = pgTable("answer_assessments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  mockTestId: text("mock_test_id"), // the client's Mock Test ID, when it has one
+  board: text("board"),
+  medium: text("medium"),
+  grade: text("grade"),
+  subject: text("subject"),
+  questions: jsonb("questions").$type<Record<string, unknown>[]>().notNull().default([]), // [{ number, questionKey }]
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("answer_assessments_account_idx").on(table.businessAccountId, table.createdAt),
+]);
+
 // A whole answer sheet: the paper's questions, the student's pages (answer_check_images with
 // paper_id), what the AI read from them and which part answers which question. Each question's
 // answer then becomes an answer_checks row with this paper_id.
@@ -5943,6 +5963,9 @@ export const answerPapers = pgTable("answer_papers", {
   businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
   title: text("title").notNull().default(""),
   studentLabel: text("student_label").notNull().default(""),
+  assessmentId: varchar("assessment_id").references(() => answerAssessments.id, { onDelete: "cascade" }), // the assessment this sheet answers
+  rollNo: text("roll_no"),
+  pageHashes: jsonb("page_hashes").$type<string[]>().notNull().default([]), // to spot a page uploaded twice
   status: text("status").notNull().default("reading"), // 'writing' | 'reading' | 'checked' | 'failed'
   source: text("source").notNull().default("upload"), // 'upload' | 'practice'
   questions: jsonb("questions").$type<Record<string, unknown>[]>().notNull().default([]), // [{ number, questionKey }]
@@ -5957,6 +5980,7 @@ export const answerPapers = pgTable("answer_papers", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
   index("answer_papers_account_created_idx").on(table.businessAccountId, table.createdAt),
+  index("answer_papers_assessment_idx").on(table.assessmentId),
 ]);
 
 // One checked answer (an upload, or a practice answer the AI wrote at a known level).
@@ -6024,3 +6048,4 @@ export type AnswerMarkingSchemeRow = typeof answerMarkingSchemes.$inferSelect;
 export type AnswerCheckRow = typeof answerChecks.$inferSelect;
 export type AnswerCheckImageRow = typeof answerCheckImages.$inferSelect;
 export type AnswerPaperRow = typeof answerPapers.$inferSelect;
+export type AnswerAssessmentRow = typeof answerAssessments.$inferSelect;

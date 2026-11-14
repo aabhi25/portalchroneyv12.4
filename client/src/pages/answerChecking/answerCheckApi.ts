@@ -127,6 +127,8 @@ export interface PaperView {
   id: string;
   title: string;
   studentLabel: string;
+  assessmentId: string | null;
+  rollNo: string | null;
   source: "upload" | "practice";
   status: PaperStatus;
   questions: Array<{ number: string; questionKey: string }>;
@@ -144,16 +146,16 @@ export interface PaperView {
 }
 
 export interface PaperSummary {
-  id: string; title: string; studentLabel: string; source: "upload" | "practice"; status: PaperStatus;
+  id: string; title: string; studentLabel: string; rollNo: string | null; source: "upload" | "practice"; status: PaperStatus;
   questionCount: number; pageCount: number; totals: PaperTotals; costUsd: number; createdAt: string;
 }
 
 export const PAPER_STATUS_LABEL: Record<PaperStatus, string> = {
-  writing: "Writing practice sheet…",
+  writing: "Writing sample sheet…",
   reading: "Reading the sheet…",
-  checking: "Marking answers…",
-  done: "Checked",
-  needs_teacher: "Needs a teacher",
+  checking: "Evaluating…",
+  done: "Evaluated",
+  needs_teacher: "Human intervention",
   failed: "Failed",
 };
 
@@ -191,10 +193,10 @@ export const LEVEL_LABEL: Record<PracticeLevel, string> = {
 export const KIND_LABEL: Record<QuestionKind, string> = { short: "Short answer", long: "Long answer", numerical: "Numerical" };
 
 export const STATUS_LABEL: Record<CheckView["status"], string> = {
-  writing: "Writing practice answer…",
-  checking: "Checking…",
-  done: "Checked",
-  needs_teacher: "Needs a teacher",
+  writing: "Writing sample answer…",
+  checking: "Evaluating…",
+  done: "Evaluated",
+  needs_teacher: "Human intervention",
   failed: "Failed",
 };
 
@@ -242,4 +244,48 @@ export async function photoToDataUrl(file: File): Promise<string> {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+// ---- Assessments --------------------------------------------------------------------------------
+
+export interface AssessmentSummary {
+  id: string;
+  title: string;
+  mockTestId: string | null;
+  board: string | null; medium: string | null; grade: string | null; subject: string | null;
+  questionCount: number;
+  totalMarks: number;
+  sheetCount: number;
+  lastSheetAt: string | null;
+  updatedAt: string;
+}
+
+export interface AssessmentView {
+  id: string;
+  title: string;
+  mockTestId: string | null;
+  board: string | null; medium: string | null; grade: string | null; subject: string | null;
+  questions: Array<{ number: string; questionKey: string; scheme: SchemeView | null }>;
+  totalMarks: number;
+  sheets: PaperSummary[];
+  stats: { checked: number; averageMarks: number | null; humanIntervention: number; teacher: AccuracySummary; expected: AccuracySummary };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImportedPaper {
+  title: string; board: string; grade: string; medium: string; subject: string;
+  questions: Array<{ number: string; question: string; marks: number | null; modelAnswer: string; modelAnswerByAi: boolean; objective: boolean }>;
+}
+
+/** A file as a data URL (PDFs and Word files as they are; photos shrunk like answer photos). */
+export async function fileToDataUrl(file: File): Promise<string> {
+  if (/^image\/(jpeg|png|webp)$/i.test(file.type)) return photoToDataUrl(file);
+  if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} is over 20 MB.`);
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error(`${file.name} could not be read.`));
+    r.readAsDataURL(file);
+  });
 }
