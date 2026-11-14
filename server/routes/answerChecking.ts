@@ -28,7 +28,7 @@ import {
   schemeView,
 } from "../services/answerCheck/engine";
 import { ImageError, imageBytes, MAX_PAGES, MAX_PAPER_PAGES, prepareUpload } from "../services/answerCheck/images";
-import { chaptersFor, customQuestionKey, pickRandomQuestion, pickRandomQuestions, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
+import { chaptersFor, customQuestionKey, DraftError, draftQuestionsFromCurriculum, MAX_DRAFT_QUESTIONS, pickRandomQuestion, pickRandomQuestions, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
 import { cleanQuestionList, createPaper, createPracticePaper, deletePaper, listPapers, PaperError, paperView, rerunPaper } from "../services/answerCheck/papers";
 import { answerPapers } from "@shared/schema";
 import { AssessmentError, assessmentView, checkSheet, deleteAssessment, getAssessment, importQuestions, listAssessments, sampleSheet, saveAssessment } from "../services/answerCheck/assessments";
@@ -54,6 +54,7 @@ import { readDataUrls } from "../services/answerCheck/files";
  *   PUT  /api/answer-checking/settings
  *   POST /api/answer-checking/questions/random     a written-answer question from the curriculum
  *   GET  /api/answer-checking/questions/search
+ *   POST /api/answer-checking/questions/draft      questions + model answers written by the AI from a chapter's own content
  *   POST /api/answer-checking/questions/prepare    question → its marking scheme (drafted once)
  *   GET  /api/answer-checking/schemes/:key         current scheme + versions + checks so far
  *   PUT  /api/answer-checking/schemes/:key         admin edit → new approved version
@@ -105,7 +106,7 @@ function userId(req: Request): string | null {
 
 function fail(res: Response, where: string, error: unknown) {
   if (error instanceof SchemeEditError || error instanceof AssessmentError) return res.status(400).json({ error: error.message, problems: error.problems });
-  if (error instanceof ImageError || error instanceof AnswerCheckAiError || error instanceof PaperError) return res.status(400).json({ error: (error as Error).message });
+  if (error instanceof ImageError || error instanceof AnswerCheckAiError || error instanceof PaperError || error instanceof DraftError) return res.status(400).json({ error: (error as Error).message });
   console.error(`[Answer Check] ${where}:`, error);
   return res.status(500).json({ error: "Something went wrong. Please try again." });
 }
@@ -202,6 +203,25 @@ router.get(`${BASE}/questions/search`, ...superAdmin, async (req, res) => {
     const found = await searchQuestions(accountId(req), scope, String(req.query.q ?? ""), await getSettings(accountId(req)));
     res.json({ results: await withSavedMarks(req, found.results), looked: found.looked, summary: found.summary });
   } catch (e) { fail(res, "search", e); }
+});
+
+const draftSchema = z.object({
+  asks: z.array(z.object({ kind: z.enum(QUESTION_KINDS), count: z.number().int().min(0).max(MAX_DRAFT_QUESTIONS), marks: z.number().min(0.5).max(100) })).min(1).max(6),
+  instructions: z.string().max(500).optional(),
+  avoid: z.array(z.string().max(4000)).max(60).optional(),
+});
+
+router.post(`${BASE}/questions/draft`, ...superAdmin, async (req, res) => {
+  const scope = scopeFrom(req.body?.scope);
+  if (!scope?.subject) return res.status(400).json({ error: "Choose a board, medium, grade and subject." });
+  const parsed = draftSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Check how many questions and how many marks each." });
+  try {
+    if (!(await requireOn(req, res))) return;
+    const ai = await createAnswerCheckAi(accountId(req));
+    const asks = parsed.data.asks.map(a => ({ ...a, marks: Math.round(a.marks * 2) / 2 }));
+    res.json(await draftQuestionsFromCurriculum(accountId(req), ai, { ...scope, chapter: scope.chapter || undefined }, asks, { instructions: parsed.data.instructions, avoid: parsed.data.avoid }));
+  } catch (e) { fail(res, "draft questions", e); }
 });
 
 router.post(`${BASE}/questions/prepare`, ...superAdmin, async (req, res) => {

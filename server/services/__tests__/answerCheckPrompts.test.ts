@@ -18,7 +18,9 @@ import {
   parseJsonReply,
   parseMark,
   parsePractice,
+  parseChapterQuestions,
   parseQuestionFromNotes,
+  questionsFromChapterUserText,
   parseRead,
   parseSchemeDraft,
   practiceUserText,
@@ -116,6 +118,33 @@ console.log("Instructions");
   expect(ms.includes("Never cut marks twice") && ms.includes("[unclear]") && ms.includes("ZERO-TONE"), "marking rules include no double cuts, unclear parts and the admin's feedback tone");
   const pu = practiceUserText({ ...q, medium: "Hindi" }, scheme, ["strong", "weak"]);
   expect(pu.includes("- strong:") && pu.includes("- weak:") && !pu.includes("- average:") && pu.includes("in Hindi"), "practice: only the chosen levels, in the medium's language");
+}
+
+console.log("Questions written from a chapter's content");
+{
+  const asks = [{ kind: "short" as const, count: 2, marks: 2 }, { kind: "long" as const, count: 1, marks: 5 }, { kind: "numerical" as const, count: 0, marks: 3 }];
+  const scope = { board: "CBSE", grade: "10", medium: "English", subject: "Science" };
+  const u = questionsFromChapterUserText(scope, asks, [{ chapter: "Light", text: "Refraction is the bending of light." }], { instructions: "one case-based question", avoid: ["What is refraction?"] });
+  expect(u.includes("2 short-answer questions of 2 marks each; 1 long-answer question of 5 marks each") && !u.includes("numerical"), "asks for each kind with its marks, leaves out kinds set to 0", u);
+  expect(u.includes("### Chapter: Light") && u.includes("Refraction is the bending of light."), "the chapter's material is given under its name");
+  expect(u.includes("The examiner also asks: one case-based question") && u.includes("- What is refraction?"), "extra instructions and questions already in the paper are passed on");
+  expect(questionsFromChapterUserText({ ...scope, medium: "Hindi" }, asks, [{ chapter: "x", text: "y" }]).includes("in Hindi"), "written in the medium's language");
+  const parsed = parseChapterQuestions({ questions: [
+    { question: "Explain refraction with an example.", questionKind: "short", marks: 2, modelAnswer: "Bending of light…", chapter: "light" },
+    { question: "Explain refraction with an example!", questionKind: "short", marks: 2, modelAnswer: "dup", chapter: "Light" },
+    { question: "What is refraction?", questionKind: "short", marks: 2, modelAnswer: "already in paper", chapter: "Light" },
+    { question: "Why?", questionKind: "short", marks: 2 },
+    { question: "State the laws of reflection of light.", marks: "abc", modelAnswer: "Angle i = angle r…", chapter: "Chapter 10 Light" },
+    { question: "Describe how a rainbow is formed, with a diagram.", questionKind: "long", marks: 5, modelAnswer: "Dispersion…", chapter: "Unknown chapter" },
+    { question: "One too many — should be dropped.", questionKind: "long", marks: 5 },
+  ] }, asks, ["Light", "Electricity"], ["What is refraction?"]);
+  expect(parsed.length === 3, "repeats, questions already in the paper, too-short ones and extras beyond the 3 asked are dropped", parsed.map(p => p.question));
+  expect(parsed[0].chapter === "Light" && parsed[1].chapter === "Light" && parsed[2].chapter === null, "chapter matched to the given chapters (case, partial), unknown → none", parsed.map(p => p.chapter));
+  expect(parsed[1].marks === 2 && parsed[1].questionKind === "short", "marks or kind left out → the ones asked for that slot", parsed[1]);
+  expect(parsed[2].marks === 5 && parsed[2].questionKind === "long", "kind and marks kept when given", parsed[2]);
+  expect(parseChapterQuestions(null, asks, ["Light"]).length === 0 && parseChapterQuestions({ questions: "x" }, asks, ["Light"]).length === 0, "a broken reply gives no questions");
+  const one = parseChapterQuestions({ questions: [{ question: "Explain dispersion of light.", marks: 300 }] }, [{ kind: "long", count: 1, marks: 4 }], ["Light"]);
+  expect(one[0].marks === 4 && one[0].chapter === "Light", "marks out of range → the asked marks; one chapter → that chapter", one[0]);
 }
 
 if (failed > 0) { console.error(`\n${failed} check(s) failed, ${passed} passed.`); process.exit(1); }

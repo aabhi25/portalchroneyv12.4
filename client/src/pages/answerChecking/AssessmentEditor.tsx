@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, FileCheck2, FileUp, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { BookOpen, FileCheck2, FileUp, Loader2, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
+import { AiDraftBox } from "./AiDraftBox";
 import { CurriculumSearch } from "./CurriculumSearch";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
 import { API, ASSESS_PATH, fileToDataUrl, fmtMarks, type AssessmentView, type ImportedPaper, type QuestionInput } from "./answerCheckApi";
@@ -23,6 +24,8 @@ interface Row {
   questionKey?: string | null;
   chapter?: string | null;
   fromCurriculum?: boolean;
+  /** Question and model answer written by the AI from the chapter's content — shown so they get checked. */
+  aiDrafted?: boolean;
 }
 
 const emptyRow = (n: number): Row => ({ number: String(n), questionText: "", maxMarks: "", modelAnswer: "" });
@@ -42,7 +45,7 @@ export default function AssessmentEditor({ assessmentId }: { assessmentId?: stri
   const [subject, setSubject] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [loaded, setLoaded] = useState(!assessmentId);
-  const [adding, setAdding] = useState<"" | "import" | "curriculum">(assessmentId ? "" : "import");
+  const [adding, setAdding] = useState<"" | "import" | "curriculum" | "draft">(assessmentId ? "" : "import");
   const [saving, setSaving] = useState(false);
   const [problems, setProblems] = useState<string[]>([]);
 
@@ -88,6 +91,24 @@ export default function AssessmentEditor({ assessmentId }: { assessmentId?: stri
     if (!medium && q.medium) setMedium(q.medium);
     if (!grade && q.grade) setGrade(q.grade);
     if (!subject && q.subject) setSubject(q.subject);
+  }
+
+  function addDrafted(qs: QuestionInput[], note: string) {
+    setRows(rs => {
+      let n = nextNumber(rs);
+      return [...rs.filter(r => r.questionText.trim()), ...qs.map(q => ({
+        number: String(n++), questionText: q.questionText, maxMarks: String(q.maxMarks), modelAnswer: q.modelAnswer, chapter: q.chapter, aiDrafted: true,
+      }))];
+    });
+    const q = qs[0];
+    if (q) {
+      if (!board && q.board) setBoard(q.board);
+      if (!medium && q.medium) setMedium(q.medium);
+      if (!grade && q.grade) setGrade(q.grade);
+      if (!subject && q.subject) setSubject(q.subject);
+    }
+    setAdding("");
+    toast({ title: `${qs.length} question${qs.length === 1 ? "" : "s"} written by the AI`, description: note });
   }
 
   async function save() {
@@ -137,23 +158,26 @@ export default function AssessmentEditor({ assessmentId }: { assessmentId?: stri
                 <div className="flex flex-wrap gap-2">
                   <Button variant={adding === "import" ? "default" : "outline"} size="sm" onClick={() => setAdding(adding === "import" ? "" : "import")} data-testid="asmt-add-import"><FileUp className="mr-1.5 h-4 w-4" />Import from document</Button>
                   <Button variant={adding === "curriculum" ? "default" : "outline"} size="sm" onClick={() => setAdding(adding === "curriculum" ? "" : "curriculum")} data-testid="asmt-add-curriculum"><BookOpen className="mr-1.5 h-4 w-4" />From the curriculum</Button>
+                  <Button variant={adding === "draft" ? "default" : "outline"} size="sm" onClick={() => setAdding(adding === "draft" ? "" : "draft")} data-testid="asmt-add-draft"><Wand2 className="mr-1.5 h-4 w-4" />Write questions with AI</Button>
                   <Button variant="outline" size="sm" onClick={() => setRows(rs => [...rs, emptyRow(nextNumber(rs))])} data-testid="asmt-add-row"><Plus className="mr-1.5 h-4 w-4" />Add a question</Button>
                 </div>
               }
             >
               {adding === "import" && <ImportBox disabled={on === false} onImported={applyImport} onClose={() => setAdding("")} />}
+              {adding === "draft" && <AiDraftBox disabled={on === false} avoid={rows.map(r => r.questionText).filter(t => t.trim())} onDrafted={addDrafted} onClose={() => setAdding("")} />}
               {adding === "curriculum" && (
                 <div className="mb-4 rounded-xl border border-black/[0.06] p-4">
                   <CurriculumSearch onPick={addFromCurriculum} picked={rows.map(r => r.questionKey || "")} />
                 </div>
               )}
-              {rows.length === 0 && adding === "" && <p className="text-[14px] text-gray-500">No questions yet. Import the client's question paper, take them from the curriculum, or add them one by one.</p>}
+              {rows.length === 0 && adding === "" && <p className="text-[14px] text-gray-500">No questions yet. Import the client's question paper, take them from the curriculum, have the AI write them from a chapter, or add them one by one.</p>}
               <div className="space-y-3" data-testid="asmt-rows">
                 {rows.map((r, i) => (
                   <div key={i} className="rounded-xl border border-black/[0.08] p-4" data-testid={`asmt-row-${i}`}>
                     <div className="flex flex-wrap items-start gap-3">
                       <label className="w-16 text-[12px] font-medium text-gray-600">No.<Input value={r.number} onChange={e => setRow(i, { number: e.target.value.slice(0, 10) })} className="mt-1 h-9" /></label>
                       <label className="min-w-[240px] flex-1 text-[12px] font-medium text-gray-600">Question{r.fromCurriculum && <span className="ml-2 rounded-full bg-cyan-50 px-2 py-0.5 text-[11px] text-cyan-700">From the curriculum{r.chapter ? ` · ${r.chapter}` : ""}</span>}
+                        {r.aiDrafted && <span className="ml-2 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700" data-testid={`asmt-drafted-${i}`}>Written by AI from the chapter content{r.chapter ? ` · ${r.chapter}` : ""} — please check</span>}
                         <Textarea value={r.questionText} onChange={e => setRow(i, { questionText: e.target.value })} rows={2} className="mt-1" data-testid={`asmt-q-${i}`} />
                       </label>
                       <label className="w-24 text-[12px] font-medium text-gray-600">Marks<Input value={r.maxMarks} onChange={e => setRow(i, { maxMarks: e.target.value })} inputMode="decimal" className="mt-1 h-9" placeholder="e.g. 3" data-testid={`asmt-marks-${i}`} /></label>

@@ -22,7 +22,7 @@ function expect(cond: boolean, label: string, detail?: unknown) {
   else { failed++; console.error(`  FAIL ${label}`, detail === undefined ? "" : JSON.stringify(detail)?.slice(0, 600)); }
 }
 
-type Kind = "read" | "scheme" | "mark" | "aiWritten" | "practice" | "question";
+type Kind = "read" | "scheme" | "mark" | "aiWritten" | "practice" | "question" | "draft";
 
 async function main() {
   const { db } = await import("../../db");
@@ -179,6 +179,47 @@ async function main() {
     expect(/MCQ 230, Subjective 2/.test(civics.summary), "question types counted, most common first", civics.summary);
     const civicsPick = await questions.pickRandomQuestion(B, settings, null, Math.random, new Set(), { board: "CBSE", medium: "English", grade: "10", subject: "Civics", chapter: "" });
     expect(!!civicsPick.question && civicsPick.question.questionKey.startsWith("cms:cp-big:w-"), "Random question also finds them", civicsPick.question?.questionKey);
+
+    console.log("Questions written by the AI from the curriculum");
+    await insert({ business_account_id: B, board: null, medium: null, cp_id: "cp-sci", content_type: "note", subject: "Science", chapter: "Light", grade: null, content_text: "Refraction is the bending of light as it passes from one medium to another. Snell's law: n1 sin i = n2 sin r.", source_ref: "n-light", title: "Refraction notes" });
+    await insert({ business_account_id: B, board: null, medium: null, cp_id: "cp-sci", content_type: "transcript", subject: "Science", chapter: "Electricity", grade: null, content_text: "In this video we learn Ohm's law: the current through a conductor is proportional to the voltage, V = I R, at constant temperature.", source_ref: "v-ohm" });
+    const drafts: any[] = [];
+    const draftAi = { costUsd: () => 0.02, json: async (c: any) => { calls.push({ kind: "draft", model: c.model, images: 0, user: c.user }); return drafts.shift() ?? null; } };
+    const asks = [{ kind: "short" as const, count: 2, marks: 2 }, { kind: "long" as const, count: 1, marks: 5 }];
+    drafts.push({ questions: [
+      { question: "Define refraction of light.", questionKind: "short", marks: 2, modelAnswer: "Bending of light from one medium to another.", chapter: "Light" },
+      { question: "State Snell's law.", questionKind: "short", marks: 2, modelAnswer: "n1 sin i = n2 sin r.", chapter: "Light" },
+      { question: "Explain refraction with Snell's law and one example.", questionKind: "long", marks: 5, modelAnswer: "…", chapter: "Light" },
+    ] });
+    const light = await questions.draftQuestionsFromCurriculum(B, draftAi as any, { ...sci, chapter: "Light" }, asks, { avoid: ["Explain refraction of light with one example."] });
+    const lastDraft = calls.filter(c => c.kind === "draft").pop()!;
+    expect(lastDraft.model === "gpt-4.1" && lastDraft.user.includes("Snell's law: n1 sin i") && lastDraft.user.includes("### Chapter: Light"), "GPT-4.1 is given the chapter's own notes", lastDraft.user.slice(0, 300));
+    expect(!lastDraft.user.includes("Ohm's law"), "only the chosen chapter's content");
+    expect(lastDraft.user.includes("- Explain refraction of light with one example."), "questions already in the paper are passed so they aren't repeated");
+    expect(light.questions.length === 3 && light.questions.every(q => q.source === "generated" && q.questionKey.startsWith("gen:") && q.chapter === "Light" && q.grade === "10" && q.subject === "Science"), "3 questions labelled as AI-written, with their class and chapter", light.questions);
+    expect(light.questions[2].maxMarks === 5 && light.questions[2].questionKind === "long", "marks and kind as asked");
+    expect(/wrote 3 questions from 1 note of "Light"/.test(light.note) && light.costUsd === 0.02, "the screen is told what the AI read", light.note);
+
+    drafts.push({ questions: [
+      { question: "State Ohm's law.", questionKind: "short", marks: 2, modelAnswer: "V = IR", chapter: "Electricity" },
+      { question: "What is refraction of light?", questionKind: "short", marks: 2, modelAnswer: "Bending", chapter: "Light" },
+    ] });
+    const whole = await questions.draftQuestionsFromCurriculum(B, draftAi as any, { ...sci }, asks);
+    const wholeCall = calls.filter(c => c.kind === "draft").pop()!;
+    expect(wholeCall.user.includes("### Chapter: Light") && wholeCall.user.includes("### Chapter: Electricity") && wholeCall.user.includes("V = I R"), "no chapter chosen → several chapters' content (notes and video transcripts)", wholeCall.user.slice(0, 400));
+    expect(whole.questions.length === 2 && whole.questions[0].chapter === "Electricity" && /\(3 asked for\)/.test(whole.note) && /1 note, 1 video transcript of 2 chapters of Science/.test(whole.note), "fewer than asked is said plainly, each question keeps its chapter", whole.note);
+
+    let refused = "";
+    try { await questions.draftQuestionsFromCurriculum(B, draftAi as any, { board: "CBSE", medium: "English", grade: "10", subject: "Civics", chapter: "Democracy" }, asks); } catch (e: any) { refused = e.message; }
+    expect(/chapter "Democracy" has no notes, e-book pages or video transcripts/.test(refused), "a chapter with only questions (no notes) says so", refused);
+    const callsBefore = calls.filter(c => c.kind === "draft").length;
+    let tooMany = "";
+    try { await questions.draftQuestionsFromCurriculum(B, draftAi as any, { ...sci, chapter: "Light" }, [{ kind: "short", count: 16, marks: 2 }]); } catch (e: any) { tooMany = e.message; }
+    expect(/at most 15/.test(tooMany) && calls.filter(c => c.kind === "draft").length === callsBefore, "more than 15 at once is refused before any AI call", tooMany);
+    drafts.push({ questions: [] });
+    let empty = "";
+    try { await questions.draftQuestionsFromCurriculum(B, draftAi as any, { ...sci, chapter: "Light" }, asks); } catch (e: any) { empty = e.message; }
+    expect(/could not write questions/.test(empty), "an empty AI reply → a plain message, nothing added", empty);
   }
 
   console.log("Marking schemes");

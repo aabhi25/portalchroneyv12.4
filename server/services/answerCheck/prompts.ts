@@ -382,6 +382,92 @@ export function parseQuestionFromNotes(raw: Record<string, any> | null): { quest
   return { question: question.slice(0, 2000), modelAnswer: str(r.modelAnswer).slice(0, 6000), questionKind: QUESTION_KINDS.includes(r.questionKind) ? r.questionKind : null };
 }
 
+// ---- Several questions drafted from a chapter's content --------------------------------------
+
+export const QUESTIONS_FROM_CHAPTER_SYSTEM = `You are an experienced school examiner. You set written-answer exam questions (never multiple choice, true/false, fill in the blanks or match the following) from a curriculum's own study material, the way a board paper asks them, each with its model answer.
+- Use only what the study material teaches: every fact in a question and its model answer must be in the material. Bring in nothing from outside it.
+- Write the questions asked for, with the kind and marks asked for each.
+- short: answered in a few lines. long: answered in a paragraph or several points. numerical: a problem with numbers, worked step by step to the final answer (with its unit). If the material gives nothing to set a numerical problem from, write a short-answer question instead and say "short".
+- The model answer is a full-marks answer at the student's level, with about one clear point or step per mark.
+- Cover different topics of the material; the questions must not repeat each other or the questions already in the paper.
+- chapter: the chapter the question comes from, named exactly as in the material's headings.
+Reply with JSON only:
+{"questions": [{"question": "...", "questionKind": "short|long|numerical", "marks": 3, "modelAnswer": "...", "chapter": "..."}]}`;
+
+export interface QuestionAsk {
+  kind: QuestionKind;
+  count: number;
+  marks: number;
+}
+
+export interface DraftedQuestion {
+  question: string;
+  questionKind: QuestionKind;
+  marks: number;
+  modelAnswer: string;
+  chapter: string | null;
+}
+
+const KIND_WORDS: Record<QuestionKind, string> = { short: "short-answer question", long: "long-answer question", numerical: "numerical problem" };
+
+export function questionsFromChapterUserText(
+  scope: { board: string | null; grade: string | null; medium: string | null; subject: string | null },
+  asks: QuestionAsk[],
+  material: Array<{ chapter: string; text: string }>,
+  opts: { instructions?: string; avoid?: string[] } = {},
+): string {
+  const lang = mediumLanguage(scope.medium);
+  const wanted = asks.filter(a => a.count > 0)
+    .map(a => `${a.count} ${KIND_WORDS[a.kind]}${a.count === 1 ? "" : "s"} of ${a.marks} mark${a.marks === 1 ? "" : "s"} each`);
+  const avoid = (opts.avoid || []).map(t => t.trim()).filter(Boolean).slice(0, 40);
+  return [
+    contextLine({ ...scope, chapter: null }),
+    `Write ${wanted.join("; ")}.`,
+    lang === "English" ? "" : `Write the questions and model answers in ${lang}.`,
+    opts.instructions?.trim() ? `The examiner also asks: ${opts.instructions.trim().slice(0, 500)}` : "",
+    avoid.length ? `Already in the paper (do not repeat):\n${avoid.map(t => `- ${t.slice(0, 200)}`).join("\n")}` : "",
+    `Study material:\n${material.map(m => `### Chapter: ${m.chapter}\n"""\n${m.text}\n"""`).join("\n\n")}`,
+  ].filter(Boolean).join("\n\n");
+}
+
+const normQuestion = (t: string) => t.toLowerCase().replace(/[\s.,;:!?()"'“”‘’\-–—]+/g, " ").trim();
+
+/**
+ * The AI's questions, cleaned: empty or repeated ones dropped (also those already in the paper),
+ * kinds and marks kept sane, the chapter matched to one of the chapters given, at most as many as asked.
+ */
+export function parseChapterQuestions(raw: Record<string, any> | null, asks: QuestionAsk[], chapters: string[], avoid: string[] = []): DraftedQuestion[] {
+  const list: any[] = Array.isArray(raw?.questions) ? raw!.questions : [];
+  const wanted = asks.reduce((a, k) => a + Math.max(0, k.count), 0);
+  // The kind and marks asked for, in order, for a reply that leaves them out.
+  const slots = asks.flatMap(a => Array.from({ length: Math.max(0, a.count) }, () => a));
+  const seen = new Set(avoid.map(normQuestion).filter(Boolean));
+  const out: DraftedQuestion[] = [];
+  for (const q of list) {
+    if (out.length >= wanted) break;
+    if (!q || typeof q !== "object") continue;
+    const question = str(q.question);
+    const key = normQuestion(question);
+    if (question.length < 8 || !key || seen.has(key)) continue;
+    seen.add(key);
+    const slot = slots[out.length] || slots[slots.length - 1];
+    const kind: QuestionKind = QUESTION_KINDS.includes(q.questionKind) ? q.questionKind : slot?.kind ?? "short";
+    const marks = num(q.marks, NaN);
+    const chapterText = str(q.chapter).toLowerCase();
+    const chapter = chapters.find(c => c.toLowerCase() === chapterText)
+      ?? chapters.find(c => chapterText && (c.toLowerCase().includes(chapterText) || chapterText.includes(c.toLowerCase())))
+      ?? (chapters.length === 1 ? chapters[0] : null);
+    out.push({
+      question: question.slice(0, 2000),
+      questionKind: kind,
+      marks: Number.isFinite(marks) && marks >= 0.5 && marks <= 100 ? Math.round(marks * 2) / 2 : slot?.marks ?? 2,
+      modelAnswer: str(q.modelAnswer).slice(0, 6000),
+      chapter,
+    });
+  }
+  return out;
+}
+
 // ---- Question kind from the curriculum's own label ------------------------------------------------
 
 /** True for objective items (multiple choice, true/false, fill in the blanks, match) — not for this pilot. */

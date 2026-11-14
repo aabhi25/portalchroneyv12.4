@@ -9,7 +9,7 @@ import { getMongoChunks } from "../topscholar/mongoContentReader";
 import { chapterNamesForCpIds, listSyncedScopeMetadata, syncedCpIdsForScope, type StoredCurriculumScope } from "../topscholar/testerContentScopes";
 import { htmlToText } from "../topscholar/htmlContent";
 import { ANSWER_CHECK_MODEL, type AnswerCheckAi } from "./ai";
-import { guessQuestionKind, isObjectiveQuestion, parseQuestionFromNotes, QUESTION_FROM_NOTES_SYSTEM, questionFromNotesUserText } from "./prompts";
+import { guessQuestionKind, isObjectiveQuestion, parseChapterQuestions, parseQuestionFromNotes, QUESTION_FROM_NOTES_SYSTEM, QUESTIONS_FROM_CHAPTER_SYSTEM, questionFromNotesUserText, questionsFromChapterUserText, type QuestionAsk } from "./prompts";
 
 /**
  * Answer checking pilot — questions from the account's own curriculum (Top Scholar's synced
@@ -292,4 +292,106 @@ export async function pickRandomQuestions(businessAccountId: string, settings: A
     if (pick.note && !notes.includes(pick.note)) notes.push(pick.note);
   }
   return { questions, notes };
+}
+
+// ---- Questions written by the AI from the curriculum's own content -------------------------------
+
+/** Most questions drafted at once, and the study material the AI is given (characters). */
+export const MAX_DRAFT_QUESTIONS = 15;
+const MAX_MATERIAL_CHARS = 30_000;
+const MAX_DRAFT_CHAPTERS = 6;
+const MATERIAL_TYPES = [
+  { type: "note", label: "note" },
+  { type: "ebook_page", label: "e-book page" },
+  { type: "transcript", label: "video transcript" },
+] as const;
+
+export interface DraftResult {
+  questions: QuestionInput[];
+  /** Plain-words note: what the AI read and wrote. */
+  note: string;
+  costUsd: number;
+}
+
+export class DraftError extends Error {}
+
+/** A chapter's notes, then e-book pages, then video transcripts, up to `budget` characters. */
+async function chapterMaterial(cfg: TopscholarConfig, businessAccountId: string, rows: StoredCurriculumScope[], chapter: string, budget: number, counts: Record<string, number>): Promise<string> {
+  const parts: string[] = [];
+  let used = 0;
+  for (const { type } of MATERIAL_TYPES) {
+    for (const row of rows) {
+      if (used >= budget) break;
+      const page = await readChunks(cfg, businessAccountId, { cpId: row.cpId, contentType: type, chapter, page: 1, pageSize: 25 });
+      for (const c of page.items) {
+        const text = (c.contentText || htmlToText(c.contentHtml).text).replace(/\n{3,}/g, "\n\n").trim();
+        if (text.length < 40 || used >= budget) continue;
+        const piece = text.slice(0, Math.min(4000, budget - used));
+        parts.push(c.title ? `${c.title}\n${piece}` : piece);
+        used += piece.length;
+        counts[type] = (counts[type] || 0) + 1;
+      }
+    }
+  }
+  return parts.join("\n\n---\n\n");
+}
+
+/**
+ * Written-answer questions with model answers, drafted by GPT-4.1 from one chapter's own content
+ * (or from a few chapters of the subject when no chapter is chosen): notes, e-book pages and video
+ * transcripts, never from outside them. For the admin to check before the assessment is saved.
+ */
+export async function draftQuestionsFromCurriculum(
+  businessAccountId: string, ai: AnswerCheckAi, scope: ScopePick & { chapter?: string }, asks: QuestionAsk[],
+  opts: { instructions?: string; avoid?: string[]; rand?: () => number } = {},
+): Promise<DraftResult> {
+  const wanted = asks.reduce((a, k) => a + k.count, 0);
+  if (wanted < 1) throw new DraftError("Choose how many questions to write.");
+  if (wanted > MAX_DRAFT_QUESTIONS) throw new DraftError(`Ask for at most ${MAX_DRAFT_QUESTIONS} questions at a time.`);
+  if (!scope.subject) throw new DraftError("Choose a subject.");
+  const cfg = await accountContentConfig(businessAccountId);
+  if (!cfg) throw new DraftError("Account not found.");
+  const rows = matchingScopeRows(await listSyncedScopeMetadata(businessAccountId), [scope]);
+  if (!rows.length) throw new DraftError("No synced content pack matches this class and subject.");
+
+  const chapters = scope.chapter
+    ? [scope.chapter]
+    : shuffle(await chaptersFor(businessAccountId, scope), opts.rand || Math.random).slice(0, Math.min(MAX_DRAFT_CHAPTERS, Math.max(2, wanted)));
+  const counts: Record<string, number> = {};
+  const material: Array<{ chapter: string; text: string }> = [];
+  for (const chapter of chapters) {
+    const text = await chapterMaterial(cfg, businessAccountId, rows, chapter, Math.floor(MAX_MATERIAL_CHARS / chapters.length), counts);
+    if (text) material.push({ chapter, text });
+  }
+  const where = scope.chapter ? `"${scope.chapter}"` : `${scope.subject}`;
+  if (!material.length) throw new DraftError(`${scope.chapter ? `The chapter ${where}` : `${where} (${chapters.length} chapters looked at)`} has no notes, e-book pages or video transcripts to write questions from.`);
+
+  const avoid = opts.avoid || [];
+  const reply = await ai.json({
+    model: ANSWER_CHECK_MODEL,
+    system: QUESTIONS_FROM_CHAPTER_SYSTEM,
+    user: questionsFromChapterUserText(scope, asks, material, { instructions: opts.instructions, avoid }),
+    maxTokens: Math.min(16000, 1500 + wanted * 700),
+    temperature: 0.6,
+    timeoutMs: 180_000,
+  });
+  const drafted = parseChapterQuestions(reply, asks, material.map(m => m.chapter), avoid);
+  if (!drafted.length) throw new DraftError("The AI could not write questions from this content. Try again, or choose another chapter.");
+
+  const read = MATERIAL_TYPES.filter(m => counts[m.type]).map(m => `${counts[m.type]} ${m.label}${counts[m.type] === 1 ? "" : "s"}`);
+  const from = material.length === 1 ? `"${material[0].chapter}"` : `${material.length} chapters of ${scope.subject}`;
+  return {
+    questions: drafted.map(q => ({
+      questionKey: customQuestionKey(q.question, "gen"),
+      source: "generated",
+      questionText: q.question,
+      modelAnswer: q.modelAnswer,
+      questionKind: q.questionKind,
+      board: scope.board, medium: scope.medium, grade: scope.grade, subject: scope.subject,
+      chapter: q.chapter,
+      maxMarks: q.marks,
+    })),
+    note: `The AI wrote ${drafted.length} question${drafted.length === 1 ? "" : "s"}${drafted.length < wanted ? ` (${wanted} asked for)` : ""} from ${read.join(", ")} of ${from}. Check each question and model answer before saving.`,
+    costUsd: ai.costUsd(),
+  };
 }
