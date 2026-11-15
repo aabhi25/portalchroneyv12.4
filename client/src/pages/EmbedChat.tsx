@@ -624,6 +624,8 @@ export default function EmbedChat() {
   const [expandedImageUrl, setExpandedImageUrl] = useState<string | null>(null);
   const [visitorSessionId, setVisitorSessionId] = useState<string | null>(null);
   const [parentPageUrl, setParentPageUrl] = useState<string | null>(null);
+  const parentPageUrlRef = useRef<string | null>(null);
+  parentPageUrlRef.current = parentPageUrl;
   // First-touch campaign landing page from the website script (saved on the lead).
   const landingUrlRef = useRef<string | null>(null);
   const [isUserAtBottom, setIsUserAtBottom] = useState(true);
@@ -1113,6 +1115,7 @@ export default function EmbedChat() {
       businessAccountId,
       getConversationId: () => conversationIdRef.current || null,
       getVisitorToken: () => visitorSessionTokenRef.current || null,
+      getPageUrl: () => parentPageUrlRef.current || (window.parent !== window ? document.referrer : window.location.href) || null,
     });
     return () => setWhatsappHandoffContext(null);
   }, [businessAccountId]);

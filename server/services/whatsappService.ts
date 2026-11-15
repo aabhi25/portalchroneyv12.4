@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from "../lib/fetchWithTimeout";
+import type { SharedSettings } from "./whatsapp/sharedNumber";
 import OpenAI from "openai";
 import { db } from "../db";
 import { stripProtectedFields } from "../lib/safeUpdate";
@@ -81,7 +82,17 @@ export class WhatsappService {
     }
   }
 
-  async getSettings(businessAccountId: string): Promise<WhatsappSettings | null> {
+  /**
+   * The account's WhatsApp settings for using them: when it uses another account's shared number,
+   * that account's MSG91 key, number, integrated number ID and 24-hour template are filled in.
+   */
+  async getSettings(businessAccountId: string): Promise<SharedSettings<WhatsappSettings> | null> {
+    const { withSharedNumber } = await import("./whatsapp/sharedNumber");
+    return withSharedNumber(businessAccountId, await this.getOwnSettings(businessAccountId));
+  }
+
+  /** The account's own saved row (for editing it). */
+  async getOwnSettings(businessAccountId: string): Promise<WhatsappSettings | null> {
     const [settings] = await db
       .select()
       .from(whatsappSettings)
@@ -91,7 +102,7 @@ export class WhatsappService {
   }
 
   async saveSettings(businessAccountId: string, data: Partial<WhatsappSettings>): Promise<WhatsappSettings> {
-    const existing = await this.getSettings(businessAccountId);
+    const existing = await this.getOwnSettings(businessAccountId);
     const safeData = stripProtectedFields(data);
 
     if (existing) {

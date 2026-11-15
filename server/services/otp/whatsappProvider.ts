@@ -28,11 +28,13 @@ export class WhatsAppOtpProvider implements OtpProvider {
   async sendOtp(phoneE164: string, code: string): Promise<OtpSendResult> {
     const masked = phoneE164.length > 4 ? `***${phoneE164.slice(-4)}` : '***';
     try {
-      const [settings] = await db
+      const [ownSettings] = await db
         .select()
         .from(whatsappSettings)
         .where(eq(whatsappSettings.businessAccountId, this.cfg.businessAccountId))
         .limit(1);
+      const { withSharedNumber } = await import('../whatsapp/sharedNumber');
+      const settings = await withSharedNumber(this.cfg.businessAccountId, ownSettings);
 
       if (!settings) {
         return { success: false, error: 'WhatsApp Cloud API not configured for this business' };

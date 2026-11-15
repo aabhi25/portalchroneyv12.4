@@ -67,7 +67,9 @@ async function phoneCallsStatus(accountId: string, account: any): Promise<Featur
 
 async function whatsappStatus(accountId: string, account: any): Promise<FeatureStatus> {
   if (!on(account.whatsappEnabled)) return { state: "off" };
-  const [ws] = await db.select().from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, accountId)).limit(1);
+  const [ownWs] = await db.select().from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, accountId)).limit(1);
+  const { withSharedNumber } = await import("../services/whatsapp/sharedNumber");
+  const ws = await withSharedNumber(accountId, ownWs);
   const [last] = await db.select({ at: whatsappLeads.lastMessageAt }).from(whatsappLeads)
     .where(and(eq(whatsappLeads.businessAccountId, accountId), isNotNull(whatsappLeads.lastMessageAt)))
     .orderBy(desc(whatsappLeads.lastMessageAt)).limit(1);

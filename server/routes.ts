@@ -94,6 +94,7 @@ import unifiedLeadsRoutes from "./routes/unifiedLeads";
 import { contactViewMaskMiddleware } from "./lib/contactViewMask";
 import homeSummaryRoutes from "./routes/homeSummary";
 import whatsappHandoffRoutes from "./routes/whatsappHandoff";
+import whatsappSharedNumberRoutes from "./routes/whatsappSharedNumber";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone, maskPhonesInText } from "./lib/leadAccess";
 import { conversationListExtras } from "./lib/conversationListExtras";
 import { addWebsiteLeadExtras } from "./lib/leadExtras";
@@ -654,6 +655,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(unifiedLeadsRoutes);
   app.use(homeSummaryRoutes);
   app.use(whatsappHandoffRoutes);
+  app.use(whatsappSharedNumberRoutes);
   app.use(dataRetentionRoutes);
   app.use(merittoRoutes);
   app.use(wooCommerceRoutes);
@@ -30464,12 +30466,14 @@ Return ONLY a valid JSON object in this format:
     // Set once an inbound message is claimed, so a failure can release it and tell the customer.
     let claimedInbound: { businessId: string; dedupId: string; senderPhone: string; settings: any } | null = null;
     try {
-      const { businessId } = req.params;
+      // Reassigned when the number is shared and the message is for one of the linked accounts.
+      let businessId = req.params.businessId;
+      const ownerBusinessId = businessId;
       const webhookSecret = req.query.secret as string || req.headers['x-webhook-secret'] as string;
       const { whatsappService } = await import("./services/whatsappService");
 
       // Verify business exists and has WhatsApp enabled
-      const businessAccount = await storage.getBusinessAccount(businessId);
+      let businessAccount = await storage.getBusinessAccount(businessId);
       if (!businessAccount) {
         console.log("[MSG91 Webhook] Business not found:", businessId);
         return res.status(404).json({ error: "Business account not found" });
@@ -30481,10 +30485,13 @@ Return ONLY a valid JSON object in this format:
       }
 
       // Verify webhook secret for authentication (always required)
-      const settings = await whatsappService.getSettings(businessId);
-      
-      // Check user-level WhatsApp toggle (in settings)
-      if (settings?.whatsappEnabled === "false") {
+      let settings = await whatsappService.getSettings(businessId);
+      const { sharesOfOwner, routeSharedInbound, accountsOnNumber } = await import("./services/whatsapp/sharedNumber");
+      const sharesNumber = (await sharesOfOwner(businessId)).length > 0;
+
+      // Check user-level WhatsApp toggle (in settings). A shared number checks the switch of the
+      // account each message is for (below), so the owner's switch doesn't silence the others.
+      if (settings?.whatsappEnabled === "false" && !sharesNumber) {
         console.log("[MSG91 Webhook] WhatsApp disabled by user for:", businessId);
         return res.status(403).json({ error: "WhatsApp AI Agent is disabled" });
       }
@@ -30506,6 +30513,27 @@ Return ONLY a valid JSON object in this format:
         console.log(`[MSG91 Webhook] SKIPPING - integratedNumber ${incomingIntegratedNumber} does not match configured number ${configuredWhatsappNumber} for business ${businessId}`);
         return res.json({ status: "received", note: "message not for this business number" });
       }
+
+      /**
+       * Shared number: picks the account this message is for and switches the handler to it.
+       * Returns the text to process (a landing-page tag removed). Stays with the owner when the
+       * chosen account can't take WhatsApp messages any more.
+       */
+      const routeToSharedAccount = async (senderPhone: string, messageText: string | undefined): Promise<string> => {
+        const route = await routeSharedInbound(ownerBusinessId, senderPhone, messageText);
+        if (!route) return messageText as string;
+        if (route.accountId !== businessId) {
+          const routedAccount = await storage.getBusinessAccount(route.accountId);
+          const routedSettings = await whatsappService.getSettings(route.accountId);
+          if (routedAccount && routedAccount.whatsappEnabled === "true" && routedSettings) {
+            businessId = route.accountId;
+            businessAccount = routedAccount;
+            settings = routedSettings;
+          }
+        }
+        console.log(`[MSG91 Webhook] Shared number: message from ***${senderPhone.slice(-4)} → ${businessId} (${route.reason})`);
+        return (messageText === undefined ? messageText : route.text) as string;
+      };
 
       console.log("[MSG91 Webhook] Received:", JSON.stringify(payload, null, 2));
 
@@ -30564,11 +30592,16 @@ Return ONLY a valid JSON object in this format:
               ? (item.errMessage || item.errorMessage || item.error || item.message || statusStr)
               : undefined;
             try {
-              let ok = await marketingCampaignService.applyDeliveryReceipt(businessId, msgId, kind, errMsg);
-              // Not a campaign message: maybe an AI call's WhatsApp follow-up (shown on the lead / call).
-              if (!ok) {
-                const { applyFollowUpReceipt } = await import("./services/calling/callLifecycle");
-                ok = await applyFollowUpReceipt(businessId, msgId, kind, errMsg);
+              // On a shared number the message may have been sent by any of the accounts on it.
+              let ok = false;
+              for (const accountId of await accountsOnNumber(businessId)) {
+                ok = await marketingCampaignService.applyDeliveryReceipt(accountId, msgId, kind, errMsg);
+                // Not a campaign message: maybe an AI call's WhatsApp follow-up (shown on the lead / call).
+                if (!ok) {
+                  const { applyFollowUpReceipt } = await import("./services/calling/callLifecycle");
+                  ok = await applyFollowUpReceipt(accountId, msgId, kind, errMsg);
+                }
+                if (ok) break;
               }
               if (ok) {
                 applied++;
@@ -30642,12 +30675,16 @@ Return ONLY a valid JSON object in this format:
           }
           try {
             const { marketingCampaignService } = await import("./services/marketingCampaignService");
-            const updated = await marketingCampaignService.applyDeliveryReceipt(
-              businessId,
-              receiptId,
-              kind,
-              kind === "failed" ? (payload.errorMessage || payload.error || reportType || "delivery_failed") : undefined,
-            );
+            let updated = false;
+            for (const accountId of await accountsOnNumber(businessId)) {
+              updated = await marketingCampaignService.applyDeliveryReceipt(
+                accountId,
+                receiptId,
+                kind,
+                kind === "failed" ? (payload.errorMessage || payload.error || reportType || "delivery_failed") : undefined,
+              );
+              if (updated) break;
+            }
             if (updated) {
               console.log(`[MSG91 Webhook] Applied ${kind} receipt for msg ${receiptId}`);
             }
@@ -30663,6 +30700,13 @@ Return ONLY a valid JSON object in this format:
         if (!senderPhone) {
           console.log("[MSG91 Webhook] No sender phone in payload");
           return res.json({ status: "received", note: "no sender phone" });
+        }
+
+        if (sharesNumber) {
+          text = await routeToSharedAccount(senderPhone, text);
+          if (settings?.whatsappEnabled === "false") {
+            return res.json({ status: "received", note: "WhatsApp AI Agent is disabled" });
+          }
         }
 
         const hasReliableId = !!(uuid || requestId);
@@ -31945,6 +31989,14 @@ Return ONLY a valid JSON object in this format:
       if (payload.type === "message" && payload.payload) {
         const { id: messageId, source: senderPhone, type: messageType, text, image, document, timestamp } = payload.payload;
 
+        if (senderPhone && sharesNumber) {
+          const routedText = await routeToSharedAccount(senderPhone, text?.body);
+          if (text?.body) text.body = routedText;
+          if (settings?.whatsappEnabled === "false") {
+            return res.json({ status: "received", note: "WhatsApp AI Agent is disabled" });
+          }
+        }
+
         if (senderPhone) {
           const { updateSession } = await import("./services/whatsappSessionService");
           updateSession(businessId, senderPhone).catch(err =>
@@ -32050,7 +32102,8 @@ Return ONLY a valid JSON object in this format:
       }
 
       const { whatsappService } = await import("./services/whatsappService");
-      let settings = await whatsappService.getSettings(businessAccountId);
+      // The own row is set up here; a shared number's details are filled in only for showing.
+      let settings = await whatsappService.getOwnSettings(businessAccountId);
 
       // Auto-generate webhook secret if not exists
       if (!settings) {
@@ -32095,13 +32148,15 @@ Return ONLY a valid JSON object in this format:
       // being re-implemented per handler. It withholds msg91AuthKey and webhookSecret and
       // replaces them with `*Configured` booleans.
       const { toWhatsappSettingsDto } = await import("./services/whatsapp/settingsDto");
-      const formattedSettings = toWhatsappSettingsDto(settings);
+      const { withSharedNumber, sharedNumberSummary } = await import("./services/whatsapp/sharedNumber");
+      const formattedSettings = toWhatsappSettingsDto(await withSharedNumber(businessAccountId, settings));
 
       // What "Same as website" means for the WhatsApp answer-style pickers.
       const websiteWidget = await storage.getWidgetSettings(businessAccountId).catch(() => undefined);
       res.json({
         settings: formattedSettings,
         webhookUrl,
+        sharedNumber: await sharedNumberSummary(businessAccountId),
         websiteAnswerStyle: {
           personality: websiteWidget?.personality || "friendly",
           responseLength: (websiteWidget as any)?.responseLength || "balanced",
@@ -32194,7 +32249,7 @@ Return ONLY a valid JSON object in this format:
 
       const { whatsappService } = await import("./services/whatsappService");
       
-      let existingSettings = await whatsappService.getSettings(businessAccountId);
+      let existingSettings = await whatsappService.getOwnSettings(businessAccountId);
       const webhookSecret = existingSettings?.webhookSecret || whatsappService.generateWebhookSecret();
 
       const body = req.body;
@@ -32275,6 +32330,11 @@ Return ONLY a valid JSON object in this format:
       if (body.useWebsiteKnowledge !== undefined) updateData.useWebsiteKnowledge = body.useWebsiteKnowledge === false ? "false" : "true";
       if (body.useProductCatalogKnowledge !== undefined) updateData.useProductCatalogKnowledge = body.useProductCatalogKnowledge === false ? "false" : "true";
 
+      // An account on another account's shared number keeps no sending details of its own here.
+      const { sharedOwnerOf, withSharedNumber, SHARED_SENDING_FIELDS } = await import("./services/whatsapp/sharedNumber");
+      if (await sharedOwnerOf(businessAccountId)) {
+        for (const field of SHARED_SENDING_FIELDS) delete updateData[field];
+      }
       const settings = await whatsappService.saveSettings(businessAccountId, updateData);
 
       if (updateData.requirePanEmailForLead !== undefined) {
@@ -32290,7 +32350,7 @@ Return ONLY a valid JSON object in this format:
       // Must go through the same redaction as GET. Returning the saved row directly handed
       // msg91AuthKey and webhookSecret back on every save, which defeated sanitizing GET at all.
       const { toWhatsappSettingsDto } = await import("./services/whatsapp/settingsDto");
-      res.json(toWhatsappSettingsDto(settings));
+      res.json(toWhatsappSettingsDto(await withSharedNumber(businessAccountId, settings)));
     } catch (error: any) {
       console.error("Error updating WhatsApp settings:", error);
       res.status(500).json({ error: error.message });

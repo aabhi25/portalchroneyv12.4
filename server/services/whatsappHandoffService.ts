@@ -125,6 +125,13 @@ export async function getConnectedWhatsappNumber(businessAccountId: string): Pro
     .where(eq(whatsappSettings.businessAccountId, businessAccountId))
     .limit(1);
   if (!row || row.bizEnabled !== "true" || row.userEnabled === "false") return null;
+  // An account on a shared number opens the owner's number.
+  const { sharedOwnerOf } = await import("./whatsapp/sharedNumber");
+  const ownerId = await sharedOwnerOf(businessAccountId);
+  if (ownerId) {
+    const [owner] = await db.select({ number: whatsappSettings.whatsappNumber }).from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, ownerId)).limit(1);
+    return validNumber(owner?.number);
+  }
   return validNumber(row.number);
 }
 
@@ -159,6 +166,8 @@ export interface CreateHandoffInput {
   productName?: string | null;
   /** product source: the order message the widget filled from the template (name / price). */
   message?: string | null;
+  /** The page the visitor clicked on. */
+  pageUrl?: string | null;
 }
 
 export type CreateHandoffResult =
@@ -248,9 +257,19 @@ export async function createHandoff(input: CreateHandoffInput): Promise<CreateHa
   const lead = conv ? await websiteLeadFor(businessAccountId, conv.id) : undefined;
   const expiresAt = new Date(Date.now() + HANDOFF_TTL_DAYS * 24 * 3600_000);
 
+  // On a shared WhatsApp number the code must also be new to the other accounts on it, since it
+  // decides which account the message goes to.
+  const { accountsOnNumber } = await import("./whatsapp/sharedNumber");
+  const numberAccounts = await accountsOnNumber(businessAccountId);
+  const pageUrl = /^https?:\/\//i.test(input.pageUrl || "") ? input.pageUrl!.slice(0, 1000) : null;
   let row: WhatsappHandoff | undefined;
   for (let attempt = 0; attempt < 6 && !row; attempt++) {
     const code = generateHandoffCode();
+    if (numberAccounts.length > 1) {
+      const [taken] = await db.select({ id: whatsappHandoffs.id }).from(whatsappHandoffs)
+        .where(and(eq(whatsappHandoffs.code, code), inArray(whatsappHandoffs.businessAccountId, numberAccounts))).limit(1);
+      if (taken) continue;
+    }
     const inserted = await db
       .insert(whatsappHandoffs)
       .values({
@@ -261,6 +280,7 @@ export async function createHandoff(input: CreateHandoffInput): Promise<CreateHa
         productId, topic,
         targetNumber: number,
         connectedNumber: connected,
+        pageUrl,
         expiresAt,
       })
       .onConflictDoNothing()

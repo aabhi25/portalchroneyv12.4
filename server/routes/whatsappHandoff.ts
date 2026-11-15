@@ -64,6 +64,7 @@ router.post("/api/chat/widget/whatsapp-handoff", async (req: Request, res: Respo
       productId: str(body.productId, 100),
       productName: str(body.productName, 200),
       message: str(body.message, 500),
+      pageUrl: str(body.pageUrl, 1000),
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error });
     res.json({ url: result.url, code: result.code });

@@ -95,7 +95,9 @@ async function resolveWhatsAppProviderForBusiness(businessAccountId: string): Pr
       .from(whatsappSettings)
       .where(eq(whatsappSettings.businessAccountId, businessAccountId))
       .limit(1);
-    if (!wa[0]?.msg91AuthKey || !wa[0]?.msg91IntegratedNumberId) return null;
+    const { withSharedNumber } = await import('../whatsapp/sharedNumber');
+    const sending = await withSharedNumber(businessAccountId, wa[0]);
+    if (!sending?.msg91AuthKey || !sending?.msg91IntegratedNumberId) return null;
 
     return new WhatsAppOtpProvider({ businessAccountId, templateName });
   } catch (err: any) {

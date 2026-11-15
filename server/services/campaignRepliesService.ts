@@ -326,7 +326,9 @@ export interface SendResult { success: boolean; messageId?: string; error?: stri
 export const campaignRepliesDeps = {
   /** The same send path campaign AI replies use (session-aware MSG91 send). */
   async sendText(businessAccountId: string, phone: string, text: string): Promise<SendResult> {
-    const [settings] = await db.select().from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+    const [ownSettings] = await db.select().from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+    const { withSharedNumber } = await import("./whatsapp/sharedNumber");
+    const settings = await withSharedNumber(businessAccountId, ownSettings);
     if (!settings) return { success: false, error: "WhatsApp is not connected for this business." };
     const { whatsappAutoReplyService } = await import("./whatsappAutoReplyService");
     return whatsappAutoReplyService.sendSessionAwareMessage(settings, phone, text);

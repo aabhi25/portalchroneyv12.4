@@ -5347,6 +5347,7 @@ export const whatsappHandoffs = pgTable("whatsapp_handoffs", {
   usedAt: timestamp("used_at"), // first WhatsApp message carrying the code
   lastUsedAt: timestamp("last_used_at"),
   whatsappPhone: varchar("whatsapp_phone", { length: 20 }), // sender digits that used the code
+  pageUrl: text("page_url"), // the page the visitor clicked the WhatsApp button on
   rejectedCount: integer("rejected_count").notNull().default(0), // uses from another number (not linked)
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [
@@ -5358,6 +5359,24 @@ export const whatsappHandoffs = pgTable("whatsapp_handoffs", {
 ]);
 
 export type WhatsappHandoff = typeof whatsappHandoffs.$inferSelect;
+
+// Shared WhatsApp number: a linked account sends from the owner account's number (MSG91 key, number,
+// integrated number ID and 24-hour template are read from the owner), and messages to that number
+// arriving on the owner's webhook are routed to the right account (see services/whatsapp/sharedNumber.ts).
+export const whatsappNumberShares = pgTable("whatsapp_number_shares", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ownerAccountId: varchar("owner_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  linkedAccountId: varchar("linked_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  tag: varchar("tag", { length: 16 }).notNull(), // landing-page tag, e.g. "SYM-BBA" in "(SYM-BBA)"
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("whatsapp_number_shares_linked_idx").on(table.linkedAccountId), // an account uses at most one shared number
+  uniqueIndex("whatsapp_number_shares_tag_idx").on(table.tag),
+  index("whatsapp_number_shares_owner_idx").on(table.ownerAccountId),
+]);
+
+export type WhatsappNumberShare = typeof whatsappNumberShares.$inferSelect;
 
 export const smartReplies = pgTable("smart_replies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

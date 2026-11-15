@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { HideInHub } from "@/components/hub/HideInHub";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { useQuery, useMutation, useInfiniteQuery } from "@tanstack/react-query";
+import { SharedNumberCard, CopyLinkButton } from "@/components/whatsapp/SharedNumberCard";
 import { useLocation } from "wouter";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -86,6 +87,11 @@ import { JourneysRoutingNotice } from "@/components/whatsapp/JourneysRoutingNoti
 import type { MeResponseDto } from "@shared/dto";
 import { WA_LIMITS, promptLimitFor, whatsappStepProblems } from "@shared/whatsappLimits";
 import { WaCharCounter } from "@/components/whatsapp/WaCharCounter";
+
+type SharedNumberSummary =
+  | { role: "linked"; ownerAccountId: string; ownerName: string; number: string | null; tag: string; landingPageLink: string | null }
+  | { role: "owner"; linkedCount: number }
+  | { role: "none" };
 
 interface WhatsappSettings {
   whatsappEnabled: string;
@@ -505,9 +511,12 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
     queryFn: async () => {
       const res = await fetch("/api/whatsapp/settings", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch settings");
-      return res.json() as Promise<{ settings: WhatsappSettings; webhookUrl: string; webhookSecret?: string }>;
+      return res.json() as Promise<{ settings: WhatsappSettings; webhookUrl: string; webhookSecret?: string; sharedNumber?: SharedNumberSummary }>;
     },
   });
+  // Uses another account's shared WhatsApp number: no sending details of its own to set here.
+  const linkedShare = settingsData?.sharedNumber?.role === "linked" ? settingsData.sharedNumber : null;
+  const isSuperAdminViewing = currentUser?.role === "super_admin";
 
   const getLeadsDateRange = (): { dateFrom?: string; dateTo?: string } => {
     const now = new Date();
@@ -1165,6 +1174,32 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
               </Card>
 
 
+              {linkedShare && (
+                <Card className="border-green-200">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><Link2 className="h-5 w-5 text-green-600" /> Shared WhatsApp number</CardTitle>
+                    <CardDescription>
+                      This account uses {linkedShare.ownerName}'s number{linkedShare.number ? ` (${linkedShare.number})` : ""}: its MSG91 details,
+                      webhook and 24-hour template come from {linkedShare.ownerName}. AI replies, journeys, leads and CRM below are this account's own.
+                    </CardDescription>
+                  </CardHeader>
+                  {linkedShare.landingPageLink && (
+                    <CardContent className="space-y-2">
+                      <Label>WhatsApp link for this account's landing pages</Label>
+                      <div className="flex items-center gap-2">
+                        <Input value={linkedShare.landingPageLink} readOnly className="font-mono text-xs" />
+                        <CopyLinkButton link={linkedShare.landingPageLink} />
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        Use it for the WhatsApp icon on this account's landing pages. The tag <span className="font-mono">({linkedShare.tag})</span> in
+                        the message brings the student to this account.
+                      </p>
+                    </CardContent>
+                  )}
+                </Card>
+              )}
+
+              {!linkedShare && (
               <Card>
                 <CardHeader>
                   <CardTitle>Webhook URL</CardTitle>
@@ -1195,15 +1230,19 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
                   </p>
                 </CardContent>
               </Card>
+              )}
 
               <Card>
                 <CardHeader>
-                  <CardTitle>MSG91 Settings</CardTitle>
+                  <CardTitle>{linkedShare ? "Lead sync" : "MSG91 Settings"}</CardTitle>
                   <CardDescription>
-                    Configure your MSG91 credentials for receiving and processing WhatsApp messages.
+                    {linkedShare
+                      ? "Where this account's WhatsApp leads go."
+                      : "Configure your MSG91 credentials for receiving and processing WhatsApp messages."}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {!linkedShare && (
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="authKey">MSG91 Auth Key</Label>
@@ -1225,6 +1264,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
                       />
                     </div>
                   </div>
+                  )}
 
                   <div className="flex items-center justify-between pt-2">
                     <div className="space-y-0.5">
@@ -1240,6 +1280,8 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
                   </div>
                 </CardContent>
               </Card>
+
+              {!linkedShare && isSuperAdminViewing && <SharedNumberCard />}
 
               <Card>
                 <CardHeader>
@@ -1262,7 +1304,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
                     />
                   </div>
 
-                  {autoReplyEnabled && (
+                  {autoReplyEnabled && !linkedShare && (
                     <div className="space-y-4">
                       <div className="space-y-2">
                         <Label htmlFor="integratedNumberId">MSG91 Integrated Number ID</Label>

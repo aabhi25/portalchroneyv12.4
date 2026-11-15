@@ -588,10 +588,13 @@ export const contactGroupService = {
   },
 
   async getOptOutSet(businessAccountId: string): Promise<Set<string>> {
+    // On a shared WhatsApp number an opt-out is for the number: "Stop" to one account stops all.
+    const { accountsOnNumber } = await import("./whatsapp/sharedNumber");
+    const accountIds = await accountsOnNumber(businessAccountId);
     const rows = await db
       .select({ phone: whatsappOptOuts.phone })
       .from(whatsappOptOuts)
-      .where(eq(whatsappOptOuts.businessAccountId, businessAccountId));
+      .where(inArray(whatsappOptOuts.businessAccountId, accountIds));
     // Return both the stored phone and its last-10 form. The send-loop
     // pre-flight does `optOuts.has(recipient.phone)` against the local
     // 10-digit phone stored on the contact group row; without the last-10

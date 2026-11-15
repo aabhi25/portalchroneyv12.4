@@ -13,6 +13,8 @@ export interface WhatsappHandoffContext {
   businessAccountId: string;
   getConversationId?: () => string | null | undefined;
   getVisitorToken?: () => string | null | undefined;
+  /** The page the visitor is on (saved with the click). */
+  getPageUrl?: () => string | null | undefined;
   /** Prefix for the API path ('' = same origin). */
   apiBase?: string;
 }
@@ -81,6 +83,7 @@ export async function openWhatsappHandoff(opts: OpenWhatsappHandoffOptions, env:
         source: opts.source,
         conversationId: ctx.getConversationId?.() || null,
         visitorToken: ctx.getVisitorToken?.() || null,
+        pageUrl: ctx.getPageUrl?.() || null,
         productId: opts.productId || null,
         productName: opts.productName || null,
         message: opts.message || null,

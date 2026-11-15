@@ -283,7 +283,9 @@ export class WhatsappAutoReplyService {
     if (Date.now() - (this.aiFailureNoticeAt.get(key) || 0) < 5 * 60_000) return;
     this.aiFailureNoticeAt.set(key, Date.now());
     try {
-      const [settings] = await db.select().from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+      const { withSharedNumber } = await import("./whatsapp/sharedNumber");
+      const [ownSettings] = await db.select().from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, businessAccountId)).limit(1);
+      const settings = await withSharedNumber(businessAccountId, ownSettings);
       if (!settings) return;
       // Restricted reply language: the notice in the reply language (quick detection only, no AI call to detect).
       const lang = await restrictedReplyLanguage({
@@ -312,12 +314,14 @@ export class WhatsappAutoReplyService {
     try {
       console.log(`[WhatsApp Auto-Reply] Processing message from ${senderPhone}`);
       
-      // Fetch fresh settings to ensure we have latest configuration
-      const [settings] = await db
+      // Fetch fresh settings to ensure we have latest configuration (a shared number's sending details filled in)
+      const [ownSettings] = await db
         .select()
         .from(whatsappSettings)
         .where(eq(whatsappSettings.businessAccountId, businessAccountId))
         .limit(1);
+      const { withSharedNumber } = await import("./whatsapp/sharedNumber");
+      const settings = await withSharedNumber(businessAccountId, ownSettings);
         
       if (!settings) {
         console.error(`[WhatsApp Auto-Reply] No WhatsApp settings found for business: ${businessAccountId}`);
