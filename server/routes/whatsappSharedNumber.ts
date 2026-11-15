@@ -76,9 +76,9 @@ router.post("/api/whatsapp/shared-number/links", requireAuth, async (req, res) =
       resourceType: "business_account",
       resourceId: accountId,
       businessAccountId: ownerId,
-      metadata: { linkedAccountId: accountId, tag: share.tag },
+      metadata: { linkedAccountId: accountId, tag: share.tag, whatsappTurnedOn: share.whatsappTurnedOn },
     });
-    res.json({ ok: true, tag: share.tag });
+    res.json({ ok: true, tag: share.tag, whatsappTurnedOn: share.whatsappTurnedOn });
   } catch (error: any) {
     if (error instanceof ShareError) return res.status(error.status).json({ error: error.message });
     console.error("[Shared WhatsApp number] link failed:", error?.message);

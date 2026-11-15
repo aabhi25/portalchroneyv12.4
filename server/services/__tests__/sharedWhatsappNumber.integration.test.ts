@@ -62,7 +62,6 @@ async function main() {
   try {
     // ── Linking rules ────────────────────────────────────────────────────────
     await expectError(() => shared.linkAccount(O, D, owner.id), /same account group/, "an account outside the group can't be linked");
-    await expectError(() => shared.linkAccount(O, C, owner.id), /Turn on WhatsApp/, "an account with WhatsApp off can't be linked");
     await expectError(() => shared.linkAccount(O, O, owner.id), /itself/, "an account can't link itself");
     const shareA = await shared.linkAccount(O, A, owner.id);
     const shareB = await shared.linkAccount(O, B, owner.id);
@@ -72,6 +71,11 @@ async function main() {
     expect(!!(await whatsappService.getOwnSettings(B))?.webhookSecret, "an account without WhatsApp settings gets its own row");
     const candidates = await shared.linkCandidates(O);
     expect(candidates.find((c) => c.businessAccountId === A)?.linkedHere && candidates.find((c) => c.businessAccountId === C)?.whatsappEnabled === false, "candidates show linked and WhatsApp-off accounts");
+    expect(!shareA.whatsappTurnedOn, "linking an account with WhatsApp on leaves it as it is");
+    const shareC = await shared.linkAccount(O, C, owner.id);
+    const [cAfter] = await db.select({ on: schema.businessAccounts.whatsappEnabled }).from(schema.businessAccounts).where(eq(schema.businessAccounts.id, C));
+    expect(shareC.whatsappTurnedOn && cAfter.on === "true", "linking an account with WhatsApp off turns it on");
+    await shared.unlinkAccount(O, C);
 
     // ── Sending details ─────────────────────────────────────────────────────
     const sA = await whatsappService.getSettings(A);

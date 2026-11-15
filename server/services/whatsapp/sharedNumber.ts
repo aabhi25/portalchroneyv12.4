@@ -251,8 +251,11 @@ export async function linkCandidates(ownerId: string) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Links an account to the owner's number. Its own WhatsApp details stay saved for when it is removed. */
-export async function linkAccount(ownerId: string, accountId: string, userId: string | undefined): Promise<WhatsappNumberShare> {
+/**
+ * Links an account to the owner's number, turning WhatsApp on for it when it is off. Its own
+ * WhatsApp details stay saved for when it is removed.
+ */
+export async function linkAccount(ownerId: string, accountId: string, userId: string | undefined): Promise<WhatsappNumberShare & { whatsappTurnedOn: boolean }> {
   if (ownerId === accountId) throw new ShareError("An account can't share a number with itself");
   if (await sharedOwnerOf(ownerId)) throw new ShareError("This account uses another account's number, so it can't share one");
   const [owner] = await db.select().from(whatsappSettings).where(eq(whatsappSettings.businessAccountId, ownerId)).limit(1);
@@ -261,7 +264,6 @@ export async function linkAccount(ownerId: string, accountId: string, userId: st
   }
   const candidate = (await linkCandidates(ownerId)).find((c) => c.businessAccountId === accountId);
   if (!candidate) throw new ShareError("Only accounts in the same account group can be linked");
-  if (!candidate.whatsappEnabled) throw new ShareError(`Turn on WhatsApp for ${candidate.name} first`);
   if (candidate.linkedHere) throw new ShareError(`${candidate.name} already uses this number`);
   if (candidate.linkedElsewhere) throw new ShareError(`${candidate.name} already uses another account's number`);
   if (candidate.sharesItsOwn) throw new ShareError(`${candidate.name} shares its own number with other accounts`);
@@ -283,7 +285,11 @@ export async function linkAccount(ownerId: string, accountId: string, userId: st
   }
   if (!row) throw new ShareError("Couldn't create a landing-page tag, please try again", 500);
   clearSharedNumberCache();
-  return row;
+  // Messages for an account with WhatsApp off are turned away, so linking switches it on.
+  if (!candidate.whatsappEnabled) {
+    await db.update(businessAccounts).set({ whatsappEnabled: "true", updatedAt: new Date() }).where(eq(businessAccounts.id, accountId));
+  }
+  return { ...row, whatsappTurnedOn: !candidate.whatsappEnabled };
 }
 
 export async function unlinkAccount(ownerId: string, accountId: string): Promise<boolean> {

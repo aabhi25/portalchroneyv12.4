@@ -31,7 +31,6 @@ interface SharedNumberData {
 
 /** Why a group account can't be linked right now, or null when it can. */
 function blockedReason(c: Candidate): string | null {
-  if (!c.whatsappEnabled) return "WhatsApp is off for this account";
   if (c.linkedElsewhere) return "uses another account's number";
   if (c.sharesItsOwn) return "shares its own number";
   return null;
@@ -72,8 +71,16 @@ export function SharedNumberCard() {
     queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/settings"] });
   };
   const link = useMutation({
-    mutationFn: (accountId: string) => apiRequest("POST", "/api/whatsapp/shared-number/links", { accountId }),
-    onSuccess: () => { setPick(""); setConfirm(null); refresh(); toast({ title: "Account linked", description: "It now sends and receives on this number." }); },
+    mutationFn: (accountId: string) => apiRequest<{ whatsappTurnedOn?: boolean }>("POST", "/api/whatsapp/shared-number/links", { accountId }),
+    onSuccess: (result) => {
+      setPick(""); setConfirm(null); refresh();
+      toast({
+        title: "Account linked",
+        description: result?.whatsappTurnedOn
+          ? "WhatsApp was off for this account, so it has been turned on. It now sends and receives on this number."
+          : "It now sends and receives on this number.",
+      });
+    },
     onError: (e: Error) => { setConfirm(null); toast({ title: "Couldn't link the account", description: e.message, variant: "destructive" }); },
   });
   const unlink = useMutation({
@@ -95,7 +102,7 @@ export function SharedNumberCard() {
   const available = data.candidates.filter((c) => !c.linkedHere);
   const options = available.map((c) => {
     const reason = blockedReason(c);
-    return { value: c.businessAccountId, label: reason ? `${c.name} (${reason})` : c.name };
+    return { value: c.businessAccountId, label: reason ? `${c.name} (${reason})` : !c.whatsappEnabled ? `${c.name} (WhatsApp off, turned on when linked)` : c.name };
   });
   const chosen = available.find((c) => c.businessAccountId === pick) ?? null;
   const chosenBlocked = chosen ? blockedReason(chosen) : null;
@@ -158,6 +165,9 @@ export function SharedNumberCard() {
           </Button>
         </div>
         {chosenBlocked && <p className="text-xs text-amber-700">{chosen?.name}: {chosenBlocked}.</p>}
+        {chosen && !chosenBlocked && !chosen.whatsappEnabled && (
+          <p className="text-xs text-gray-600">WhatsApp is off for {chosen.name}; linking turns it on.</p>
+        )}
 
         <p className="text-xs text-gray-500">
           Paste each account's link into the WhatsApp icon on its landing pages. The tag at the end of the message tells us which
