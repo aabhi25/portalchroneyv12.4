@@ -7,7 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   AlertDialog,
@@ -209,12 +209,16 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
       <Card className="shadow-sm">
         <CardContent className="py-5 px-6">
           <StepTitle number={1} title="Copy from" hint="The account that is already set up the way you want" />
-          <Select value={sourceId} onValueChange={setSourceId}>
-            <SelectTrigger className="max-w-md" aria-label="Account to copy from"><SelectValue placeholder="Choose an account" /></SelectTrigger>
-            <SelectContent>
-              {members.map((m) => <SelectItem key={m.businessAccountId} value={m.businessAccountId}>{m.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <div className="max-w-md" aria-label="Account to copy from">
+            <SearchableSelect
+              value={sourceId}
+              onValueChange={setSourceId}
+              placeholder="Choose an account"
+              searchPlaceholder="Search accounts…"
+              emptyMessage="No account with that name"
+              options={members.map((m) => ({ value: m.businessAccountId, label: m.name }))}
+            />
+          </div>
         </CardContent>
       </Card>
 
