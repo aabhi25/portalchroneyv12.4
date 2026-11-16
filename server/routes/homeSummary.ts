@@ -38,6 +38,8 @@ router.get("/api/home/summary", requireAuth, requireBusinessAccount, async (req,
     const since = parsed && !Number.isNaN(parsed.getTime()) && parsed.getTime() > Date.now() - 48 * 60 * 60 * 1000 ? parsed : dayAgo;
     const s = since.toISOString();
 
+    const { isQualificationRequired } = await import("../services/leadQualificationService");
+    const waQualifiedOnly = await isQualificationRequired(accountId);
     const [
       webPeople, webLeads,
       waPeople, waLeads,
@@ -50,7 +52,9 @@ router.get("/api/home/summary", requireAuth, requireBusinessAccount, async (req,
       count(sql`SELECT count(*)::int AS n FROM conversations WHERE business_account_id = ${accountId} AND created_at >= ${s} AND is_internal_test = 'false'`),
       count(sql`SELECT count(*)::int AS n FROM leads WHERE business_account_id = ${accountId} AND created_at >= ${s} AND (COALESCE(TRIM(phone), '') <> '' OR COALESCE(TRIM(email), '') <> '')`),
       count(sql`SELECT count(*)::int AS n FROM whatsapp_sessions WHERE business_account_id = ${accountId} AND last_user_message_at >= ${s}`),
-      count(sql`SELECT count(*)::int AS n FROM whatsapp_leads WHERE business_account_id = ${accountId} AND created_at >= ${s}`),
+      // Leads only, counted like WhatsApp Insights: incoming, not just a message (whatsapp_leads also holds
+      // every message and reply), and qualified when the account requires PAN + email.
+      count(sql`SELECT count(*)::int AS n FROM whatsapp_leads WHERE business_account_id = ${accountId} AND direction = 'incoming' AND status <> 'message_only' ${waQualifiedOnly ? sql`AND qualified_at IS NOT NULL` : sql``} AND received_at >= ${s}`),
       count(sql`SELECT count(DISTINCT sender_id)::int AS n FROM instagram_messages WHERE business_account_id = ${accountId} AND direction = 'incoming' AND created_at >= ${s}`),
       count(sql`SELECT count(*)::int AS n FROM instagram_leads WHERE business_account_id = ${accountId} AND created_at >= ${s}`),
       count(sql`SELECT count(DISTINCT sender_id)::int AS n FROM facebook_messages WHERE business_account_id = ${accountId} AND direction = 'incoming' AND created_at >= ${s}`),
