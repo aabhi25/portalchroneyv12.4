@@ -828,15 +828,42 @@ export function RetentionCountdown({ lead, retention, align = "right" }: {
   );
 }
 
-export function RetentionBanner({ policies, totalAccounts, onViewReport }: {
+export function RetentionBanner({ policies, totalAccounts, onViewReport, compact }: {
   policies: EffectiveRetentionPolicy[];
   totalAccounts?: number;
   onViewReport?: () => void;
+  /** One short line (the full explanation shows on hover), for narrow lists. */
+  compact?: boolean;
 }) {
   if (policies.length === 0) return null;
   const hiding = policies.filter(p => p.maskContactsAfterSync);
   const hidingView = policies.filter(p => p.hideContactsFromView);
   const deleting = policies.filter(p => p.mode !== 'off');
+  if (compact) {
+    const live = deleting.some(p => p.mode === 'live');
+    const shown = deleting.length > 0 ? deleting : hidingView.length > 0 ? hidingView : hiding;
+    const headline = deleting.length > 0
+      ? (live ? "Auto-delete is on" : "Auto-delete dry run")
+      : hidingView.length > 0 ? "Contact details hidden" : "Contact details hidden after sync";
+    const detail = [
+      deleting.length > 0 ? `Leads are ${live ? "" : "would be "}removed after the times set in Auto-delete.` : null,
+      hidingView.length > 0 ? "Mobile numbers and emails show hidden here; the real details are kept for your CRM and calls." : null,
+      hiding.length > 0 ? "Contact details are removed once a lead reaches your CRM." : null,
+    ].filter(Boolean).join(" ");
+    const tone = deleting.length > 0 ? (live ? "bg-orange-50 text-orange-800 border-orange-100" : "bg-amber-50 text-amber-800 border-amber-100") : "bg-emerald-50 text-emerald-800 border-emerald-100";
+    return (
+      <div className={`flex items-center gap-2 px-4 py-1.5 text-xs border-b ${tone}`} title={detail} data-testid="banner-contacts-hidden">
+        {deleting.length > 0 ? <Timer className="w-3.5 h-3.5 shrink-0" /> : <EyeOff className="w-3.5 h-3.5 shrink-0" />}
+        <span className="min-w-0 truncate">
+          <span className="font-semibold">{headline}</span>
+          {totalAccounts !== undefined && totalAccounts > 1 ? ` · ${shown.length} of ${totalAccounts} accounts` : ""}
+        </span>
+        {onViewReport && (
+          <button type="button" onClick={onViewReport} className="ml-auto shrink-0 underline font-medium">Report</button>
+        )}
+      </div>
+    );
+  }
   if (deleting.length === 0) {
     const shown = hidingView.length > 0 ? hidingView : hiding;
     return (

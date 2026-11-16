@@ -48,6 +48,7 @@ import type { CrmTarget } from "@/components/leads/LeadCrm";
 import type { Lead } from "@shared/schema";
 import { FaWhatsapp } from "react-icons/fa";
 import { GroupWhatsappLeadSheet, GroupWhatsappLeadsList, whatsappLeadsExcelRows, type GroupWhatsappLead } from "@/components/leads/GroupWhatsappLeadsList";
+import { useGroupAdminGroupId, useStickyDate, useStickyState } from "@/lib/stickyState";
 import { GroupWhatsappChatList, GroupWhatsappChatThread, useGroupWhatsappChats, type GroupWhatsappChat } from "@/components/conversations/GroupWhatsappChats";
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'currentMonth' | 'lastMonth' | 'custom';
@@ -218,40 +219,22 @@ const GROUP_ALWAYS_SHOWN_COLUMNS: LeadColumnKey[] = ["captured"];
 const groupColumnWidth = (key: LeadColumnKey) =>
   key === "phone" ? "150px" : key === "email" ? "190px" : key === "city" ? "110px" : key === "topics" ? "210px" : key === "funnel" ? "120px" : "180px";
 
-interface AnalyticsData {
-  groupId: string;
-  totals: {
-    leads: number;
-    conversations: number;
-    visitors: number;
-    products: number;
-    faqs: number;
-  };
-  accountBreakdown: {
-    businessAccountId: string;
-    businessName: string;
-    leads: number;
-    conversations: number;
-    visitors: number;
-    products: number;
-    faqs: number;
-  }[];
-  canExportData: boolean;
-}
-
 export default function GroupAdminDashboard() {
   const { toast } = useToast();
   const [location, setLocation] = useLocation();
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  // The group is picked in the sidebar.
+  const [selectedGroupId, setSelectedGroupId] = useGroupAdminGroupId();
   const [conversationsPage, setConversationsPage] = useState(1);
   const ITEMS_PER_PAGE = 20;
   const leadsObserverRef = useRef<IntersectionObserver | null>(null);
 
   const [leadsSearch, setLeadsSearch] = useState("");
-  const [leadsDatePreset, setLeadsDatePreset] = useState<DatePreset>("all");
-  const [leadsFromDate, setLeadsFromDate] = useState<Date | undefined>(undefined);
-  const [leadsToDate, setLeadsToDate] = useState<Date | undefined>(undefined);
-  const [leadsAccountFilter, setLeadsAccountFilter] = useState<string>("all");
+  // Date and account filters are shared by Leads and Conversations (and the account with Insights),
+  // and remembered while this browser tab is open.
+  const [leadsDatePreset, setLeadsDatePreset] = useStickyState<DatePreset>("groupAdmin.filters.datePreset", "all");
+  const [leadsFromDate, setLeadsFromDate] = useStickyDate("groupAdmin.filters.from");
+  const [leadsToDate, setLeadsToDate] = useStickyDate("groupAdmin.filters.to");
+  const [leadsAccountFilter, setLeadsAccountFilter] = useStickyState<string>("groupAdmin.filters.account", "all");
   // Which leads the Leads page lists: website leads (default) or WhatsApp leads.
   const [leadsChannel, setLeadsChannel] = useState<'website' | 'whatsapp'>('website');
   const [isExportingLeads, setIsExportingLeads] = useState(false);
@@ -261,11 +244,11 @@ export default function GroupAdminDashboard() {
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   // The open thread starts at its first message when another conversation is picked.
   const convoThreadRef = useRef<HTMLDivElement>(null);
-  const [convoDatePreset, setConvoDatePreset] = useState<DatePreset>("all");
-  const [convoFromDate, setConvoFromDate] = useState<Date | undefined>(undefined);
-  const [convoToDate, setConvoToDate] = useState<Date | undefined>(undefined);
+  const [convoDatePreset, setConvoDatePreset] = [leadsDatePreset, setLeadsDatePreset];
+  const [convoFromDate, setConvoFromDate] = [leadsFromDate, setLeadsFromDate];
+  const [convoToDate, setConvoToDate] = [leadsToDate, setLeadsToDate];
   const [convoTypeFilter, setConvoTypeFilter] = useState<'all' | 'chat' | 'journey' | 'form'>('all');
-  const [convoAccountFilter, setConvoAccountFilter] = useState<string>("all");
+  const [convoAccountFilter, setConvoAccountFilter] = [leadsAccountFilter, setLeadsAccountFilter];
   const [isExportingConvo, setIsExportingConvo] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [convoFilterOpen, setConvoFilterOpen] = useState(false);
@@ -283,9 +266,6 @@ export default function GroupAdminDashboard() {
   const [journeyDialogOpen, setJourneyDialogOpen] = useState(false);
   const [journeyDialogLeadId, setJourneyDialogLeadId] = useState<string | null>(null);
 
-  const [analyticsDatePreset, setAnalyticsDatePreset] = useState<DatePreset>("today");
-  const [analyticsFromDate, setAnalyticsFromDate] = useState<Date | undefined>(undefined);
-  const [analyticsToDate, setAnalyticsToDate] = useState<Date | undefined>(undefined);
 
   const prevLeadsFiltersRef = useRef({ leadsSearch, leadsDatePreset, leadsFromDate, leadsToDate, leadsAccountFilter });
   const prevConvoFiltersRef = useRef({ convoSearch, convoDatePreset, convoFromDate, convoToDate, convoAccountFilter });
@@ -293,7 +273,6 @@ export default function GroupAdminDashboard() {
   const getActiveTabFromRoute = () => {
     if (location.includes("/leads")) return "leads";
     if (location.includes("/conversations")) return "conversations";
-    if (location.includes("/analytics")) return "analytics";
     return "leads";
   };
   const activeTab = getActiveTabFromRoute();
@@ -301,7 +280,6 @@ export default function GroupAdminDashboard() {
   const handleTabChange = (tab: string) => {
     if (tab === "leads") setLocation("/group-admin/leads");
     else if (tab === "conversations") setLocation("/group-admin/conversations");
-    else if (tab === "analytics") setLocation("/group-admin/analytics");
   };
 
   const { data: groupsData, isLoading: loadingGroups } = useQuery<{ groups: GroupAssignment[] }>({
@@ -311,7 +289,7 @@ export default function GroupAdminDashboard() {
   const groups = groupsData?.groups || [];
 
   useEffect(() => {
-    if (!selectedGroupId && groups.length > 0) {
+    if (groups.length > 0 && (!selectedGroupId || !groups.some(g => g.groupId === selectedGroupId))) {
       setSelectedGroupId(groups[0].groupId);
     }
   }, [groups, selectedGroupId]);
@@ -328,51 +306,6 @@ export default function GroupAdminDashboard() {
       case 'lastMonth': const lastMonth = subMonths(today, 1); return { from: startOfMonth(lastMonth), to: endOfMonth(lastMonth) };
       case 'custom': return { from: fromDate ? startOfDay(fromDate) : undefined, to: toDate ? endOfDay(toDate) : undefined };
       default: return { from: undefined, to: undefined };
-    }
-  };
-
-  const downloadAnalyticsPDF = async () => {
-    if (!analyticsData || !selectedGroupId) return;
-    try {
-      const { from, to } = getDateRange(analyticsDatePreset, analyticsFromDate, analyticsToDate);
-      const dateRangeText = from && to
-        ? `${format(from, "MMMM d, yyyy")} to ${format(to, "MMMM d, yyyy")}`
-        : "All time";
-
-      // PDF is rendered server-side: the browser jsPDF is intentionally stubbed (vite.config.ts).
-      const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/analytics/pdf`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          dateRangeText,
-          generatedText: format(new Date(), "MMMM d, yyyy 'at' h:mm a"),
-          totals: {
-            leads: analyticsData.totals?.leads || 0,
-            conversations: analyticsData.totals?.conversations || 0,
-          },
-          accountBreakdown: (analyticsData.accountBreakdown || []).map((account) => ({
-            businessName: account.businessName || "Unknown",
-            leads: account.leads || 0,
-            conversations: account.conversations || 0,
-          })),
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to generate PDF");
-
-      const blob = await res.blob();
-      const fileName = `analytics-report-${format(new Date(), "yyyy-MM-dd")}.pdf`;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast({ title: "PDF downloaded", description: "Analytics report saved." });
-    } catch (error: any) {
-      toast({ title: "PDF export failed", description: error.message || "An unexpected error occurred.", variant: "destructive" });
     }
   };
 
@@ -448,27 +381,6 @@ export default function GroupAdminDashboard() {
       prevConvoFiltersRef.current = { convoSearch, convoDatePreset, convoFromDate, convoToDate, convoAccountFilter };
     }
   }, [convoSearch, convoDatePreset, convoFromDate, convoToDate, convoAccountFilter]);
-
-  const analyticsQueryParams = useMemo(() => {
-    const params = new URLSearchParams();
-    const { from, to } = getDateRange(analyticsDatePreset, analyticsFromDate, analyticsToDate);
-    if (from) params.append('dateFrom', from.toISOString());
-    if (to) params.append('dateTo', to.toISOString());
-    return params.toString();
-  }, [analyticsDatePreset, analyticsFromDate, analyticsToDate]);
-
-  const { data: analyticsData, isLoading: loadingAnalytics } = useQuery<AnalyticsData>({
-    queryKey: ["/api/group-admin/groups", selectedGroupId, "analytics", analyticsQueryParams],
-    queryFn: async () => {
-      const url = analyticsQueryParams 
-        ? `/api/group-admin/groups/${selectedGroupId}/analytics?${analyticsQueryParams}`
-        : `/api/group-admin/groups/${selectedGroupId}/analytics`;
-      const res = await fetch(url, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch analytics");
-      return res.json();
-    },
-    enabled: !!selectedGroupId && selectedGroup?.canViewAnalytics,
-  });
 
   const { data: conversationsData, isLoading: loadingConversations } = useQuery<{
     conversations: ConversationItem[];
@@ -804,6 +716,11 @@ export default function GroupAdminDashboard() {
       .map(a => ({ businessAccountId: a.id, businessName: a.name }))
       .sort((a, b) => a.businessName.localeCompare(b.businessName));
   }, [linkedAccountsData]);
+
+  // A remembered account that isn't in this group (another group picked) goes back to all accounts.
+  useEffect(() => {
+    if (leadsAccountFilter !== 'all' && linkedAccountsData && !linkedAccountsData.accounts.some(a => a.id === leadsAccountFilter)) setLeadsAccountFilter('all');
+  }, [leadsAccountFilter, linkedAccountsData, setLeadsAccountFilter]);
 
   const waChatsQuery = useGroupWhatsappChats(selectedGroupId, waChatsParams, waChatsPage, !!selectedGroup?.canViewConversations);
   const showingWaChats = convoChannel === 'whatsapp';
@@ -1201,24 +1118,6 @@ export default function GroupAdminDashboard() {
 
   return (
     <div className="p-6 space-y-4">
-      {groups.length > 1 && (
-        <header className="flex items-center justify-end">
-          <div className="flex items-center gap-4">
-            <SidebarTrigger className="lg:hidden" />
-            <Select value={selectedGroupId || ""} onValueChange={setSelectedGroupId}>
-              <SelectTrigger className="w-[250px]">
-                <SelectValue placeholder="Select a group" />
-              </SelectTrigger>
-              <SelectContent>
-                {groups.map(group => (
-                  <SelectItem key={group.groupId} value={group.groupId}>{group.groupName}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </header>
-      )}
-
       <Tabs value={activeTab} onValueChange={handleTabChange}>
 
         <TabsContent value="leads" className="mt-0 flex-1 flex flex-col">
@@ -1328,25 +1227,12 @@ export default function GroupAdminDashboard() {
                 </div>
               </div>
 
-              <RetentionBanner policies={retentionPolicies} totalAccounts={retentionAccountCount} onViewReport={() => setRetentionReportOpen(true)} />
-              <div className={`px-6 py-3 border-b border-gray-100 bg-gradient-to-r from-violet-50/50 to-transparent ${showingWhatsapp ? "hidden" : ""}`}>
+              <RetentionBanner compact policies={retentionPolicies} totalAccounts={retentionAccountCount} onViewReport={() => setRetentionReportOpen(true)} />
+              {!showingWhatsapp && canDeleteLeads && allLeads.length > 0 && (
+              <div className="px-6 py-2 border-b border-gray-100 bg-gray-50/60">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Users className="w-4 h-4 text-purple-500" />
-                  <span className="text-sm font-medium text-gray-700">
-                    {leadsTotal?.toLocaleString() || 0} leads captured
-                  </span>
-                  {leadsUniqueLeads !== null && (
-                    <span className="text-sm text-blue-600 font-medium">
-                      · {leadsUniqueLeads.toLocaleString()} unique leads
-                    </span>
-                  )}
-                  {leadsDatePreset !== 'all' && (
-                    <span className="text-xs text-gray-400 ml-1">
-                      ({leadsDatePreset === 'custom' ? 'Custom range' : leadsDatePreset === 'today' ? 'Today' : leadsDatePreset === 'yesterday' ? 'Yesterday' : leadsDatePreset === 'last7' ? 'Last 7 days' : leadsDatePreset === 'currentMonth' ? 'This month' : 'Last month'})
-                    </span>
-                  )}
-                  {canDeleteLeads && allLeads.length > 0 && (
-                    <div className="ml-auto flex flex-wrap items-center gap-2">
+                  {(
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button
                         size="sm"
                         variant="outline"
@@ -1381,6 +1267,7 @@ export default function GroupAdminDashboard() {
                   )}
                 </div>
               </div>
+              )}
 
               <div className="px-6 py-4 border-b border-gray-100 bg-white">
                 <div className="flex flex-wrap items-center gap-3">
@@ -1992,7 +1879,7 @@ export default function GroupAdminDashboard() {
                   )}
                 </div>
 
-                <RetentionBanner policies={retentionPolicies} totalAccounts={retentionAccountCount} onViewReport={() => setRetentionReportOpen(true)} />
+                <RetentionBanner compact policies={retentionPolicies} totalAccounts={retentionAccountCount} onViewReport={() => setRetentionReportOpen(true)} />
                 {/* Type Filter Chips */}
                 <div className={`px-4 py-2 border-b border-gray-200 flex items-center gap-2 flex-wrap ${showingWaChats ? 'hidden' : ''}`}>
                   {([
@@ -2380,226 +2267,6 @@ export default function GroupAdminDashboard() {
           )}
         </TabsContent>
 
-        <TabsContent value="analytics">
-          {!selectedGroup?.canViewAnalytics ? (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <BarChart3 className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-                <h2 className="text-lg font-semibold mb-2">No Permission</h2>
-                <p className="text-muted-foreground">You don't have permission to view analytics for this group.</p>
-              </CardContent>
-            </Card>
-          ) : (
-        <div className="space-y-8">
-          {/* Elegant Header with Date Filters */}
-          <div className="bg-gradient-to-br from-slate-50 to-gray-50 rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="p-6 pb-4">
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-purple-200">
-                    <BarChart3 className="w-6 h-6 text-white" />
-                  </div>
-                  <div>
-                    <h1 className="text-2xl font-bold text-gray-900">Lead Analysis</h1>
-                    <p className="text-sm text-gray-500">Performance metrics across all accounts</p>
-                  </div>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={downloadAnalyticsPDF}
-                  disabled={!analyticsData}
-                  className="flex items-center gap-2 rounded-full px-4"
-                >
-                  <Download className="w-4 h-4" />
-                  Download PDF
-                </Button>
-              </div>
-              
-              {/* Date Filter Pills */}
-              <div className="flex flex-wrap items-center gap-2">
-                {([
-                  { key: 'today', label: 'Today' },
-                  { key: 'yesterday', label: 'Yesterday' },
-                  { key: 'last7', label: 'Last 7 Days' },
-                  { key: 'currentMonth', label: 'Current Month' },
-                  { key: 'lastMonth', label: 'Last Month' },
-                  { key: 'custom', label: 'Custom Range' },
-                  { key: 'all', label: 'Lifetime' },
-                ] as { key: DatePreset; label: string }[]).map(({ key, label }) => (
-                  <button
-                    key={key}
-                    onClick={() => setAnalyticsDatePreset(key)}
-                    className={`px-4 py-2 text-sm font-medium rounded-full transition-all duration-200 ${
-                      analyticsDatePreset === key
-                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-200'
-                        : 'bg-white text-gray-600 border border-gray-200 hover:border-purple-300 hover:text-purple-600 hover:shadow-sm'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              
-              {analyticsDatePreset === 'custom' && (
-                <div className="flex items-center gap-3 mt-4 pt-4 border-t border-gray-100">
-                  <span className="text-sm text-gray-500">Select range:</span>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" size="sm" className="rounded-full px-4">
-                        <Calendar className="w-4 h-4 mr-2" />
-                        {analyticsFromDate ? format(analyticsFromDate, "MMM d, yyyy") : "Start date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <CalendarComponent mode="single" selected={analyticsFromDate} onSelect={setAnalyticsFromDate} />
-                    </PopoverContent>
-                  </Popover>
-                  <span className="text-gray-400">→</span>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" size="sm" className="rounded-full px-4">
-                        <Calendar className="w-4 h-4 mr-2" />
-                        {analyticsToDate ? format(analyticsToDate, "MMM d, yyyy") : "End date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <CalendarComponent mode="single" selected={analyticsToDate} onSelect={setAnalyticsToDate} />
-                    </PopoverContent>
-                  </Popover>
-                </div>
-              )}
-            </div>
-            
-            {/* Date Range Indicator */}
-            <div className="px-6 py-3 bg-white/60 border-t border-gray-100">
-              <p className="text-sm text-gray-500">
-                <span className="font-medium text-gray-700">Showing data from</span>{' '}
-                {(() => {
-                  const { from, to } = getDateRange(analyticsDatePreset, analyticsFromDate, analyticsToDate);
-                  if (from && to) {
-                    return <span className="text-purple-600 font-medium">{format(from, "MMMM d, yyyy")} to {format(to, "MMMM d, yyyy")}</span>;
-                  }
-                  return <span className="text-purple-600 font-medium">all time</span>;
-                })()}
-              </p>
-            </div>
-          </div>
-
-          {loadingAnalytics ? (
-            <div className="flex justify-center py-16">
-              <div className="flex flex-col items-center gap-3">
-                <div className="w-10 h-10 border-3 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm text-gray-500">Loading analytics...</p>
-              </div>
-            </div>
-          ) : analyticsData ? (
-            <>
-              {/* Metrics Cards */}
-              <div className="grid gap-5 md:grid-cols-3">
-                <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm hover:shadow-md transition-shadow">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl flex items-center justify-center">
-                      <Contact className="w-5 h-5 text-white" />
-                    </div>
-                    <span className="text-sm font-medium text-gray-500">Total Leads</span>
-                  </div>
-                  <p className="text-4xl font-bold text-gray-900">{(analyticsData.totals?.leads || 0).toLocaleString()}</p>
-                </div>
-                
-                <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm hover:shadow-md transition-shadow">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl flex items-center justify-center">
-                      <MessageSquare className="w-5 h-5 text-white" />
-                    </div>
-                    <span className="text-sm font-medium text-gray-500">Conversations</span>
-                  </div>
-                  <p className="text-4xl font-bold text-gray-900">{(analyticsData.totals?.conversations || 0).toLocaleString()}</p>
-                </div>
-                
-                <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm hover:shadow-md transition-shadow">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 bg-gradient-to-br from-violet-400 to-violet-600 rounded-xl flex items-center justify-center">
-                      <TrendingUp className="w-5 h-5 text-white" />
-                    </div>
-                    <span className="text-sm font-medium text-gray-500">Conversion Rate</span>
-                  </div>
-                  <p className="text-4xl font-bold text-gray-900">
-                    {(analyticsData.totals?.conversations || 0) > 0 
-                      ? ((analyticsData.totals?.leads || 0) / (analyticsData.totals?.conversations || 1) * 100).toFixed(1)
-                      : '0.0'}%
-                  </p>
-                </div>
-              </div>
-
-              {/* Account Breakdown Table */}
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="px-6 py-5 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white">
-                  <h2 className="text-lg font-semibold text-gray-900">Account Breakdown</h2>
-                  <p className="text-sm text-gray-500 mt-1">Detailed metrics per business account in this group</p>
-                </div>
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-gray-50/50">
-                        <TableHead className="font-semibold text-gray-700">Account</TableHead>
-                        <TableHead className="text-center font-semibold text-gray-700">Leads</TableHead>
-                        <TableHead className="text-center font-semibold text-gray-700">Conversations</TableHead>
-                        <TableHead className="text-center font-semibold text-gray-700">Conversion</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(analyticsData.accountBreakdown || []).map((account, index) => (
-                        <TableRow key={account.businessAccountId} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}>
-                          <TableCell>
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 bg-gradient-to-br from-purple-100 to-indigo-100 rounded-lg flex items-center justify-center">
-                                <Building2 className="w-4 h-4 text-purple-600" />
-                              </div>
-                              <span className="font-medium text-gray-900">{account.businessName || "Unknown"}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <span className={`inline-flex items-center justify-center min-w-[40px] px-2 py-1 rounded-full text-sm font-medium ${
-                              (account.leads || 0) > 0 ? 'bg-emerald-100 text-emerald-700' : 'text-gray-400'
-                            }`}>
-                              {account.leads || 0}
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <span className={`inline-flex items-center justify-center min-w-[40px] px-2 py-1 rounded-full text-sm font-medium ${
-                              (account.conversations || 0) > 0 ? 'bg-blue-100 text-blue-700' : 'text-gray-400'
-                            }`}>
-                              {account.conversations || 0}
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <span className={`inline-flex items-center justify-center min-w-[40px] px-2 py-1 rounded-full text-sm font-medium ${
-                              (account.conversations || 0) > 0 && (account.leads || 0) > 0 ? 'bg-violet-100 text-violet-700' : 'text-gray-400'
-                            }`}>
-                              {(account.conversations || 0) > 0 
-                                ? ((account.leads || 0) / (account.conversations || 1) * 100).toFixed(1)
-                                : '0.0'}%
-                            </span>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      {(analyticsData.accountBreakdown || []).length === 0 && (
-                        <TableRow>
-                          <TableCell colSpan={4} className="text-center py-12 text-gray-500">
-                            No accounts found in this group
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-            </>
-          ) : null}
-        </div>
-          )}
-        </TabsContent>
       </Tabs>
 
       <Dialog

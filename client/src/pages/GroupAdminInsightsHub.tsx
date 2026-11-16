@@ -9,6 +9,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import GroupAnalytics, { DATE_PRESETS, formatDateIST, istRange, type DatePreset } from "@/pages/GroupAnalytics";
 import GroupAdminInsights from "@/pages/GroupAdminInsights";
+import { useGroupAdminGroupId, useStickyDate, useStickyState } from "@/lib/stickyState";
 
 interface GroupAssignment {
   groupId: string;
@@ -34,14 +35,16 @@ export default function GroupAdminInsightsHub() {
     queryKey: ["/api/group-admin/groups"],
   });
   const groups = groupsData?.groups || [];
-  const [groupId, setGroupId] = useState<string | null>(null);
+  // The group is picked in the sidebar.
+  const [groupId] = useGroupAdminGroupId();
   const group = groups.find(g => g.groupId === groupId) ?? groups[0] ?? null;
 
-  const [scope, setScope] = useState<string>(() => new URLSearchParams(window.location.search).get("account") || ALL);
+  // The account is the same filter as on Leads and Conversations; the dates are remembered too.
+  const [scope, setScope] = useStickyState<string>("groupAdmin.filters.account", ALL);
   const [scopeOpen, setScopeOpen] = useState(false);
-  const [datePreset, setDatePreset] = useState<DatePreset>("today");
-  const [fromDate, setFromDate] = useState<Date | undefined>();
-  const [toDate, setToDate] = useState<Date | undefined>();
+  const [datePreset, setDatePreset] = useStickyState<DatePreset>("groupAdmin.insights.datePreset", "today");
+  const [fromDate, setFromDate] = useStickyDate("groupAdmin.insights.from");
+  const [toDate, setToDate] = useStickyDate("groupAdmin.insights.to");
   const [customOpen, setCustomOpen] = useState(false);
 
   const { data: accountsData } = useQuery<{ accounts: LinkedAccount[] }>({
@@ -88,15 +91,7 @@ export default function GroupAdminInsightsHub() {
               <p className="text-xs text-gray-500">{account ? account.name : `${accounts.length ? `All ${accounts.length} accounts` : "All accounts"} in ${group.groupName}`}</p>
             </div>
           </div>
-          {groups.length > 1 && (
-            <select
-              value={group.groupId}
-              onChange={e => { setGroupId(e.target.value); setScope(ALL); }}
-              className="ml-auto text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-purple-400"
-            >
-              {groups.map(g => <option key={g.groupId} value={g.groupId}>{g.groupName}</option>)}
-            </select>
-          )}
+
         </div>
 
         <div className="flex flex-wrap items-center gap-2 mt-4">

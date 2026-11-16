@@ -29,6 +29,7 @@ import { AccountSwitcher } from "@/components/AccountSwitcher";
 import type { MeResponseDto } from "@shared/dto";
 import { AGENCY_NAV } from "@/pages/agency/AgencyPortal";
 import { BrandMark } from "@/components/BrandMark";
+import { GroupAdminGroupPicker } from "@/components/groupAdmin/GroupPicker";
 import { useBrand } from "@/lib/brand";
 
 interface AppSidebarProps {
@@ -471,6 +472,7 @@ export function AppSidebar({ user }: AppSidebarProps) {
         ) : isGroupAdmin ? (
           <SidebarGroup>
             <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-gray-400 font-semibold px-3 mb-1">Group Admin</SidebarGroupLabel>
+            <GroupAdminGroupPicker />
             <SidebarGroupContent>
               <SidebarMenu className="space-y-0.5">
                 <NavItem icon={Users} label="Leads" onClick={() => setLocation("/group-admin/leads")} isActive={location === "/group-admin/leads"} testId="link-group-admin-leads" gradient="bg-gradient-to-br from-orange-500 to-amber-600" />
