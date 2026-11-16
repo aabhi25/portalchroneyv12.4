@@ -1,9 +1,6 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -11,12 +8,9 @@ import {
   Upload,
   Trash2,
   CheckCircle,
-  XCircle,
-  Clock,
   AlertCircle,
   Loader2,
   FileUp,
-  Files,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -28,12 +22,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
 import { format } from "date-fns";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
 import { ChannelPicker, ChannelBadge, ChannelFilterSelect, matchesChannelFilter, type ChannelFilterValue } from "@/components/ChannelPicker";
@@ -70,7 +58,6 @@ export default function ScanDocs() {
   const [isUploading, setIsUploading] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState("overview");
   const [uploadChannels, setUploadChannels] = useState<KnowledgeChannel[] | null>(null);
   const [channelFilter, setChannelFilter] = useState<ChannelFilterValue>("all");
 
@@ -220,8 +207,6 @@ export default function ScanDocs() {
 
         queryClient.invalidateQueries({ queryKey: ["/api/training-documents"] });
         
-        // Switch to Documents tab after successful upload
-        setActiveTab("documents");
       } catch (error: any) {
         toast({
           title: "Upload Failed",
@@ -283,41 +268,6 @@ export default function ScanDocs() {
     return `${(size / (1024 * 1024)).toFixed(2)} MB`;
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return (
-          <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-            <CheckCircle className="w-3 h-3 mr-1" />
-            Completed
-          </Badge>
-        );
-      case 'processing':
-        return (
-          <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">
-            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-            Processing
-          </Badge>
-        );
-      case 'pending':
-        return (
-          <Badge className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100">
-            <Clock className="w-3 h-3 mr-1" />
-            Pending
-          </Badge>
-        );
-      case 'failed':
-        return (
-          <Badge className="bg-red-100 text-red-800 hover:bg-red-100">
-            <XCircle className="w-3 h-3 mr-1" />
-            Failed
-          </Badge>
-        );
-      default:
-        return <Badge>{status}</Badge>;
-    }
-  };
-
   const parseKeyPoints = (keyPoints: string | null): string[] => {
     if (!keyPoints) return [];
     try {
@@ -327,333 +277,165 @@ export default function ScanDocs() {
     }
   };
 
+  const [openDoc, setOpenDoc] = useState<string | null>(null);
+
   if (isLoading) {
     return (
-      <div className="flex-1 overflow-auto bg-gradient-to-br from-gray-50 via-purple-50/30 to-blue-50/30">
+      <div className="flex-1 overflow-auto bg-gray-50/60">
         <TrainingNavTabs />
-        <div className="flex items-center justify-center h-full">
-          <div className="text-center">
-            <Loader2 className="w-8 h-8 animate-spin text-purple-600 mx-auto mb-3" />
-            <p className="text-sm text-gray-600">Loading training documents...</p>
-          </div>
+        <div className="flex items-center justify-center py-24">
+          <Loader2 className="w-6 h-6 animate-spin text-purple-600" />
         </div>
       </div>
     );
   }
 
+  const card = "rounded-2xl border border-black/[0.07] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)]";
+  const statusDot: Record<string, string> = {
+    completed: "bg-emerald-500", processing: "bg-blue-500", pending: "bg-amber-400", failed: "bg-red-500",
+  };
+  const statusText: Record<string, string> = {
+    completed: "Ready", processing: "Reading…", pending: "Waiting", failed: "Failed",
+  };
+
   return (
-    <div className="flex-1 overflow-auto bg-gradient-to-br from-gray-50 via-purple-50/30 to-blue-50/30">
+    <div className="flex-1 overflow-auto bg-gray-50/60">
       <TrainingNavTabs />
-      <div className="container mx-auto p-4 md:p-6 max-w-[1600px]">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-2 bg-gradient-to-r from-purple-50 to-white backdrop-blur-sm shadow-md h-auto p-1 rounded-xl">
-            <TabsTrigger value="overview" className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-200 data-[state=active]:to-blue-100 data-[state=active]:text-purple-900 data-[state=active]:font-semibold">
-              <FileUp className="w-4 h-4 mr-2" />
-              Overview
-            </TabsTrigger>
-            <TabsTrigger value="documents" className="rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-200 data-[state=active]:to-blue-100 data-[state=active]:text-purple-900 data-[state=active]:font-semibold">
-              <Files className="w-4 h-4 mr-2" />
-              Documents
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="overview" className="space-y-6 mt-6">
-            {/* Hero Section */}
-            <Card className="border border-black/[0.07] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] overflow-hidden">
-              <CardHeader className="relative pb-6">
-                <div className="relative">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="p-2.5 bg-purple-50 rounded-xl">
-                      <FileText className="w-6 h-6 text-purple-600" />
-                    </div>
-                    <div>
-                      <CardTitle className="text-xl font-semibold text-gray-900">Training documents</CardTitle>
-                      <CardDescription className="mt-1">
-                        Upload PDFs to train your AI assistant with custom knowledge
-                      </CardDescription>
-                    </div>
-                  </div>
-                </div>
-              </CardHeader>
-            </Card>
-
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <Card className="border-gray-200/60 bg-white/80 backdrop-blur-sm shadow-md">
-                <CardHeader className="pb-3">
-                  <CardDescription className="text-gray-600">Total Documents</CardDescription>
-                  <CardTitle className="text-3xl font-bold text-purple-600">{stats.total}</CardTitle>
-                </CardHeader>
-              </Card>
-              
-              <Card className="border-gray-200/60 bg-white/80 backdrop-blur-sm shadow-md">
-                <CardHeader className="pb-3">
-                  <CardDescription className="text-gray-600">Completed</CardDescription>
-                  <CardTitle className="text-3xl font-bold text-green-600 flex items-center gap-2">
-                    {stats.completed}
-                    <CheckCircle className="w-5 h-5" />
-                  </CardTitle>
-                </CardHeader>
-              </Card>
-              
-              <Card className="border-gray-200/60 bg-white/80 backdrop-blur-sm shadow-md">
-                <CardHeader className="pb-3">
-                  <CardDescription className="text-gray-600">Processing</CardDescription>
-                  <CardTitle className="text-3xl font-bold text-blue-600 flex items-center gap-2">
-                    {stats.processing}
-                    <Clock className="w-5 h-5" />
-                  </CardTitle>
-                </CardHeader>
-              </Card>
-              
-              <Card className="border-gray-200/60 bg-white/80 backdrop-blur-sm shadow-md">
-                <CardHeader className="pb-3">
-                  <CardDescription className="text-gray-600">Failed</CardDescription>
-                  <CardTitle className="text-3xl font-bold text-red-600 flex items-center gap-2">
-                    {stats.failed}
-                    <XCircle className="w-5 h-5" />
-                  </CardTitle>
-                </CardHeader>
-              </Card>
+      <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
+        {/* Upload */}
+        <section
+          className={`${card} p-5 transition-colors ${isDragging ? "border-purple-400 bg-purple-50/60" : ""}`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          data-testid="docs-upload"
+        >
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-purple-50">
+                <FileUp className="h-5 w-5 text-purple-600" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-lg font-semibold text-gray-900">Documents</h1>
+                <p className="text-sm text-gray-500">
+                  {isDragging ? "Drop the PDFs to upload them" : "Brochures, price lists, policies… The AI reads each PDF and answers from it. Drag files here or choose them."}
+                </p>
+              </div>
             </div>
+            <Button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className="shrink-0 bg-purple-600 text-white hover:bg-purple-700"
+              data-testid="button-docs-upload"
+            >
+              {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+              {isUploading ? "Uploading…" : "Upload PDFs"}
+            </Button>
+            <input ref={fileInputRef} type="file" accept="application/pdf" multiple onChange={handleFileSelect} className="hidden" />
+          </div>
+          {isUploading && (
+            <div className="mt-4 flex items-center gap-3">
+              <Progress value={uploadProgress} className="h-1.5 flex-1" />
+              <span className="w-10 text-right text-xs text-gray-500">{Math.round(uploadProgress)}%</span>
+            </div>
+          )}
+          <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="max-w-md">
+              <ChannelPicker value={uploadChannels} onChange={setUploadChannels} disabled={isUploading} />
+            </div>
+            <p className="text-xs text-gray-400 sm:text-right">PDF only · up to 25 MB each · several at once</p>
+          </div>
+        </section>
 
-            {/* Upload Zone */}
-            <Card className="border-gray-200/60 bg-white/80 backdrop-blur-sm shadow-md">
-              <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-pink-50/50">
-                <CardTitle className="text-lg">Upload Training Documents</CardTitle>
-                <CardDescription>
-                  Upload PDF files to enhance your AI's knowledge (Max 25MB per file)
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="pt-6">
-                <div
-                  className={`border-2 border-dashed rounded-xl p-8 transition-all ${
-                    isDragging
-                      ? "border-purple-500 bg-purple-50"
-                      : "border-gray-300 hover:border-purple-400 hover:bg-gray-50"
-                  }`}
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                >
-                  <div className="text-center">
-                    <Upload className={`w-12 h-12 mx-auto mb-4 ${isDragging ? "text-purple-500" : "text-gray-400"}`} />
-                    <h3 className="text-lg font-semibold mb-2">
-                      {isDragging ? "Drop files here" : "Drag & drop PDF files here"}
-                    </h3>
-                    <p className="text-sm text-gray-600 mb-4">or</p>
-                    <Button
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isUploading}
-                      className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
-                    >
-                      {isUploading ? (
-                        <>
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          Uploading...
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="w-4 h-4 mr-2" />
-                          Choose Files
-                        </>
-                      )}
-                    </Button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="application/pdf"
-                      multiple
-                      onChange={handleFileSelect}
-                      className="hidden"
-                    />
-                    <div className="mt-4 text-xs text-gray-500">
-                      <p>Supported format: PDF</p>
-                      <p>Maximum file size: 25MB</p>
-                      <p>Multiple files can be uploaded at once</p>
-                    </div>
-                  </div>
-                </div>
+        {/* List */}
+        <section className={card}>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
+            <div className="min-w-0">
+              <h2 className="font-semibold text-gray-900">Your documents</h2>
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500" data-testid="text-docs-counts">
+                <span>{stats.total} total</span>
+                {stats.completed > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />{stats.completed} ready</span>}
+                {stats.processing > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-blue-500" />{stats.processing} being read</span>}
+                {stats.failed > 0 && <span className="flex items-center gap-1 text-red-600"><span className="h-1.5 w-1.5 rounded-full bg-red-500" />{stats.failed} failed</span>}
+              </p>
+            </div>
+            {documents.length > 0 && <ChannelFilterSelect value={channelFilter} onChange={setChannelFilter} />}
+          </div>
 
-                {isUploading && (
-                  <div className="mt-6">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-700">Uploading...</span>
-                      <span className="text-sm text-gray-600">{Math.round(uploadProgress)}%</span>
-                    </div>
-                    <Progress value={uploadProgress} className="h-2" />
-                  </div>
-                )}
-
-                <div className="mt-6 max-w-md">
-                  <ChannelPicker
-                    value={uploadChannels}
-                    onChange={setUploadChannels}
-                    disabled={isUploading}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="documents" className="space-y-6 mt-6">
-            <Card className="border-gray-200/60 bg-white/80 backdrop-blur-sm shadow-md">
-              <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-pink-50/50">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <CardTitle className="text-lg">Uploaded Documents</CardTitle>
-                    <CardDescription>
-                      View and manage your training documents ({documents.length} total)
-                    </CardDescription>
-                  </div>
-                  {documents.length > 0 && (
-                    <ChannelFilterSelect value={channelFilter} onChange={setChannelFilter} />
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="pt-6">
-                {documents.length === 0 ? (
-                  <div className="text-center py-12">
-                    <FileText className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                    <h3 className="text-lg font-semibold text-gray-700 mb-2">No documents yet</h3>
-                    <p className="text-gray-600 mb-4">
-                      Upload your first PDF document to start training your AI assistant
-                    </p>
-                    <Button
-                      onClick={() => document.querySelector<HTMLElement>('[value="overview"]')?.click()}
-                      className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
-                    >
-                      <Upload className="w-4 h-4 mr-2" />
-                      Go to Upload
-                    </Button>
-                  </div>
-                ) : visibleDocuments.length === 0 ? (
-                  <div className="text-center py-12">
-                    <p className="text-gray-600 mb-4">No documents are used on this channel</p>
-                    <Button variant="outline" onClick={() => setChannelFilter("all")}>
-                      Show all channels
-                    </Button>
-                  </div>
-                ) : (
-                  <Accordion type="single" collapsible className="space-y-3">
-                    {visibleDocuments.map((doc) => (
-                      <AccordionItem
-                        key={doc.id}
-                        value={doc.id}
-                        className="border rounded-lg overflow-hidden bg-white shadow-sm"
+          {documents.length === 0 ? (
+            <div className="px-5 py-12 text-center">
+              <FileText className="mx-auto mb-3 h-10 w-10 text-gray-300" />
+              <p className="font-medium text-gray-700">No documents yet</p>
+              <p className="mt-1 text-sm text-gray-500">Upload a PDF and the AI starts using it in a minute or two.</p>
+            </div>
+          ) : visibleDocuments.length === 0 ? (
+            <div className="px-5 py-12 text-center">
+              <p className="mb-3 text-sm text-gray-600">No documents are used on this channel</p>
+              <Button variant="outline" size="sm" onClick={() => setChannelFilter("all")}>Show all channels</Button>
+            </div>
+          ) : (
+            <ul className="divide-y">
+              {visibleDocuments.map((doc) => {
+                const keyPoints = parseKeyPoints(doc.keyPoints ?? null);
+                const open = openDoc === doc.id;
+                const hasDetails = (doc.uploadStatus === "completed" && (doc.summary || keyPoints.length > 0)) || (doc.uploadStatus === "failed" && doc.errorMessage);
+                return (
+                  <li key={doc.id} data-testid={`row-doc-${doc.id}`}>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
+                      <button
+                        type="button"
+                        onClick={() => hasDetails && setOpenDoc(open ? null : doc.id)}
+                        className={`flex min-w-0 flex-1 basis-full items-center gap-3 text-left sm:basis-0 ${hasDetails ? "cursor-pointer" : "cursor-default"}`}
                       >
-                        <AccordionTrigger className="px-4 py-3 hover:bg-gray-50 hover:no-underline">
-                          <div className="flex items-start justify-between w-full pr-4">
-                            <div className="flex items-start gap-3 flex-1 text-left">
-                              <FileText className="w-5 h-5 text-purple-600 mt-1 flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <div className="font-semibold text-gray-900 truncate mb-1">
-                                  {doc.originalFilename}
-                                </div>
-                                <div className="flex flex-wrap gap-2 text-xs text-gray-600">
-                                  <span>Uploaded: {format(new Date(doc.createdAt), "MMM d, yyyy 'at' h:mm a")}</span>
-                                  <span>•</span>
-                                  <span>Size: {formatFileSize(doc.fileSize)}</span>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                              <ChannelBadge channels={doc.channels} />
-                              {getStatusBadge(doc.uploadStatus)}
-                            </div>
-                          </div>
-                        </AccordionTrigger>
-                        <AccordionContent className="px-4 pb-4 bg-gray-50/50">
-                          <div className="space-y-4 pt-2">
-                            {doc.uploadStatus === 'completed' && (
-                              <>
-                                {doc.summary && (
-                                  <div>
-                                    <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
-                                      <FileText className="w-4 h-4" />
-                                      Summary
-                                    </h4>
-                                    <p className="text-sm text-gray-700 bg-white p-3 rounded-lg border">
-                                      {doc.summary}
-                                    </p>
-                                  </div>
-                                )}
-                                {doc.keyPoints && parseKeyPoints(doc.keyPoints).length > 0 && (
-                                  <div>
-                                    <h4 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
-                                      <CheckCircle className="w-4 h-4" />
-                                      Key Points
-                                    </h4>
-                                    <ul className="space-y-2">
-                                      {parseKeyPoints(doc.keyPoints).map((point, idx) => (
-                                        <li key={idx} className="text-sm text-gray-700 flex items-start gap-2">
-                                          <span className="text-purple-600 mt-1">•</span>
-                                          <span className="flex-1">{point}</span>
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  </div>
-                                )}
-                              </>
-                            )}
-
-                            {doc.uploadStatus === 'failed' && doc.errorMessage && (
-                              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                                <div className="flex items-start gap-2">
-                                  <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                                  <div>
-                                    <h4 className="font-semibold text-red-900 mb-1">Processing Failed</h4>
-                                    <p className="text-sm text-red-700">{doc.errorMessage}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
-                            {(doc.uploadStatus === 'pending' || doc.uploadStatus === 'processing') && (
-                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                                <div className="flex items-start gap-2">
-                                  <Loader2 className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5 animate-spin" />
-                                  <div>
-                                    <h4 className="font-semibold text-blue-900 mb-1">
-                                      {doc.uploadStatus === 'pending' ? 'Pending' : 'Processing'}
-                                    </h4>
-                                    <p className="text-sm text-blue-700">
-                                      {doc.uploadStatus === 'pending'
-                                        ? 'Document is queued for processing'
-                                        : 'AI is analyzing the document...'}
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
-                            <div className="flex justify-end items-center gap-2 pt-2">
-                              <ChannelPicker
-                                compact
-                                value={doc.channels ?? null}
-                                disabled={channelsMutation.isPending}
-                                onChange={(channels) => channelsMutation.mutate({ id: doc.id, channels })}
-                              />
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => handleDelete(doc.id)}
-                                className="gap-2"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                                Delete Document
-                              </Button>
-                            </div>
-                          </div>
-                        </AccordionContent>
-                      </AccordionItem>
-                    ))}
-                  </Accordion>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-red-50 text-[10px] font-bold text-red-600">PDF</div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-gray-900" title={doc.originalFilename}>{doc.originalFilename}</p>
+                          <p className="text-xs text-gray-500">
+                            {formatFileSize(doc.fileSize)} · {format(new Date(doc.createdAt), "d MMM yyyy")}
+                            {hasDetails && <span className="ml-2 text-purple-600">{open ? "Hide details" : doc.uploadStatus === "failed" ? "Why it failed" : "What the AI learnt"}</span>}
+                          </p>
+                        </div>
+                      </button>
+                      <div className="flex shrink-0 items-center gap-2 pl-12 sm:pl-0">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs text-gray-700" data-testid={`status-doc-${doc.uploadStatus}`}>
+                          {doc.uploadStatus === "processing" ? <Loader2 className="h-3 w-3 animate-spin text-blue-500" /> : <span className={`h-1.5 w-1.5 rounded-full ${statusDot[doc.uploadStatus] ?? "bg-gray-400"}`} />}
+                          {statusText[doc.uploadStatus] ?? doc.uploadStatus}
+                        </span>
+                        <ChannelPicker
+                          compact
+                          value={doc.channels ?? null}
+                          disabled={channelsMutation.isPending}
+                          onChange={(channels) => channelsMutation.mutate({ id: doc.id, channels })}
+                        />
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 hover:bg-red-50 hover:text-red-600" onClick={() => handleDelete(doc.id)} aria-label={`Delete ${doc.originalFilename}`}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    {open && (
+                      <div className="space-y-3 bg-gray-50/70 px-5 py-4 text-sm">
+                        {doc.uploadStatus === "failed" && doc.errorMessage && (
+                          <p className="flex items-start gap-2 text-red-700"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{doc.errorMessage}</p>
+                        )}
+                        {doc.summary && <p className="text-gray-700">{doc.summary}</p>}
+                        {keyPoints.length > 0 && (
+                          <ul className="space-y-1.5">
+                            {keyPoints.map((point, idx) => (
+                              <li key={idx} className="flex items-start gap-2 text-gray-700">
+                                <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                                <span>{point}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
 
         {/* Delete Confirmation Dialog */}
         <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

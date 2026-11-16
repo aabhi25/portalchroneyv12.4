@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
-import { ChannelPicker, ChannelBadge, ChannelFilterSelect, matchesChannelFilter, type ChannelFilterValue } from "@/components/ChannelPicker";
+import { ChannelPicker, ChannelFilterSelect, matchesChannelFilter, type ChannelFilterValue } from "@/components/ChannelPicker";
 import { type KnowledgeChannel } from "@shared/knowledgeChannels";
 import { useToast } from "@/hooks/use-toast";
 import { 
@@ -38,7 +38,6 @@ import {
   Info,
   Plus,
   ExternalLink,
-  Zap,
   Target,
   Award
 } from "lucide-react";
@@ -52,12 +51,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
 import {
   Dialog,
   DialogContent,
@@ -584,352 +577,211 @@ export default function About() {
                       newlyAddedItems.features.size > 0 || 
                       newlyAddedItems.usps.size > 0;
 
-  const StatusBadge = ({ status }: { status: string }) => {
-    const configs = {
-      not_started: { icon: Info, label: 'Not Started', className: 'bg-gray-100 text-gray-700 border-gray-300' },
-      pending: { icon: Clock, label: 'Pending', className: 'bg-blue-100 text-blue-700 border-blue-300' },
-      analyzing: { icon: Loader2, label: 'Analyzing', className: 'bg-purple-100 text-purple-700 border-purple-300' },
-      completed: { icon: CheckCircle2, label: 'Completed', className: 'bg-green-100 text-green-700 border-green-300' },
-      failed: { icon: AlertCircle, label: 'Failed', className: 'bg-red-100 text-red-700 border-red-300' },
-    };
-
-    const config = configs[status as keyof typeof configs] || configs.not_started;
-    const Icon = config.icon;
-
-    return (
-      <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full border-2 font-semibold text-sm ${config.className}`}>
-        <Icon className={`w-4 h-4 ${status === 'analyzing' ? 'animate-spin' : ''}`} />
-        {config.label}
-      </div>
-    );
-  };
-
   return (
-    <div className="flex-1 overflow-auto bg-gradient-to-br from-gray-50 via-purple-50/30 to-blue-50/30">
+    <div className="flex-1 overflow-auto bg-gray-50/60">
       <TrainingNavTabs />
-      <div className="container mx-auto p-4 md:p-6 max-w-[1400px]">
-        {/* Hero Section */}
-        <div className="mb-6">
-          <div className="rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-            <div className="mb-4">
-              <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2 mb-1">
-                <Globe className="w-5 h-5 text-purple-600" />
-                Website scan
-              </h1>
-              <p className="text-gray-500 text-sm max-w-2xl">
-                Empower {brandShort()} AI to understand your business deeply and provide intelligent, context-aware responses
-              </p>
-            </div>
-
-            {/* Website URL Card */}
-            <Card className="bg-gray-50 border-0 shadow-none">
-              <CardContent className="p-4">
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <div className="flex-1">
-                    <p className="text-xs text-gray-500 mb-1 font-medium">Your Website</p>
-                    <div className="flex items-center gap-2">
-                      <ExternalLink className="w-4 h-4 text-gray-400" />
-                      <p className="font-semibold text-gray-900 text-base">
-                        {websiteUrl || "No website configured"}
-                      </p>
-                    </div>
-                    {analysisData?.lastAnalyzedAt && (
-                      <p className="text-xs text-gray-500 mt-1.5">
-                        Last analyzed: {new Date(analysisData.lastAnalyzedAt).toLocaleString()}
-                      </p>
-                    )}
-                    {status === 'failed' && analysisData?.errorMessage && (
-                      <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-md">
-                        <p className="text-xs text-red-700 flex items-center gap-1">
-                          <AlertCircle className="w-3 h-3" />
-                          {analysisData.errorMessage}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                  <Button
-                    onClick={handleAnalyze}
-                    disabled={!websiteUrl || analyzeMutation.isPending || isProcessing}
-                    className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 shadow-lg text-white px-5 py-2 text-sm rounded-lg"
-                  >
-                    {analyzeMutation.isPending || isProcessing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Analyzing...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-4 h-4 mr-2" />
-                        Analyze Website
-                      </>
-                    )}
-                  </Button>
+      <div className="mx-auto max-w-5xl p-4 md:p-6">
+        {/* Website + scan */}
+        <section className="mb-5 rounded-2xl border border-black/[0.07] bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]" data-testid="scan-header">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-purple-50">
+                <Globe className="h-5 w-5 text-purple-600" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-lg font-semibold text-gray-900">Website scan</h1>
+                <p className="text-sm text-gray-500">
+                  {brandShort()} reads your website's pages (about, contact, FAQ, shipping, returns…) so it can answer customers about your business.
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                  {websiteUrl ? (
+                    <a href={websiteUrl} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-1 font-medium text-gray-900 hover:text-purple-700">
+                      <span className="truncate">{websiteUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}</span>
+                      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                    </a>
+                  ) : (
+                    <span className="text-gray-500">No website address in Account settings</span>
+                  )}
+                  {isProcessing ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-medium text-purple-700" data-testid="status-scan-reading">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Reading pages…
+                    </span>
+                  ) : analysisData?.lastAnalyzedAt ? (
+                    <span className="text-xs text-gray-500">Last scanned {new Date(analysisData.lastAnalyzedAt).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
+                  ) : null}
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
+            <Button
+              onClick={handleAnalyze}
+              disabled={!websiteUrl || analyzeMutation.isPending || isProcessing}
+              className="shrink-0 bg-purple-600 text-white hover:bg-purple-700"
+              data-testid="button-scan-website"
+            >
+              {analyzeMutation.isPending || isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              {isProcessing ? "Scanning…" : (analyzedPagesData?.length ?? 0) > 0 ? "Scan again" : "Scan website"}
+            </Button>
           </div>
-        </div>
+          {status === 'failed' && analysisData?.errorMessage && (
+            <p className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{analysisData.errorMessage}
+            </p>
+          )}
+          {isProcessing && (
+            <p className="mt-4 text-xs text-gray-500">This takes a minute or two. You can leave this page; the results appear here when it's done.</p>
+          )}
+        </section>
 
-        {/* Main Content Tabs */}
-        <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="grid w-full grid-cols-3 bg-gradient-to-r from-purple-50 to-white backdrop-blur-sm shadow-md h-auto p-1 rounded-xl">
-            <TabsTrigger value="overview" className="flex items-center gap-2 py-2 rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-200 data-[state=active]:to-blue-100 data-[state=active]:text-purple-900 data-[state=active]:font-semibold">
-              <Zap className="w-4 h-4" />
-              <span className="hidden sm:inline">Overview</span>
-            </TabsTrigger>
-            <TabsTrigger value="pages" className="flex items-center gap-2 py-2 rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-200 data-[state=active]:to-blue-100 data-[state=active]:text-purple-900 data-[state=active]:font-semibold">
-              <FileText className="w-4 h-4" />
-              <span className="hidden sm:inline">Analyzed Pages</span>
-              {analyzedPagesData && analyzedPagesData.length > 0 && (
-                <Badge variant="secondary" className="ml-1">{analyzedPagesData.length}</Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="profile" className="flex items-center gap-2 py-2 rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-200 data-[state=active]:to-blue-100 data-[state=active]:text-purple-900 data-[state=active]:font-semibold">
-              <Building2 className="w-4 h-4" />
-              <span className="hidden sm:inline">Business Profile</span>
-            </TabsTrigger>
+        {/* First time: what happens */}
+        {(analyzedPagesData?.length ?? 0) === 0 && !isProcessing && (
+          <section className="mb-5 grid gap-3 sm:grid-cols-3" data-testid="scan-how">
+            {[
+              { n: 1, t: "Choose the pages", d: "We list your website's useful pages and tick the best ones." },
+              { n: 2, t: "We read them", d: "Contact details, timings and FAQs are copied exactly; the rest is summarised." },
+              { n: 3, t: `${brandShort()} answers from them`, d: "Scan again any time your website changes." },
+            ].map(x => (
+              <div key={x.n} className="flex gap-3 rounded-xl border border-black/[0.06] bg-white p-4">
+                <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-purple-600 text-xs font-semibold text-white">{x.n}</span>
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{x.t}</p>
+                  <p className="text-xs text-gray-500">{x.d}</p>
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
+
+        <Tabs defaultValue="pages" className="w-full">
+          <TabsList className="h-auto w-full justify-start gap-1 rounded-none border-b bg-transparent p-0">
+            {[
+              { v: "pages", label: "Pages read", icon: FileText, count: analyzedPagesData?.length ?? 0 },
+              { v: "profile", label: "Business profile", icon: Building2, count: null },
+            ].map(t => (
+              <TabsTrigger
+                key={t.v}
+                value={t.v}
+                className="-mb-px flex items-center gap-2 rounded-none border-b-2 border-transparent bg-transparent px-3 py-2.5 text-sm text-gray-500 shadow-none data-[state=active]:border-purple-600 data-[state=active]:bg-transparent data-[state=active]:font-semibold data-[state=active]:text-gray-900 data-[state=active]:shadow-none"
+              >
+                <t.icon className="h-4 w-4" />
+                {t.label}
+                {t.count ? <span className="rounded-full bg-gray-100 px-1.5 text-xs font-medium text-gray-600">{t.count}</span> : null}
+              </TabsTrigger>
+            ))}
           </TabsList>
 
-          {/* Overview Tab */}
-          <TabsContent value="overview" className="mt-6 space-y-6">
-            {/* Want More Details Section */}
-            {websiteUrl && status === 'completed' && (
-              <Card className="shadow-md border-gray-200/60 bg-white/80 backdrop-blur-sm">
-                <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-blue-50/50">
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Plus className="w-5 h-5 text-purple-600" />
-                    Want More Details?
-                  </CardTitle>
-                  <CardDescription>
-                    Add specific pages from your website to extract additional information
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="pt-6 space-y-4">
-                  <div className="flex gap-2">
+          {/* Pages read */}
+          <TabsContent value="pages" className="mt-5">
+            <section className="rounded-2xl border border-black/[0.07] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
+                <div>
+                  <h2 className="font-semibold text-gray-900">Pages the AI has read</h2>
+                  <p className="text-xs text-gray-500">Open a page to see what the AI took from it. Remove a page and the AI stops using it.</p>
+                </div>
+                {analyzedPagesData && analyzedPagesData.length > 0 && (
+                  <ChannelFilterSelect value={pageChannelFilter} onChange={setPageChannelFilter} />
+                )}
+              </div>
+
+              {!analyzedPagesData || analyzedPagesData.length === 0 ? (
+                <div className="px-5 py-12 text-center">
+                  <FileText className="mx-auto mb-3 h-10 w-10 text-gray-300" />
+                  <p className="font-medium text-gray-700">No pages read yet</p>
+                  <p className="mt-1 text-sm text-gray-500">Press Scan website to choose the pages.</p>
+                </div>
+              ) : !analyzedPagesData.some(p => matchesChannelFilter(p.channels, pageChannelFilter)) ? (
+                <div className="px-5 py-12 text-center">
+                  <p className="mb-3 text-sm text-gray-600">No pages are used on this channel</p>
+                  <Button variant="outline" size="sm" onClick={() => setPageChannelFilter("all")}>Show all channels</Button>
+                </div>
+              ) : (
+                <ul className="divide-y">
+                  {analyzedPagesData.filter(p => matchesChannelFilter(p.channels, pageChannelFilter)).map((page) => {
+                    let path = page.pageUrl;
+                    try { path = new URL(page.pageUrl).pathname || "/"; } catch { /* keep the address */ }
+                    const last = path.split("/").filter(Boolean).pop();
+                    const title = last ? decodeURIComponent(last).replace(/[-_]+/g, " ") : "Homepage";
+                    const empty = !page.extractedContent || page.extractedContent === 'No relevant business information found on this page.';
+                    return (
+                      <li key={page.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3" data-testid={`row-scan-page-${page.id}`}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPageContent({ url: page.pageUrl, content: page.extractedContent || null })}
+                          className="flex min-w-0 flex-1 basis-full items-center gap-3 text-left sm:basis-0"
+                        >
+                          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gray-100">
+                            <FileText className="h-4 w-4 text-gray-500" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium capitalize text-gray-900">{title}</p>
+                            <p className="truncate text-xs text-gray-500">
+                              {path} · {new Date(page.analyzedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
+                              {empty && <span className="ml-2 text-amber-600">nothing useful found</span>}
+                            </p>
+                          </div>
+                        </button>
+                        <div className="flex shrink-0 items-center gap-2 pl-12 sm:pl-0">
+                          <ChannelPicker
+                            compact
+                            value={page.channels ?? null}
+                            disabled={pageChannelsMutation.isPending}
+                            onChange={(channels) => pageChannelsMutation.mutate({ id: page.id, channels })}
+                          />
+                          <Button variant="outline" size="sm" className="h-8" onClick={() => setSelectedPageContent({ url: page.pageUrl, content: page.extractedContent || null })}>
+                            View
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 hover:bg-red-50 hover:text-red-600" onClick={() => handleDeletePage(page.id)} aria-label={`Remove ${path}`}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              {/* Add one page by its address */}
+              {websiteUrl && (status === 'completed' || (analyzedPagesData?.length ?? 0) > 0) && (
+                <div className="space-y-3 border-t bg-gray-50/60 px-5 py-4">
+                  <p className="text-sm font-medium text-gray-700">Add a page that wasn't in the list</p>
+                  <div className="flex flex-col gap-2 sm:flex-row">
                     <Input
                       value={newPageUrl}
                       onChange={(e) => setNewPageUrl(e.target.value)}
-                      placeholder={`e.g., ${websiteUrl.replace(/\/$/, '')}/about`}
-                      className="flex-1"
+                      placeholder={`e.g. ${websiteUrl.replace(/\/$/, '')}/about`}
+                      className="flex-1 bg-white"
                       disabled={isProcessing}
                       onKeyPress={(e) => e.key === 'Enter' && handleAddPage()}
+                      data-testid="input-scan-add-page"
                     />
-                    <Button
-                      onClick={handleAddPage}
-                      disabled={!newPageUrl.trim() || isProcessing}
-                      variant="outline"
-                      className="border-purple-300 text-purple-700 hover:bg-purple-50"
-                    >
-                      <Plus className="w-4 h-4 mr-1" />
-                      Add Page
+                    <Button onClick={handleAddPage} disabled={!newPageUrl.trim() || isProcessing} variant="outline" className="bg-white">
+                      <Plus className="mr-1 h-4 w-4" /> Add
                     </Button>
                   </div>
-
                   {additionalPages.length > 0 && (
-                    <div className="space-y-3">
-                      <div className="space-y-2">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
                         {additionalPages.map((page, index) => (
-                          <div key={index} className="flex items-center gap-2 p-3 bg-purple-50 rounded-lg border border-purple-200">
-                            <FileText className="w-4 h-4 text-purple-600 flex-shrink-0" />
-                            <span className="flex-1 text-sm truncate font-medium">{page}</span>
-                            <Button
-                              onClick={() => handleRemovePage(index)}
-                              variant="ghost"
-                              size="sm"
-                              disabled={isProcessing}
-                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                            >
-                              <X className="w-4 h-4" />
-                            </Button>
-                          </div>
+                          <span key={index} className="inline-flex max-w-full items-center gap-1 rounded-full border bg-white py-1 pl-3 pr-1 text-xs">
+                            <span className="truncate">{page.replace(/^https?:\/\/[^/]+/, '') || page}</span>
+                            <button type="button" onClick={() => handleRemovePage(index)} disabled={isProcessing} className="rounded-full p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700" aria-label="Remove">
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
                         ))}
                       </div>
-                      
-                      <Button
-                        onClick={handleAnalyzeAdditionalOnly}
-                        disabled={analyzeMutation.isPending || isProcessing}
-                        className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
-                        size="lg"
-                      >
-                        {analyzeMutation.isPending || isProcessing ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            Analyzing...
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="w-4 h-4 mr-2" />
-                            Analyze {additionalPages.length} Additional {additionalPages.length === 1 ? 'Page' : 'Pages'}
-                          </>
-                        )}
+                      <Button onClick={handleAnalyzeAdditionalOnly} disabled={analyzeMutation.isPending || isProcessing} className="bg-purple-600 text-white hover:bg-purple-700">
+                        {analyzeMutation.isPending || isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                        Read {additionalPages.length} {additionalPages.length === 1 ? 'page' : 'pages'}
                       </Button>
                     </div>
                   )}
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Important Notice */}
-            <Card className="shadow-md border-amber-200 bg-gradient-to-br from-amber-50 to-yellow-50">
-              <CardContent className="pt-4 pb-4">
-                <div className="flex gap-3">
-                  <div className="flex-shrink-0">
-                    <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center">
-                      <Info className="w-5 h-5 text-amber-700" />
-                    </div>
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-semibold text-amber-900 mb-1 text-sm">Works Best with Standard HTML Sites</h4>
-                    <p className="text-xs text-amber-800">
-                      Website analysis is optimized for standard HTML websites. JavaScript-heavy sites (React, Vue, Angular single-page apps) may have limited results. For best analysis, ensure your key business information is available in regular HTML pages.
-                    </p>
-                  </div>
                 </div>
-              </CardContent>
-            </Card>
-
-            {/* How It Works */}
-            <Card className="shadow-md border-blue-200 bg-gradient-to-br from-blue-50 to-purple-50">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm flex items-center gap-2 text-blue-900">
-                  <Sparkles className="w-4 h-4" />
-                  How It Works
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 pt-0">
-                <div className="flex gap-2">
-                  <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">1</div>
-                  <div>
-                    <p className="text-xs font-semibold text-blue-900">AI Scans Your Website</p>
-                    <p className="text-xs text-blue-700">Automatically extracts key business information from your pages</p>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <div className="flex-shrink-0 w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center text-xs font-bold">2</div>
-                  <div>
-                    <p className="text-xs font-semibold text-purple-900">{brandShort()} Gets Smarter</p>
-                    <p className="text-xs text-purple-700">Uses extracted data to provide context-aware, accurate responses</p>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <div className="flex-shrink-0 w-6 h-6 rounded-full bg-green-600 text-white flex items-center justify-center text-xs font-bold">3</div>
-                  <div>
-                    <p className="text-xs font-semibold text-green-900">Stay Updated</p>
-                    <p className="text-xs text-green-700">Re-analyze anytime to update or add specific pages for more details</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Analyzed Pages Tab */}
-          <TabsContent value="pages" className="mt-6">
-            <Card className="shadow-md border-gray-200/60 bg-white/80 backdrop-blur-sm">
-              <CardHeader className="border-b bg-gradient-to-r from-purple-50/50 to-blue-50/50">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      <FileText className="w-5 h-5 text-purple-600" />
-                      Analyzed Pages Timeline
-                    </CardTitle>
-                    <CardDescription>
-                      View all pages that have been analyzed and their extracted content
-                    </CardDescription>
-                  </div>
-                  {analyzedPagesData && analyzedPagesData.length > 0 && (
-                    <ChannelFilterSelect value={pageChannelFilter} onChange={setPageChannelFilter} />
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="pt-6">
-                {!analyzedPagesData || analyzedPagesData.length === 0 ? (
-                  <div className="text-center py-12">
-                    <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">No Analyzed Pages Yet</h3>
-                    <p className="text-gray-600">Start by analyzing your website to see the results here</p>
-                  </div>
-                ) : !analyzedPagesData.some(p => matchesChannelFilter(p.channels, pageChannelFilter)) ? (
-                  <div className="text-center py-12">
-                    <p className="text-gray-600 mb-4">No pages are used on this channel</p>
-                    <Button variant="outline" size="sm" onClick={() => setPageChannelFilter("all")}>
-                      Show all channels
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <Accordion type="single" collapsible className="space-y-2">
-                      {analyzedPagesData.filter(p => matchesChannelFilter(p.channels, pageChannelFilter)).map((page, index) => {
-                        const url = new URL(page.pageUrl);
-                        const pathParts = url.pathname.split('/').filter(Boolean);
-                        const pageName = pathParts[pathParts.length - 1] || 'Homepage';
-                        const isHomepage = url.pathname === '/' || url.pathname === '';
-
-                        return (
-                          <AccordionItem 
-                            key={page.id} 
-                            value={page.id}
-                            className="border-2 border-gray-200 rounded-xl bg-white shadow-sm hover:shadow-md transition-shadow"
-                          >
-                            <AccordionTrigger className="px-4 py-3 hover:no-underline">
-                              <div className="flex items-center gap-3 w-full">
-                                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-r from-purple-100 to-blue-100 flex items-center justify-center">
-                                  <span className="text-sm font-bold text-purple-600">{index + 1}</span>
-                                </div>
-                                <div className="flex-1 text-left">
-                                  <p className="font-semibold text-gray-900 capitalize">
-                                    {isHomepage ? '🏠 Homepage' : `📄 ${pageName.replace(/-/g, ' ')}`}
-                                  </p>
-                                  <p className="text-xs text-gray-500 mt-0.5">{page.pageUrl}</p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <ChannelBadge channels={page.channels} />
-                                  <Badge variant="outline" className="text-xs">
-                                    {new Date(page.analyzedAt).toLocaleDateString()}
-                                  </Badge>
-                                </div>
-                              </div>
-                            </AccordionTrigger>
-                            <AccordionContent className="px-4 pb-4">
-                              <div className="mt-2 flex items-center justify-between gap-4">
-                                <p className="text-xs text-gray-500">
-                                  Analyzed: {new Date(page.analyzedAt).toLocaleString()}
-                                </p>
-                                <div className="flex items-center gap-2">
-                                  <ChannelPicker
-                                    compact
-                                    value={page.channels ?? null}
-                                    disabled={pageChannelsMutation.isPending}
-                                    onChange={(channels) => pageChannelsMutation.mutate({ id: page.id, channels })}
-                                  />
-                                  <Button
-                                    onClick={() => setSelectedPageContent({ url: page.pageUrl, content: page.extractedContent || null })}
-                                    variant="outline"
-                                    size="sm"
-                                    className="border-purple-300 text-purple-700 hover:bg-purple-50"
-                                  >
-                                    <FileText className="w-3 h-3 mr-1" />
-                                    View Content
-                                  </Button>
-                                  <Button
-                                    onClick={() => handleDeletePage(page.id)}
-                                    variant="outline"
-                                    size="sm"
-                                    className="border-red-300 text-red-700 hover:bg-red-50"
-                                  >
-                                    <Trash2 className="w-3 h-3 mr-1" />
-                                    Delete
-                                  </Button>
-                                </div>
-                              </div>
-                            </AccordionContent>
-                          </AccordionItem>
-                        );
-                      })}
-                    </Accordion>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+              )}
+            </section>
+            <p className="mt-3 flex items-start gap-1.5 px-1 text-xs text-gray-400">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Pages built entirely by JavaScript can come back empty. Put key details (contact, timings, policies) on regular pages, or upload them in Documents.
+            </p>
           </TabsContent>
 
           {/* Business Profile Tab */}
