@@ -13752,6 +13752,7 @@ Return ONLY the refined instruction, nothing else.`
         generatedText: text(body.generatedText, 120),
         totalLeads: Number(body.totalLeads ?? rows.length) || 0,
         uniqueLeads: Number(body.uniqueLeads ?? rows.length) || 0,
+        listText: text(body.listText, 200) || undefined,
         headers,
         rows,
       });
@@ -13770,7 +13771,6 @@ Return ONLY the refined instruction, nothing else.`
     try {
       const { groupId } = req.params;
       const exportAll = req.query.export === 'true';
-      const pdfExport = req.query.pdfExport === 'true';
       const page = parseInt(req.query.page as string) || 1;
       const limit = exportAll ? 0 : Math.min(parseInt(req.query.limit as string) || 50, 100);
       const offset = exportAll ? 0 : (page - 1) * limit;
@@ -13798,11 +13798,7 @@ Return ONLY the refined instruction, nothing else.`
         return res.status(403).json({ error: "No permission to view leads" });
       }
 
-      // For bulk export: PDF downloads require only canViewLeads;
-      // Excel/raw exports additionally require canExportData.
-      if (exportAll && !pdfExport && !permissions.canExportData) {
-        return res.status(403).json({ error: "No permission to export data" });
-      }
+      // Lead downloads (PDF or Excel) need only "view leads": they hold the same rows as the page.
       
       // Get business account IDs for this group
       const accountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
@@ -13854,7 +13850,6 @@ Return ONLY the refined instruction, nothing else.`
       const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
       if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
       if (!permissions.canViewLeads) return res.status(403).json({ error: "No permission to view leads" });
-      if (exportAll && !permissions.canExportData) return res.status(403).json({ error: "No permission to export data" });
 
       const groupAccountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
       const accountId = req.query.accountId as string | undefined;

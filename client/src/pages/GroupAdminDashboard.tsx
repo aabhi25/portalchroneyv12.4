@@ -204,6 +204,25 @@ function leadExportColumns(columns: LeadColumnKey[]): Array<{ label: string; wid
   ];
 }
 
+/** The person a lead belongs to, per account: by email, else phone, else the lead itself. */
+const uniqueLeadKey = (lead: LeadItem) =>
+  `${lead.businessAccountId}|${(lead.email || '').trim().toLowerCase() || (lead.phone || '').trim() || lead.id}`;
+
+/** One lead per person per account (the first in the list = the latest enquiry). */
+function dedupeLeads(leads: LeadItem[]): LeadItem[] {
+  const seen = new Set<string>();
+  return leads.filter(lead => {
+    const key = uniqueLeadKey(lead);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** What a download holds, printed in the file and on the menu. */
+const UNIQUE_LEADS_NOTE = "Unique leads: repeats removed (one row per person per account, matched by email, else phone).";
+const ALL_LEADS_NOTE = "All leads: every enquiry, including repeat enquiries from the same person.";
+
 /** Unique leads, counted like Group Analytics: per account by email, else phone, else the lead. */
 function countUniqueLeads(leads: LeadItem[]): number {
   const seen = new Set<string>();
@@ -490,7 +509,7 @@ export default function GroupAdminDashboard() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["/api/group-admin/groups", selectedGroupId, "leads", "whatsapp"] }),
   });
   const exportWhatsappLeadsToExcel = async () => {
-    if (!selectedGroupId || !selectedGroup?.canExportData) return;
+    if (!selectedGroupId || !selectedGroup?.canViewLeads) return;
     setIsExportingWaLeads(true);
     try {
       const params = new URLSearchParams(leadsQueryParams);
@@ -725,8 +744,8 @@ export default function GroupAdminDashboard() {
   const waChatsQuery = useGroupWhatsappChats(selectedGroupId, waChatsParams, waChatsPage, !!selectedGroup?.canViewConversations);
   const showingWaChats = convoChannel === 'whatsapp';
 
-  const exportLeadsToExcel = async () => {
-    if (!selectedGroupId || !selectedGroup?.canExportData) return;
+  const exportLeadsToExcel = async (unique: boolean) => {
+    if (!selectedGroupId || !selectedGroup?.canViewLeads) return;
     setIsExportingLeads(true);
     try {
       const params = new URLSearchParams();
@@ -740,11 +759,12 @@ export default function GroupAdminDashboard() {
       const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to export leads");
       const data = await res.json();
-      const allLeads = data.leads || [];
-      if (allLeads.length === 0) {
+      const fetched: LeadItem[] = data.leads || [];
+      if (fetched.length === 0) {
         toast({ title: "No leads to export", description: "No leads match the current filters.", variant: "destructive" });
         return;
       }
+      const allLeads = unique ? dedupeLeads(fetched) : fetched;
 
       // Same columns, in the same order, as the table on screen.
       const exportColumns = leadExportColumns(leadTableColumns);
@@ -754,12 +774,14 @@ export default function GroupAdminDashboard() {
         return row;
       });
 
-      const worksheet = XLSX.utils.json_to_sheet(worksheetData);
+      // A note above the table says what this file holds.
+      const worksheet = XLSX.utils.aoa_to_sheet([[unique ? UNIQUE_LEADS_NOTE : ALL_LEADS_NOTE], []]);
+      XLSX.utils.sheet_add_json(worksheet, worksheetData, { origin: "A3" });
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Leads");
+      XLSX.utils.book_append_sheet(workbook, worksheet, unique ? "Unique leads" : "All leads");
       worksheet["!cols"] = exportColumns.map(c => ({ wch: c.width }));
-      XLSX.writeFile(workbook, `group-leads-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
-      toast({ title: "Export successful", description: `Exported ${allLeads.length} leads to Excel.` });
+      XLSX.writeFile(workbook, `group-${unique ? "unique" : "all"}-leads-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
+      toast({ title: "Excel downloaded", description: unique ? `${allLeads.length} unique leads (repeats removed from ${fetched.length}).` : `${allLeads.length} leads, including repeats.` });
     } catch (error: any) {
       toast({ title: "Export failed", description: error.message, variant: "destructive" });
     } finally {
@@ -767,7 +789,7 @@ export default function GroupAdminDashboard() {
     }
   };
 
-  const downloadLeadsPDF = async () => {
+  const downloadLeadsPDF = async (unique: boolean) => {
     if (!selectedGroupId || !selectedGroup?.canViewLeads) return;
     setIsExportingLeadsPDF(true);
     try {
@@ -784,6 +806,7 @@ export default function GroupAdminDashboard() {
       if (!leadsRes.ok) throw new Error("Failed to fetch leads");
       const leadsData = await leadsRes.json();
       const allFetchedLeads: LeadItem[] = leadsData.leads || [];
+      const rowsToPrint = unique ? dedupeLeads(allFetchedLeads) : allFetchedLeads;
       if (allFetchedLeads.length === 0) {
         toast({ title: "No leads to export", description: "No leads match the current filters.", variant: "destructive" });
         return;
@@ -806,8 +829,9 @@ export default function GroupAdminDashboard() {
           generatedText: format(new Date(), "MMMM d, yyyy 'at' h:mm a"),
           totalLeads: allFetchedLeads.length,
           uniqueLeads: countUniqueLeads(allFetchedLeads),
+          listText: unique ? UNIQUE_LEADS_NOTE : ALL_LEADS_NOTE,
           headers: exportColumns.map(c => c.label),
-          rows: allFetchedLeads.map(lead => exportColumns.map(c => c.value(lead) || "-")),
+          rows: rowsToPrint.map(lead => exportColumns.map(c => c.value(lead) || "-")),
         }),
       });
       if (!pdfRes.ok) throw new Error("Failed to generate PDF");
@@ -816,12 +840,12 @@ export default function GroupAdminDashboard() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `leads-report-${format(new Date(), "yyyy-MM-dd")}.pdf`;
+      a.download = `${unique ? "unique" : "all"}-leads-report-${format(new Date(), "yyyy-MM-dd")}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast({ title: "PDF downloaded", description: `Exported ${allFetchedLeads.length} leads.` });
+      toast({ title: "PDF downloaded", description: unique ? `${rowsToPrint.length} unique leads (repeats removed from ${allFetchedLeads.length}).` : `${rowsToPrint.length} leads, including repeats.` });
     } catch (error: any) {
       toast({ title: "PDF export failed", description: error.message, variant: "destructive" });
     } finally {
@@ -1154,7 +1178,7 @@ export default function GroupAdminDashboard() {
                       <p className="text-sm text-gray-500 mt-0.5">{showingWhatsapp ? "Leads captured on WhatsApp" : "View and export captured leads from conversations"}</p>
                     </div>
                   </div>
-                  {showingWhatsapp && selectedGroup?.canExportData && (
+                  {showingWhatsapp && selectedGroup?.canViewLeads && (
                     <Button
                       onClick={exportWhatsappLeadsToExcel}
                       disabled={isExportingWaLeads}
@@ -1177,26 +1201,43 @@ export default function GroupAdminDashboard() {
                       </Button>
                     )}
                     {selectedGroup?.canViewLeads && (
-                      <Button
-                        onClick={downloadLeadsPDF}
-                        disabled={isExportingLeadsPDF}
-                        variant="outline"
-                        className="border-purple-200 text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-all duration-200 shadow-sm"
-                      >
-                        {isExportingLeadsPDF ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />}
-                        Download PDF
-                      </Button>
-                    )}
-                    {selectedGroup?.canExportData && (
-                      <Button
-                        onClick={exportLeadsToExcel}
-                        disabled={isExportingLeads}
-                        variant="outline"
-                        className="border-purple-200 text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-all duration-200 shadow-sm"
-                      >
-                        {isExportingLeads ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
-                        Export to Excel
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            disabled={isExportingLeadsPDF || isExportingLeads}
+                            className="border-purple-200 text-purple-700 hover:bg-purple-50 hover:border-purple-300 transition-all duration-200 shadow-sm"
+                          >
+                            {isExportingLeadsPDF || isExportingLeads ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                            Download
+                            <ChevronDown className="w-3.5 h-3.5 ml-1.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-80 p-1.5">
+                          <div className="px-2 pt-1.5 pb-1">
+                            <p className="text-sm font-semibold text-gray-900">Unique leads{leadsUniqueLeads !== null ? ` · ${leadsUniqueLeads.toLocaleString()}` : ''}</p>
+                            <p className="text-xs text-gray-500">Repeats removed: one row per person per account (same email, else same phone).</p>
+                          </div>
+                          <DropdownMenuItem className="cursor-pointer" onClick={() => downloadLeadsPDF(true)}>
+                            <FileText className="w-4 h-4 mr-2 text-purple-600" /> Unique leads · PDF
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="cursor-pointer" onClick={() => exportLeadsToExcel(true)}>
+                            <Download className="w-4 h-4 mr-2 text-green-600" /> Unique leads · Excel
+                          </DropdownMenuItem>
+                          <div className="my-1.5 border-t border-gray-100" />
+                          <div className="px-2 pt-1 pb-1">
+                            <p className="text-sm font-semibold text-gray-900">All leads · {(leadsTotal || 0).toLocaleString()}</p>
+                            <p className="text-xs text-gray-500">Every enquiry, including repeat enquiries from the same person.</p>
+                          </div>
+                          <DropdownMenuItem className="cursor-pointer" onClick={() => downloadLeadsPDF(false)}>
+                            <FileText className="w-4 h-4 mr-2 text-purple-600" /> All leads · PDF
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="cursor-pointer" onClick={() => exportLeadsToExcel(false)}>
+                            <Download className="w-4 h-4 mr-2 text-green-600" /> All leads · Excel
+                          </DropdownMenuItem>
+                          <p className="px-2 pt-1.5 pb-1 text-[11px] text-gray-400">Downloads follow the filters below (dates, account, search).</p>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     )}
                   </div>
                 </div>

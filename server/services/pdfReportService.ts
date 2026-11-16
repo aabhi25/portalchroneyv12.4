@@ -42,6 +42,8 @@ export interface LeadTablePdfData {
   generatedText: string;
   totalLeads: number;
   uniqueLeads: number;
+  /** What the table holds (unique leads or all leads), printed above it. */
+  listText?: string;
   headers: string[];
   rows: string[][];
 }
@@ -266,10 +268,17 @@ export function renderLeadTablePdf(data: LeadTablePdfData): Buffer {
 
   doc.setFontSize(12);
   doc.setTextColor(0);
-  doc.text("Leads", 14, 92);
+  doc.text(`Leads (${data.rows.length.toLocaleString()} rows)`, 14, 92);
+  let tableY = 96;
+  if (data.listText) {
+    doc.setFontSize(9);
+    doc.setTextColor(100);
+    doc.text(data.listText, 14, 98);
+    tableY = 102;
+  }
 
   autoTable(doc, {
-    startY: 96,
+    startY: tableY,
     head: [headers],
     body: data.rows.map((row) => headers.map((_, i) => row[i] || "-")),
     headStyles: { fillColor: [88, 28, 135], fontSize: landscape ? 8 : 9 },
