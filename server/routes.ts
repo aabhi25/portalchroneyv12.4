@@ -13129,16 +13129,25 @@ Return ONLY the refined instruction, nothing else.`
       const members = await storage.getGroupMembers(groupId);
       const accounts: any[] = [];
       let totalUnsynced = 0;
+      let totalWhatsapp = 0;
+      const { unsyncedWhatsappLeads } = await import('./services/whatsappLeadLsqSync');
 
       for (const member of members) {
         const unsyncedLeads = await storage.getUnsyncedLeads(member.businessAccountId, fromDate, toDate);
-        totalUnsynced += unsyncedLeads.length;
+        // WhatsApp leads only when WhatsApp is on for the account.
+        const waLeads = member.businessAccount?.whatsappEnabled === 'true'
+          ? await unsyncedWhatsappLeads(member.businessAccountId, fromDate, toDate)
+          : [];
+        totalUnsynced += unsyncedLeads.length + waLeads.length;
+        totalWhatsapp += waLeads.length;
         accounts.push({
           businessAccountId: member.businessAccountId,
           accountName: member.businessAccount?.name || member.businessAccountId,
-          unsyncedCount: unsyncedLeads.length,
-          leads: unsyncedLeads.map(lead => ({
+          unsyncedCount: unsyncedLeads.length + waLeads.length,
+          whatsappCount: waLeads.length,
+          leads: [...unsyncedLeads.map(lead => ({
             id: lead.id,
+            channel: 'website',
             name: lead.name || null,
             email: lead.email || null,
             phone: lead.phone || null,
@@ -13147,11 +13156,22 @@ Return ONLY the refined instruction, nothing else.`
             syncError: lead.leadsquaredSyncError || null,
             retryCount: parseInt(lead.leadsquaredRetryCount || '0', 10),
             nextRetryAt: lead.leadsquaredNextRetryAt || null,
-          })),
+          })), ...waLeads.map(lead => ({
+            id: lead.id,
+            channel: 'whatsapp',
+            name: lead.name || lead.senderName || null,
+            email: lead.email || null,
+            phone: lead.phone || lead.senderPhone || null,
+            createdAt: lead.receivedAt,
+            syncStatus: lead.status || null,
+            syncError: lead.error || null,
+            retryCount: lead.retryCount || 0,
+            nextRetryAt: null,
+          }))],
         });
       }
 
-      res.json({ totalUnsynced, accounts, filter });
+      res.json({ totalUnsynced, totalWhatsapp, accounts, filter });
     } catch (error: any) {
       console.error('[Group LSQ Sync] Error fetching unsynced leads:', error);
       res.status(500).json({ error: error.message });
@@ -13298,6 +13318,31 @@ Return ONLY the refined instruction, nothing else.`
         }
 
         accountResults.push(accountResult);
+      }
+
+      // WhatsApp leads, with each account's WhatsApp LeadSquared setup (the website one or their own).
+      const { unsyncedWhatsappLeads, syncWhatsappLeadToLeadSquared, whatsappLsqConfigured } = await import('./services/whatsappLeadLsqSync');
+      for (const member of members) {
+        if (member.businessAccount?.whatsappEnabled !== 'true') continue;
+        const waLeads = await unsyncedWhatsappLeads(member.businessAccountId, fromDate, toDate);
+        if (waLeads.length === 0) continue;
+        let accountResult = accountResults.find((r) => r.businessAccountId === member.businessAccountId);
+        if (!accountResult) {
+          accountResult = { businessAccountId: member.businessAccountId, accountName: member.businessAccount?.name || member.businessAccountId, synced: 0, failed: 0, errors: [] };
+          accountResults.push(accountResult);
+        }
+        if (!(await whatsappLsqConfigured(member.businessAccountId))) {
+          accountResult.errors.push('LeadSquared not configured for WhatsApp leads');
+          continue;
+        }
+        for (const lead of waLeads) {
+          const r = await syncWhatsappLeadToLeadSquared(lead.id, { mode: 'manual', source: 'group-sync', businessAccountId: member.businessAccountId });
+          if (r.success && !r.skipped) { accountResult.synced++; totalSynced++; }
+          else if (!r.success && !r.skipped) {
+            accountResult.failed++; totalFailed++;
+            accountResult.errors.push(`WhatsApp ${lead.name || lead.senderName || lead.senderPhone}: ${r.message}`);
+          }
+        }
       }
 
       console.log(`[Group LSQ Sync] Completed: ${totalSynced} synced, ${totalFailed} failed across ${members.length} accounts`);

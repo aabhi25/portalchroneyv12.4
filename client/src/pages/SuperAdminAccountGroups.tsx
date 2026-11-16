@@ -1507,7 +1507,12 @@ export default function SuperAdminAccountGroups({ groupId }: { groupId?: string 
             ) : (
               <>
                 <div className="flex items-center justify-between px-2 py-1 bg-muted/50 rounded-md">
-                  <span className="text-sm font-medium">Total unsynced: {(unsyncedData as any)?.totalUnsynced || 0}</span>
+                  <span className="text-sm font-medium">
+                    Total unsynced: {(unsyncedData as any)?.totalUnsynced || 0}
+                    {(unsyncedData as any)?.totalWhatsapp > 0 && (
+                      <span className="font-normal text-muted-foreground"> ({(unsyncedData as any).totalUnsynced - (unsyncedData as any).totalWhatsapp} website · {(unsyncedData as any).totalWhatsapp} WhatsApp)</span>
+                    )}
+                  </span>
                 </div>
                 {(unsyncedData as any)?.accounts?.map((account: any) => (
                   <div key={account.businessAccountId} className="border rounded-md">
@@ -1525,7 +1530,7 @@ export default function SuperAdminAccountGroups({ groupId }: { groupId?: string 
                         <span className="text-sm font-medium">{account.accountName}</span>
                       </div>
                       <Badge variant={account.unsyncedCount > 0 ? "destructive" : "secondary"} className="text-xs">
-                        {account.unsyncedCount} unsynced
+                        {account.unsyncedCount} unsynced{account.whatsappCount > 0 ? ` · ${account.whatsappCount} WhatsApp` : ""}
                       </Badge>
                     </button>
                     {expandedAccounts.has(account.businessAccountId) && account.leads.length > 0 && (
@@ -1534,6 +1539,9 @@ export default function SuperAdminAccountGroups({ groupId }: { groupId?: string 
                           {account.leads.map((lead: any) => (
                             <div key={lead.id} className="flex items-center justify-between text-xs py-1.5 px-2 rounded bg-muted/30">
                               <div className="flex items-center gap-3 min-w-0 flex-1">
+                                {lead.channel === 'whatsapp' && (
+                                  <span className="shrink-0 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">WhatsApp</span>
+                                )}
                                 <span className="font-medium truncate max-w-[120px]">{lead.name || '—'}</span>
                                 <span className="text-muted-foreground truncate max-w-[150px]">{lead.email || '—'}</span>
                                 <span className="text-muted-foreground">{lead.phone || '—'}</span>

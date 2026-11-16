@@ -137,6 +137,9 @@ async function main() {
     expect(manual.success && (await row(L5.id)).leadsquaredSyncStatus === "synced", "Sync on a lead works with the switch off");
     expect((await sync.syncWhatsappLeadToLeadSquared(L3.id, { mode: "manual", businessAccountId: A })).skipped === "not_eligible", "a plain message can't be synced");
     expect((await sync.syncWhatsappLeadToLeadSquared(L1.id, { mode: "manual", businessAccountId: B })).skipped === "not_found", "another account's lead can't be synced");
+    const unsynced = await sync.unsyncedWhatsappLeads(A, ago(24 * 60), new Date(now + 60_000));
+    expect(unsynced.some((l) => l.id === L2.id) && !unsynced.some((l) => l.id === L3.id || l.id === L4.id || l.id === L1.id),
+      "the group dialog lists today's unsynced WhatsApp leads (not plain messages, older or synced ones)");
     const all = await sync.syncAllWhatsappLeadsToLeadSquared(A);
     expect(all.synced === 2 && (await row(L4.id)).leadsquaredSyncStatus === "synced" && (await row(L2.id)).leadsquaredSyncStatus === "synced", `Sync all sends the old and the waiting leads (${JSON.stringify(all)})`);
     expect((await sync.syncAllWhatsappLeadsToLeadSquared(A)).synced === 0, "Sync all again sends nothing twice");

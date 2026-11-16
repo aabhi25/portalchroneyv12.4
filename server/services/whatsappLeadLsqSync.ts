@@ -267,6 +267,30 @@ export async function syncWhatsappLeadToLeadSquared(
   }
 }
 
+/** WhatsApp leads received in [from, to) that are not in LeadSquared yet (for the group "Sync unsynced" dialog). */
+export async function unsyncedWhatsappLeads(businessAccountId: string, from: Date, to: Date) {
+  const { isQualificationRequired } = await import("./leadQualificationService");
+  const draftsOut = await isQualificationRequired(businessAccountId);
+  return db.select({
+    id: whatsappLeads.id,
+    name: whatsappLeads.customerName,
+    senderName: whatsappLeads.senderName,
+    phone: whatsappLeads.customerPhone,
+    senderPhone: whatsappLeads.senderPhone,
+    email: whatsappLeads.customerEmail,
+    receivedAt: whatsappLeads.receivedAt,
+    status: whatsappLeads.leadsquaredSyncStatus,
+    error: whatsappLeads.leadsquaredSyncError,
+    retryCount: whatsappLeads.leadsquaredRetryCount,
+  }).from(whatsappLeads).where(and(
+    eq(whatsappLeads.businessAccountId, businessAccountId),
+    sql`${whatsappLeads.status} <> 'message_only'`,
+    sql`(${whatsappLeads.leadsquaredSyncStatus} IS NULL OR ${whatsappLeads.leadsquaredSyncStatus} NOT IN ('synced', 'pending'))`,
+    sql`${whatsappLeads.receivedAt} >= ${ts(from)} AND ${whatsappLeads.receivedAt} < ${ts(to)}`,
+    ...(draftsOut ? [sql`${whatsappLeads.qualifiedAt} IS NOT NULL`] : []),
+  )).orderBy(whatsappLeads.receivedAt);
+}
+
 /** "Sync all to CRM": every WhatsApp lead of the account not yet in LeadSquared (oldest first). */
 export async function syncAllWhatsappLeadsToLeadSquared(businessAccountId: string, limit = 500) {
   const rows = await db.select({ id: whatsappLeads.id }).from(whatsappLeads)
