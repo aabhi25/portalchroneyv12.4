@@ -109,8 +109,7 @@ import VistaInsights from "@/pages/VistaInsights";
 import Uploads from "@/pages/Uploads";
 import JewelryImageGenerator from "@/pages/JewelryImageGenerator";
 import GroupAdminDashboard from "@/pages/GroupAdminDashboard";
-import GroupAdminInsights from "@/pages/GroupAdminInsights";
-import GroupAnalytics from "@/pages/GroupAnalytics";
+import GroupAdminInsightsHub from "@/pages/GroupAdminInsightsHub";
 import RazorpayRizeDemo from "@/pages/RazorpayRizeDemo";
 import WhatsApp from "@/pages/WhatsApp";
 import WhatsAppSectionHub from "@/pages/WhatsAppSectionHub";
@@ -365,8 +364,10 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/group-admin/leads" component={GroupAdminDashboard} />
                 <Route path="/group-admin/conversations" component={GroupAdminDashboard} />
 
-                <Route path="/group-admin/insights" component={GroupAdminInsights} />
-                <Route path="/group-admin/group-analytics" component={GroupAnalytics} />
+                <Route path="/group-admin/insights" component={GroupAdminInsightsHub} />
+                <Route path="/group-admin/group-analytics">
+                  <Redirect to="/group-admin/insights" />
+                </Route>
                 <Route path={SETTINGS_PATHS.root}>{() => <SettingsHub user={user} />}</Route>
                 <Route path={`${SETTINGS_PATHS.root}/*`}>{() => <SettingsHub user={user} />}</Route>
               </>

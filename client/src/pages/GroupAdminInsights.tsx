@@ -11,12 +11,13 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { 
   Users, MessageSquare, TrendingUp, Calendar, Loader2, 
   BarChart3, Building2, Eye, Monitor, Smartphone, Tablet, 
-  Globe, MapPin, Brain, Sparkles, AlertCircle, Package, Lightbulb,
+  Globe, MapPin, Brain, Sparkles, AlertCircle, Lightbulb,
   Check, ChevronsUpDown, Tag, Heart, RefreshCw, CheckCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, subDays, startOfDay, endOfDay, startOfMonth, endOfMonth, subMonths, formatDistanceToNow } from "date-fns";
 import { countryLabel, pageVisitsOf } from "@/lib/visitorStats";
+import { FaWhatsapp } from "react-icons/fa";
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'currentMonth' | 'lastMonth' | 'custom';
 
@@ -93,6 +94,7 @@ interface ConversationCategory {
 
 interface AccountStats {
   leads: number;
+  whatsappLeads?: number;
   conversations: number;
   products: number;
   conversionRate: string;
@@ -104,9 +106,14 @@ interface LeadBreakdown {
   topicsBreakdown: { topic: string; count: number }[];
 }
 
-export default function GroupAdminInsights() {
+/**
+ * One account of the group. Inside the Insights page (`embed`) the page above picks the group,
+ * account and dates, and this shows only the account's numbers.
+ */
+export default function GroupAdminInsights({ embed }: { embed?: { groupId: string; accountId: string; from?: Date; to?: Date } } = {}) {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [pickedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const selectedAccountId = embed?.accountId ?? pickedAccountId;
   const [datePreset, setDatePreset] = useState<DatePreset>('today');
   const [fromDate, setFromDate] = useState<Date | undefined>(undefined);
   const [toDate, setToDate] = useState<Date | undefined>(undefined);
@@ -126,7 +133,7 @@ export default function GroupAdminInsights() {
     }
   }, [groupAssignments, selectedGroupId]);
 
-  const activeGroupId = selectedGroupId || groupAssignments[0]?.groupId;
+  const activeGroupId = embed?.groupId || selectedGroupId || groupAssignments[0]?.groupId;
 
   // Fetch linked accounts for the selected group
   const { data: linkedAccountsData } = useQuery<{ accounts: LinkedAccount[] }>({
@@ -145,6 +152,11 @@ export default function GroupAdminInsights() {
   // Build date params
   const dateParams = useMemo(() => {
     const params = new URLSearchParams();
+    if (embed) {
+      if (embed.from) params.append('fromDate', embed.from.toISOString());
+      if (embed.to) params.append('toDate', embed.to.toISOString());
+      return params.toString() ? `?${params.toString()}` : '';
+    }
     
     if (datePreset === 'all') {
       return '';
@@ -187,7 +199,7 @@ export default function GroupAdminInsights() {
     if (to) params.append('toDate', to.toISOString());
     
     return params.toString() ? `?${params.toString()}` : '';
-  }, [datePreset, fromDate, toDate]);
+  }, [datePreset, fromDate, toDate, embed?.from, embed?.to]);
 
   // Fetch account stats
   const { data: accountStats, isLoading: isStatsLoading } = useQuery<AccountStats>({
@@ -331,8 +343,8 @@ export default function GroupAdminInsights() {
   const selectedAccountName = linkedAccounts.find(a => a.id === selectedAccountId)?.name || 'Select Account';
 
   return (
-    <div className="flex flex-col min-h-screen">
-      <header className="border-b bg-white sticky top-0 z-10">
+    <div className={embed ? "flex flex-col" : "flex flex-col min-h-screen"}>
+      {!embed && <header className="border-b bg-white sticky top-0 z-10">
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-3">
             <SidebarTrigger />
@@ -345,11 +357,11 @@ export default function GroupAdminInsights() {
             </div>
           </div>
         </div>
-      </header>
+      </header>}
 
-      <main className="flex-1 p-4 max-w-7xl mx-auto w-full">
+      <main className={embed ? "w-full" : "flex-1 p-4 max-w-7xl mx-auto w-full"}>
         {/* Account Selector */}
-        <Card className="mb-4">
+        <Card className={embed ? "hidden" : "mb-4"}>
           <CardContent className="p-4">
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
               <div className="flex items-center gap-2">
@@ -428,7 +440,7 @@ export default function GroupAdminInsights() {
         ) : (
           <>
             {/* Date Filter */}
-            <Card className="mb-4">
+            <Card className={embed ? "hidden" : "mb-4"}>
               <CardContent className="p-3">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
                   <div className="flex items-center gap-2">
@@ -550,62 +562,27 @@ export default function GroupAdminInsights() {
             </Card>
 
             {/* Stats Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-              <Card>
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-blue-50 rounded-lg">
-                      <Users className="w-5 h-5 text-blue-600" />
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+              {[
+                { label: 'Total leads', note: 'Website + WhatsApp', value: (accountStats?.leads || 0) + (accountStats?.whatsappLeads || 0), icon: <Users className="w-5 h-5 text-purple-600" />, bg: 'bg-purple-50' },
+                { label: 'Website leads', value: accountStats?.leads || 0, icon: <Globe className="w-5 h-5 text-blue-600" />, bg: 'bg-blue-50' },
+                { label: 'WhatsApp leads', value: accountStats?.whatsappLeads || 0, icon: <FaWhatsapp className="w-5 h-5 text-green-600" />, bg: 'bg-green-50' },
+                { label: 'Conversations', note: 'Website chats', value: accountStats?.conversations || 0, icon: <MessageSquare className="w-5 h-5 text-indigo-600" />, bg: 'bg-indigo-50' },
+                { label: 'Conversion rate', note: 'Website leads ÷ chats', value: `${accountStats?.conversionRate || 0}%`, icon: <TrendingUp className="w-5 h-5 text-emerald-600" />, bg: 'bg-emerald-50' },
+              ].map(c => (
+                <Card key={c.label}>
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 ${c.bg} rounded-lg`}>{c.icon}</div>
+                      <div className="min-w-0">
+                        <p className="text-2xl font-bold">{isStatsLoading ? '-' : c.value}</p>
+                        <p className="text-sm text-gray-500">{c.label}</p>
+                        {c.note && <p className="text-[11px] text-gray-400 truncate">{c.note}</p>}
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-2xl font-bold">{isStatsLoading ? '-' : accountStats?.leads || 0}</p>
-                      <p className="text-sm text-gray-500">Total Leads</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-purple-50 rounded-lg">
-                      <MessageSquare className="w-5 h-5 text-purple-600" />
-                    </div>
-                    <div>
-                      <p className="text-2xl font-bold">{isStatsLoading ? '-' : accountStats?.conversations || 0}</p>
-                      <p className="text-sm text-gray-500">Conversations</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-green-50 rounded-lg">
-                      <TrendingUp className="w-5 h-5 text-green-600" />
-                    </div>
-                    <div>
-                      <p className="text-2xl font-bold">{isStatsLoading ? '-' : `${accountStats?.conversionRate || 0}%`}</p>
-                      <p className="text-sm text-gray-500">Conversion Rate</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-orange-50 rounded-lg">
-                      <Package className="w-5 h-5 text-orange-600" />
-                    </div>
-                    <div>
-                      <p className="text-2xl font-bold">{isStatsLoading ? '-' : accountStats?.products || 0}</p>
-                      <p className="text-sm text-gray-500">Products</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
 
             {/* Visitor Insights */}

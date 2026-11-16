@@ -14952,6 +14952,12 @@ Return ONLY the refined instruction, nothing else.`
         });
       }
 
+      // WhatsApp leads (shown next to website leads; the conversion rate stays website-only).
+      const { countWhatsappLeadsByAccount } = await import("./services/groupWhatsappChats");
+      const waByAccount = await countWhatsappLeadsByAccount(accountIds, dateFrom, dateTo);
+      for (const row of accountBreakdown as Array<{ accountId: string; whatsappLeads?: number }>) row.whatsappLeads = waByAccount.get(row.accountId) ?? 0;
+      const totalWhatsappLeads = Array.from(waByAccount.values()).reduce((s, n) => s + n, 0);
+
       // Compute totals by summing per-account breakdown (matches Lead Analysis dedup logic)
       const totalLeads = accountBreakdown.reduce((s, r) => s + r.leads, 0);
       const formLeads = accountBreakdown.reduce((s, r) => s + r.form, 0);
@@ -15079,6 +15085,7 @@ Return ONLY the refined instruction, nothing else.`
         conversationFunnel: { total: totalConversations, journeyStarted, leadsGenerated: totalLeads, conversionRate },
         conversationBreakdown: { journey: journeyConvs, form: formConvs, chat: chatConvs, discountAvailed: discountConvs, total: totalConversations },
         leadSources: { form: formLeads, journey: journeyLeads, chat: chatLeads, discountAvailed: discountLeads, total: totalLeads },
+        whatsappLeads: totalWhatsappLeads,
         trafficSources: { paid: paidLeads, organic: organicLeads, total: totalLeads },
         topCities: { cities: topCities, total: totalCityVisitors },
         conversationInsights: {
@@ -15617,9 +15624,12 @@ Format your response as JSON with this structure:
 
       // Get products count
       const productsList = await storage.getAllProducts(accountId);
+      const { countWhatsappLeadsByAccount } = await import("./services/groupWhatsappChats");
+      const whatsappLeadCount = (await countWhatsappLeadsByAccount([accountId], dateFrom, dateTo)).get(accountId) ?? 0;
 
       res.json({
         leads: totalLeads,
+        whatsappLeads: whatsappLeadCount,
         conversations: totalConversations,
         products: productsList.length,
         conversionRate: totalConversations > 0

@@ -157,3 +157,26 @@ export async function groupWhatsappChatMessages(
     })),
   };
 }
+
+/**
+ * WhatsApp leads per account in a period, counted like the super admin's group Insights and the
+ * account's WhatsApp Insights page: incoming, not just a message, and (where the account requires
+ * PAN + email) qualified.
+ */
+export async function countWhatsappLeadsByAccount(accountIds: string[], dateFrom?: Date, dateTo?: Date): Promise<Map<string, number>> {
+  const out = new Map<string, number>(accountIds.map(id => [id, 0]));
+  if (accountIds.length === 0) return out;
+  const { isQualificationRequired } = await import("./leadQualificationService");
+  const qualifiedOnly = new Set<string>();
+  for (const id of accountIds) if (await isQualificationRequired(id)) qualifiedOnly.add(id);
+  const rows = await db.execute(sql`
+    SELECT business_account_id AS id, COUNT(*)::int AS n FROM whatsapp_leads
+    WHERE business_account_id IN (${sql.join(accountIds.map(id => sql`${id}`), sql`, `)})
+      AND direction = 'incoming' AND status != 'message_only'
+      ${dateFrom ? sql`AND received_at >= ${iso(dateFrom)}` : sql``}
+      ${dateTo ? sql`AND received_at <= ${iso(dateTo)}` : sql``}
+      ${qualifiedOnly.size ? sql`AND (qualified_at IS NOT NULL OR business_account_id NOT IN (${sql.join(Array.from(qualifiedOnly).map(id => sql`${id}`), sql`, `)}))` : sql``}
+    GROUP BY business_account_id`);
+  for (const r of rows.rows as { id: string; n: number }[]) out.set(r.id, Number(r.n));
+  return out;
+}

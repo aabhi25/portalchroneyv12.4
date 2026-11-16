@@ -16,6 +16,7 @@ import {
   CheckCircle2, XCircle, Clock, Activity
 } from "lucide-react";
 import { format, subDays, subMonths } from "date-fns";
+import { FaWhatsapp } from "react-icons/fa";
 
 const IST_OFFSET_MINUTES = 330;
 
@@ -62,11 +63,23 @@ const istDateFormatter = new Intl.DateTimeFormat("en-IN", {
   hour12: true,
 });
 
-function formatDateIST(date: Date): string {
+export function formatDateIST(date: Date): string {
   return istDateFormatter.format(date);
 }
 
-type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'currentMonth' | 'lastMonth' | 'custom';
+export type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'currentMonth' | 'lastMonth' | 'custom';
+
+/** A date preset as a range of Indian days (start of the first day to the end of the last). */
+export function istRange(preset: DatePreset, fromDate?: Date, toDate?: Date): { from?: Date; to?: Date } {
+  const now = new Date();
+  if (preset === 'today') return { from: istStartOfDay(now), to: istEndOfDay(now) };
+  if (preset === 'yesterday') { const y = subDays(now, 1); return { from: istStartOfDay(y), to: istEndOfDay(y) }; }
+  if (preset === 'last7') return { from: istStartOfDay(subDays(now, 6)), to: istEndOfDay(now) };
+  if (preset === 'currentMonth') return { from: istStartOfMonth(now), to: istEndOfDay(now) };
+  if (preset === 'lastMonth') { const lm = subMonths(now, 1); return { from: istStartOfMonth(lm), to: istEndOfMonth(lm) }; }
+  if (preset === 'custom') return { from: fromDate ? istStartOfDay(fromDate) : undefined, to: toDate ? istEndOfDay(toDate) : undefined };
+  return {};
+}
 
 interface GroupAssignment {
   groupId: string;
@@ -88,6 +101,8 @@ interface GroupAnalyticsData {
     discountAvailed: number;
     total: number;
   };
+  /** WhatsApp leads in the period (website leads are in leadSources). */
+  whatsappLeads?: number;
   leadSources: {
     form: number;
     journey: number;
@@ -121,6 +136,7 @@ interface GroupAnalyticsData {
     discountAvailed: number;
     paid: number;
     organic: number;
+    whatsappLeads?: number;
   }[];
 }
 
@@ -129,6 +145,7 @@ const PIE_COLORS = {
   journey: '#8b5cf6',
   chat: '#3b82f6',
   discountAvailed: '#f97316',
+  whatsapp: '#22c55e',
 };
 
 const CITY_PIE_COLORS = [
@@ -154,7 +171,7 @@ const CATEGORY_BAR_COLORS = [
   '#818cf8', '#a78bfa', '#6d28d9',
 ];
 
-const DATE_PRESETS: { key: DatePreset; label: string }[] = [
+export const DATE_PRESETS: { key: DatePreset; label: string }[] = [
   { key: 'today', label: 'Today' },
   { key: 'yesterday', label: 'Yesterday' },
   { key: 'last7', label: 'Last 7 Days' },
@@ -169,7 +186,11 @@ function pct(part: number, total: number) {
   return `${Math.round((part / total) * 100)}%`;
 }
 
-export default function GroupAnalytics() {
+/**
+ * All accounts of the group. On its own (old /group-analytics link) it has its own header; inside
+ * the Insights page (`embed`) the page above picks the group and dates.
+ */
+export default function GroupAnalytics({ embed }: { embed?: { groupId: string; from?: Date; to?: Date; onOpenAccount?: (accountId: string) => void } } = {}) {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [datePreset, setDatePreset] = useState<DatePreset>('today');
   const [fromDate, setFromDate] = useState<Date | undefined>(undefined);
@@ -203,13 +224,14 @@ export default function GroupAnalytics() {
   }, [datePreset, fromDate, toDate]);
 
   const queryParams = useMemo(() => {
+    const range = embed ? { from: embed.from, to: embed.to } : effectiveDateRange;
     const params = new URLSearchParams();
-    if (effectiveDateRange.from) params.set('dateFrom', effectiveDateRange.from.toISOString());
-    if (effectiveDateRange.to) params.set('dateTo', effectiveDateRange.to.toISOString());
+    if (range.from) params.set('dateFrom', range.from.toISOString());
+    if (range.to) params.set('dateTo', range.to.toISOString());
     return params.toString();
-  }, [effectiveDateRange]);
+  }, [effectiveDateRange, embed?.from, embed?.to]);
 
-  const groupId = activeGroup?.groupId;
+  const groupId = embed?.groupId ?? activeGroup?.groupId;
 
   const { data, isLoading } = useQuery<GroupAnalyticsData>({
     queryKey: ["/api/group-admin/groups", groupId, "group-analytics", queryParams],
@@ -221,10 +243,10 @@ export default function GroupAnalytics() {
       if (!res.ok) throw new Error("Failed to fetch group analytics");
       return res.json();
     },
-    enabled: !!groupId && (activeGroup?.canViewAnalytics ?? false),
+    enabled: !!groupId && (!!embed || (activeGroup?.canViewAnalytics ?? false)),
   });
 
-  if (loadingGroups) {
+  if (!embed && loadingGroups) {
     return (
       <div className="flex items-center justify-center h-screen">
         <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
@@ -232,7 +254,7 @@ export default function GroupAnalytics() {
     );
   }
 
-  if (!activeGroup) {
+  if (!embed && !activeGroup) {
     return (
       <div className="flex items-center justify-center h-screen text-gray-500">
         No group assigned.
@@ -240,7 +262,7 @@ export default function GroupAnalytics() {
     );
   }
 
-  if (!activeGroup.canViewAnalytics) {
+  if (!embed && !activeGroup!.canViewAnalytics) {
     return (
       <div className="flex items-center justify-center h-screen text-gray-500">
         <div className="text-center">
@@ -266,11 +288,15 @@ export default function GroupAnalytics() {
     { name: 'Discount Availed', value: convBreakdown.discountAvailed, key: 'discountAvailed' },
   ].filter(d => d.value > 0) : [];
 
+  const whatsappLeads = data?.whatsappLeads ?? 0;
+  // Lead sources: the website's capture methods plus WhatsApp.
+  const allLeads = (sources?.total ?? 0) + whatsappLeads;
   const pieData = sources ? [
     { name: 'Via Form', value: sources.form, key: 'form' },
     { name: 'Via Journey', value: sources.journey, key: 'journey' },
     { name: 'Chat', value: sources.chat, key: 'chat' },
     { name: 'Discount Availed', value: sources.discountAvailed, key: 'discountAvailed' },
+    { name: 'WhatsApp', value: whatsappLeads, key: 'whatsapp' },
   ].filter(d => d.value > 0) : [];
 
   const cityPieData = citiesData?.cities?.map((c, i) => ({
@@ -293,9 +319,9 @@ export default function GroupAnalytics() {
   ].filter(d => d.value > 0) : [];
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div className={embed ? "flex flex-col" : "flex flex-col h-screen bg-gray-50"}>
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
+      {!embed && activeGroup && <div className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
         <div className="flex items-center gap-4">
           <SidebarTrigger className="text-gray-500 hover:text-gray-700" />
           <div className="flex items-center gap-3">
@@ -380,21 +406,41 @@ export default function GroupAnalytics() {
             Showing data from {formatDateIST(effectiveDateRange.from)} to {formatDateIST(effectiveDateRange.to)}
           </p>
         ) : null}
-      </div>
+      </div>}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className={embed ? "space-y-6" : "flex-1 overflow-y-auto p-6 space-y-6"}>
         {isLoading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
           </div>
         ) : (
           <>
+            {/* Leads: website + WhatsApp */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {[
+                { label: 'Total leads', value: allLeads, note: 'Website + WhatsApp', icon: <Users className="w-5 h-5 text-purple-600" />, iconBg: 'bg-purple-100', card: 'bg-gradient-to-br from-purple-50 to-pink-50', valueColor: 'text-purple-700' },
+                { label: 'Website leads', value: funnel?.leadsGenerated ?? 0, note: 'From the website chat', icon: <Globe className="w-5 h-5 text-blue-600" />, iconBg: 'bg-blue-100', card: 'bg-white', valueColor: 'text-gray-900' },
+                { label: 'WhatsApp leads', value: whatsappLeads, note: 'From WhatsApp chats', icon: <FaWhatsapp className="w-5 h-5 text-green-600" />, iconBg: 'bg-green-100', card: 'bg-white', valueColor: 'text-gray-900' },
+              ].map(c => (
+                <Card key={c.label} className={`border-0 shadow-sm ${c.card}`}>
+                  <CardContent className="p-5">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className={`w-9 h-9 ${c.iconBg} rounded-lg flex items-center justify-center`}>{c.icon}</div>
+                      <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{c.label}</span>
+                    </div>
+                    <p className={`text-3xl font-bold ${c.valueColor}`}>{c.value}</p>
+                    <p className="text-xs text-gray-400 mt-1">{c.note}</p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
             {/* Section 1: Conversation Funnel */}
             <div>
               <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3 flex items-center gap-2">
                 <BarChart3 className="w-4 h-4 text-purple-500" />
-                Conversation Funnel
+                Website chat funnel
               </h2>
               <div className="flex flex-col md:flex-row items-stretch gap-3">
                 {/* Total Conversations */}
@@ -422,7 +468,7 @@ export default function GroupAnalytics() {
                       <div className="w-9 h-9 bg-green-100 rounded-lg flex items-center justify-center">
                         <Users className="w-5 h-5 text-green-600" />
                       </div>
-                      <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Leads Generated</span>
+                      <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Website Leads</span>
                     </div>
                     <p className="text-3xl font-bold text-gray-900">{funnel?.leadsGenerated ?? 0}</p>
                     <p className="text-xs text-gray-400 mt-1">
@@ -560,12 +606,12 @@ export default function GroupAnalytics() {
                     </div>
                     <div>
                       <CardTitle className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Lead Sources</CardTitle>
-                      <p className="text-xs text-gray-500">{sources?.total ?? 0} total leads captured</p>
+                      <p className="text-xs text-gray-500">{allLeads} total leads captured</p>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {sources && sources.total > 0 ? (
+                  {sources && allLeads > 0 ? (
                     <div className="flex flex-col items-center">
                       <ResponsiveContainer width="100%" height={220} minWidth={280}>
                         <PieChart margin={{ top: 10, right: 40, bottom: 10, left: 40 }}>
@@ -590,7 +636,7 @@ export default function GroupAnalytics() {
                               const radius = (oR as number) + 16;
                               const x = (cx as number) + radius * Math.cos(-midAngle * RADIAN);
                               const y = (cy as number) + radius * Math.sin(-midAngle * RADIAN);
-                              const p = sources.total > 0 ? Math.round((value / sources.total) * 100) : 0;
+                              const p = allLeads > 0 ? Math.round((value / allLeads) * 100) : 0;
                               return (
                                 <text x={x} y={y} fill="#6b7280" textAnchor={x > (cx as number) ? 'start' : 'end'} dominantBaseline="central" fontSize={10} fontWeight={600}>
                                   {name} {p}%
@@ -606,7 +652,7 @@ export default function GroupAnalytics() {
                           <Tooltip
                             contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '10px', color: '#374151', fontSize: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
                             formatter={(value: number, name: string) => [
-                              `${value} (${pct(value, sources.total)})`,
+                              `${value} (${pct(value, allLeads)})`,
                               name,
                             ]}
                           />
@@ -615,10 +661,11 @@ export default function GroupAnalytics() {
 
                       <div className="w-full grid grid-cols-2 gap-2 mt-2">
                         {[
-                          { label: 'Via Form', value: sources.form, pctVal: pct(sources.form, sources.total), dot: 'bg-emerald-500' },
-                          { label: 'Via Journey', value: sources.journey, pctVal: pct(sources.journey, sources.total), dot: 'bg-violet-500' },
-                          { label: 'Chat', value: sources.chat, pctVal: pct(sources.chat, sources.total), dot: 'bg-blue-500' },
-                          { label: 'Discount Availed', value: sources.discountAvailed, pctVal: pct(sources.discountAvailed, sources.total), dot: 'bg-orange-500' },
+                          { label: 'Via Form', value: sources.form, pctVal: pct(sources.form, allLeads), dot: 'bg-emerald-500' },
+                          { label: 'Via Journey', value: sources.journey, pctVal: pct(sources.journey, allLeads), dot: 'bg-violet-500' },
+                          { label: 'Chat', value: sources.chat, pctVal: pct(sources.chat, allLeads), dot: 'bg-blue-500' },
+                          { label: 'Discount Availed', value: sources.discountAvailed, pctVal: pct(sources.discountAvailed, allLeads), dot: 'bg-orange-500' },
+                          { label: 'WhatsApp', value: whatsappLeads, pctVal: pct(whatsappLeads, allLeads), dot: 'bg-green-500' },
                         ].map(({ label, value, pctVal, dot }) => (
                           <div key={label} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg border border-gray-100 hover:bg-purple-50/50 transition-colors">
                             <div className="flex items-center gap-2 min-w-0">
@@ -1062,12 +1109,14 @@ export default function GroupAnalytics() {
               </h2>
               <Card className="border-0 shadow-sm bg-white overflow-hidden">
                 <div className="overflow-x-auto">
-                  <table className="min-w-[920px] w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+                  <table className="min-w-[1080px] w-full text-sm" style={{ borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
                         <th rowSpan={2} className="text-left px-4 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wide bg-gray-50 border-b border-gray-200 border-r-2 border-r-gray-300 sticky left-0 z-10">Account</th>
                         <th rowSpan={2} className="text-center px-3 py-2.5 text-[11px] font-semibold text-blue-700 uppercase tracking-wide bg-blue-50/60 border-b border-blue-100 border-r-2 border-r-gray-300">Conversations</th>
-                        <th colSpan={5} className="text-center px-2 py-2 text-[11px] font-semibold text-emerald-700 uppercase tracking-wide bg-emerald-50/60 border-b border-emerald-100 border-r-2 border-r-gray-300">Leads</th>
+                        <th colSpan={5} className="text-center px-2 py-2 text-[11px] font-semibold text-emerald-700 uppercase tracking-wide bg-emerald-50/60 border-b border-emerald-100 border-r-2 border-r-gray-300">Website leads</th>
+                        <th rowSpan={2} className="text-center px-3 py-2.5 text-[11px] font-semibold text-green-700 uppercase tracking-wide bg-green-50/60 border-b border-green-100">WhatsApp<br/>leads</th>
+                        <th rowSpan={2} className="text-center px-3 py-2.5 text-[11px] font-semibold text-purple-700 uppercase tracking-wide bg-purple-50/60 border-b border-purple-100 border-r-2 border-r-gray-300">Total<br/>leads</th>
                         <th colSpan={2} className="text-center px-2 py-2 text-[11px] font-semibold text-amber-700 uppercase tracking-wide bg-amber-50/60 border-b border-amber-100 border-r-2 border-r-gray-300">Traffic</th>
                         <th rowSpan={2} className="text-center px-3 py-2.5 text-[11px] font-semibold text-purple-600 uppercase tracking-wide bg-purple-50/60 border-b border-purple-100">Conv.<br/>Rate</th>
                       </tr>
@@ -1084,7 +1133,7 @@ export default function GroupAnalytics() {
                     <tbody className="divide-y divide-gray-100">
                       {breakdown.length === 0 ? (
                         <tr>
-                          <td colSpan={10} className="text-center py-8 text-gray-400 text-sm">
+                          <td colSpan={12} className="text-center py-8 text-gray-400 text-sm">
                             No data for this period
                           </td>
                         </tr>
@@ -1100,7 +1149,13 @@ export default function GroupAnalytics() {
                                   <div className="w-6 h-6 bg-gradient-to-br from-purple-500 to-pink-600 rounded-md flex items-center justify-center flex-shrink-0">
                                     <Building2 className="w-3 h-3 text-white" />
                                   </div>
-                                  <span className="break-words whitespace-normal max-w-[180px]">{row.accountName}</span>
+                                  {embed?.onOpenAccount ? (
+                                    <button type="button" onClick={() => embed.onOpenAccount!(row.accountId)} className="break-words whitespace-normal max-w-[180px] text-left hover:text-purple-700 hover:underline" title="See this account's insights">
+                                      {row.accountName}
+                                    </button>
+                                  ) : (
+                                    <span className="break-words whitespace-normal max-w-[180px]">{row.accountName}</span>
+                                  )}
                                 </div>
                               </td>
                               <td className="px-3 py-3 text-right tabular-nums text-gray-700 font-medium border-r-2 border-r-gray-300">{row.conversations}</td>
@@ -1117,6 +1172,8 @@ export default function GroupAnalytics() {
                               <td className="px-3 py-3 text-right border-r-2 border-r-gray-300">
                                 <span className="px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full text-xs font-medium tabular-nums">{row.discountAvailed}</span>
                               </td>
+                              <td className="px-3 py-3 text-right tabular-nums font-medium text-green-700">{row.whatsappLeads ?? 0}</td>
+                              <td className="px-3 py-3 text-right tabular-nums font-semibold text-purple-700 border-r-2 border-r-gray-300">{row.leads + (row.whatsappLeads ?? 0)}</td>
                               <td className="px-3 py-3 text-right">
                                 <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium tabular-nums">{row.paid}</span>
                               </td>
