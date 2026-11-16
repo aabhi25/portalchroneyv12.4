@@ -24408,6 +24408,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         createdFaqs.push(created);
       }
 
+      if (createdFaqs.some(f => f.channels)) invalidateKnowledgeCaches(businessAccountId);
       res.json({ 
         success: true,
         count: createdFaqs.length,
@@ -24416,6 +24417,55 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     } catch (error: any) {
       console.error("Error bulk adding FAQs:", error);
       res.status(500).json({ error: error.message || "Failed to add FAQs" });
+    }
+  });
+
+  // FAQs › Add from website: the pages worth reading for FAQs (from the website's sitemap), best ones ticked.
+  app.post("/api/faqs/from-website/pages", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      const businessAccountId = req.user?.businessAccountId;
+      if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+      const account = await storage.getBusinessAccount(businessAccountId);
+      if (!account?.website) return res.status(400).json({ error: "Add the website address in Account settings first." });
+      const { discoverInfoPages } = await import("./services/websitePages");
+      const { pickFaqPages, FAQ_DEFAULT_PICK, FAQ_MAX_PAGES } = await import("./services/websiteFaqs");
+      const found = await discoverInfoPages(account.website);
+      res.json({ pages: pickFaqPages(found), leftOut: found.leftOut, source: found.source, defaultPick: FAQ_DEFAULT_PICK, maxPick: FAQ_MAX_PAGES });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Couldn't look through the website." });
+    }
+  });
+
+  // FAQs › Add from website: FAQ suggestions from the ticked pages (nothing is saved; the page saves the ones kept).
+  app.post("/api/faqs/from-website/suggest", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      const businessAccountId = req.user?.businessAccountId;
+      if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+      const account = await storage.getBusinessAccount(businessAccountId);
+      if (!account?.website) return res.status(400).json({ error: "Add the website address in Account settings first." });
+      const { suggestFaqsFromPages, FAQ_MAX_PAGES } = await import("./services/websiteFaqs");
+      const pages: string[] = Array.isArray(req.body?.pages) ? req.body.pages.filter((p: unknown) => typeof p === "string" && p.trim()) : [];
+      if (pages.length === 0) return res.status(400).json({ error: "Tick at least one page." });
+      if (pages.length > FAQ_MAX_PAGES) return res.status(400).json({ error: `Tick at most ${FAQ_MAX_PAGES} pages.` });
+      const bare = (h: string) => h.toLowerCase().replace(/^www\./, "");
+      try {
+        const site = bare(new URL(/^https?:\/\//i.test(account.website) ? account.website : `https://${account.website}`).hostname);
+        if (pages.some(p => !/^https?:\/\//i.test(p) || bare(new URL(p).hostname) !== site)) {
+          return res.status(400).json({ error: "All pages must be from the account's website." });
+        }
+      } catch {
+        return res.status(400).json({ error: "Invalid page address." });
+      }
+      const existing = await storage.getAllFaqs(businessAccountId);
+      const result = await suggestFaqsFromPages(pages, {
+        businessAccountId,
+        openaiApiKey: account.openaiApiKey,
+        existingQuestions: existing.map(f => f.question),
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[FAQs from website] Error:", error);
+      res.status(500).json({ error: error.message || "Couldn't read the website." });
     }
   });
 

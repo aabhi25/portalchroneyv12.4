@@ -32,11 +32,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Sparkles, AlertTriangle, CheckCircle, Lightbulb, TrendingUp, Loader2, Copy, Search, X } from "lucide-react";
+import { Plus, Pencil, Trash2, Sparkles, AlertTriangle, CheckCircle, Lightbulb, TrendingUp, Loader2, Copy, Search, X, Globe } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
+import AddFaqsFromWebsite from "@/components/AddFaqsFromWebsite";
 import { ChannelPicker, ChannelBadge, ChannelFilterSelect, type ChannelFilterValue } from "@/components/ChannelPicker";
 import { describeChannels, sanitizeChannels, type KnowledgeChannel } from "@shared/knowledgeChannels";
 
@@ -79,6 +80,7 @@ export default function AdminFaqs() {
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [channelFilter, setChannelFilter] = useState<ChannelFilterValue>("all");
+  const [fromWebsiteOpen, setFromWebsiteOpen] = useState(false);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -338,11 +340,18 @@ export default function AdminFaqs() {
               Manage your frequently asked questions
             </p>
           </div>
-          <Button onClick={openCreateDialog} className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
-            <Plus className="mr-2 h-4 w-4" />
-            Add FAQ
-          </Button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button variant="outline" onClick={() => setFromWebsiteOpen(true)} data-testid="button-faqs-from-website">
+              <Globe className="mr-2 h-4 w-4" />
+              Add from website
+            </Button>
+            <Button onClick={openCreateDialog} className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700">
+              <Plus className="mr-2 h-4 w-4" />
+              Add FAQ
+            </Button>
+          </div>
         </div>
+        <AddFaqsFromWebsite open={fromWebsiteOpen} onOpenChange={setFromWebsiteOpen} />
 
         <div className="flex items-center gap-2 mb-4">
         <div className="relative flex-1">

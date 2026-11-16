@@ -386,3 +386,21 @@ export function mainPageText(html: string): string {
   const main = $("main, [role='main'], article, #MainContent, #main, .main-content").first();
   return htmlToText((main.length ? main : $("body")).html() || "");
 }
+
+/** What kind of page an address is (for a page that wasn't found by `discoverInfoPages`). */
+export function kindOfPage(url: string): PageKind {
+  try {
+    const u = new URL(url);
+    const c = classify(u, new URL(u.origin));
+    return "leftOut" in c ? "other" : c.kind;
+  } catch {
+    return "other";
+  }
+}
+
+/** A page's HTML, read the way the website scan reads pages (public addresses only, redirects checked). */
+export async function fetchScanHtml(url: string): Promise<string> {
+  const res = await get(url, "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5", 20_000);
+  if (res.status !== 200) throw new WooStoreError(`The page answered ${res.status}`, res.status);
+  return res.text;
+}
