@@ -52,9 +52,10 @@ router.get("/api/home/summary", requireAuth, requireBusinessAccount, async (req,
       count(sql`SELECT count(*)::int AS n FROM conversations WHERE business_account_id = ${accountId} AND created_at >= ${s} AND is_internal_test = 'false'`),
       count(sql`SELECT count(*)::int AS n FROM leads WHERE business_account_id = ${accountId} AND created_at >= ${s} AND (COALESCE(TRIM(phone), '') <> '' OR COALESCE(TRIM(email), '') <> '')`),
       count(sql`SELECT count(*)::int AS n FROM whatsapp_sessions WHERE business_account_id = ${accountId} AND last_user_message_at >= ${s}`),
-      // Leads only, counted like WhatsApp Insights: incoming, not just a message (whatsapp_leads also holds
-      // every message and reply), and qualified when the account requires PAN + email.
-      count(sql`SELECT count(*)::int AS n FROM whatsapp_leads WHERE business_account_id = ${accountId} AND direction = 'incoming' AND status <> 'message_only' ${waQualifiedOnly ? sql`AND qualified_at IS NOT NULL` : sql``} AND received_at >= ${s}`),
+      // Leads: each WhatsApp number once (one person can have several lead records in a day — a new
+      // enquiry, a journey restarted), incoming, not just a message (whatsapp_leads also holds every
+      // message and reply), and qualified when the account requires PAN + email.
+      count(sql`SELECT count(DISTINCT RIGHT(regexp_replace(sender_phone, '\\D', '', 'g'), 10))::int AS n FROM whatsapp_leads WHERE business_account_id = ${accountId} AND direction = 'incoming' AND status <> 'message_only' ${waQualifiedOnly ? sql`AND qualified_at IS NOT NULL` : sql``} AND received_at >= ${s}`),
       count(sql`SELECT count(DISTINCT sender_id)::int AS n FROM instagram_messages WHERE business_account_id = ${accountId} AND direction = 'incoming' AND created_at >= ${s}`),
       count(sql`SELECT count(*)::int AS n FROM instagram_leads WHERE business_account_id = ${accountId} AND created_at >= ${s}`),
       count(sql`SELECT count(DISTINCT sender_id)::int AS n FROM facebook_messages WHERE business_account_id = ${accountId} AND direction = 'incoming' AND created_at >= ${s}`),

@@ -73,7 +73,8 @@ export default function HomeDashboard({ user }: { user: MeResponseDto | null }) 
     if (!a) return null;
     switch (id) {
       case "website": return [["Conversations", a.website.people], ["Leads", a.website.leads]];
-      case "whatsapp": return [["People", a.whatsapp.people], ["Leads", a.whatsapp.leads]];
+      // One number only: each WhatsApp number is a lead (the phone comes with every message).
+      case "whatsapp": return [["Leads", a.whatsapp.leads]];
       case "instagram": return [["People", a.instagram.people], ["Leads", a.instagram.leads]];
       case "facebook": return [["People", a.facebook.people], ["Leads", a.facebook.leads]];
       case "calls": return [["Calls", a.calls.calls], ["Answered", a.calls.answered]];
