@@ -20877,7 +20877,8 @@ Return ONLY a JSON object with this exact structure (use -1 for columns not foun
           availableLanguages: widgetSettings.availableLanguages,
           quickBrowseEnabled: widgetSettings.quickBrowseEnabled,
           quickBrowseButtons: widgetSettings.quickBrowseButtons,
-          visualSearchEnabled: widgetSettings.visualSearchEnabled,
+          // Photo search only when it can run (a Gemini key, the account's or the platform's).
+          visualSearchEnabled: widgetSettings.visualSearchEnabled === 'true' && !!(await (await import("./services/geminiKeys")).resolveGeminiKey(businessAccount)) ? 'true' : 'false',
           productComparisonEnabled: widgetSettings.productComparisonEnabled,
           voiceModeEnabled: widgetSettings.voiceModeEnabled,
         } : null,
@@ -27391,7 +27392,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       // The widget is loading: warm the business context for the first message (fire-and-forget).
       warmChatContextOnOpen(businessAccountId, settings, businessAccount);
       const voiceModeEnabled = businessAccount?.voiceModeEnabled === "true";
-      const visualSearchEnabled = businessAccount?.visualSearchEnabled === "true";
+      // Photo search is offered only when it can run: switched on and a Gemini key (the account's or the platform's).
+      const visualSearchEnabled = businessAccount?.visualSearchEnabled === "true"
+        && !!(await (await import("./services/geminiKeys")).resolveGeminiKey(businessAccount!));
 
       // Force chat-only mode when voice mode is disabled
       const chatMode = !voiceModeEnabled ? "chat-only" : (settings.chatMode || "both");
@@ -27521,7 +27524,9 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         settings = { ...settings, widgetHeaderText: businessAccount.name };
       }
       const voiceModeEnabled = businessAccount?.voiceModeEnabled === "true";
-      const visualSearchEnabled = businessAccount?.visualSearchEnabled === "true";
+      // Photo search is offered only when it can run: switched on and a Gemini key (the account's or the platform's).
+      const visualSearchEnabled = businessAccount?.visualSearchEnabled === "true"
+        && !!(await (await import("./services/geminiKeys")).resolveGeminiKey(businessAccount!));
 
       // Force chat-only mode when voice mode is disabled
       const chatMode = !voiceModeEnabled ? "chat-only" : (settings.chatMode || "both");
