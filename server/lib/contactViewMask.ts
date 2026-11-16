@@ -2,7 +2,7 @@
  * "Hide from view" (auto-delete settings, hideContactsFromView): a lead's phone numbers and emails
  * are shown hidden in the portal from the moment the lead comes in. Nothing is overwritten in the
  * database, so CRM sync, retries, AI calls and WhatsApp keep using the real values. Super admins
- * still see the real details.
+ * still see the real details (unless they switch on "Business user view").
  *
  * Applied in one place: a middleware that hides contacts in the JSON of every portal route that
  * shows website or WhatsApp leads or their chats (lists, details, exports, timelines, group admin
@@ -191,6 +191,16 @@ async function accountsFor(req: Request, path: string): Promise<string[] | null>
   return null;
 }
 
+/**
+ * A super admin in "Business user view" (the switch in the orange viewing bar) sees what the
+ * account's own users see. The page marks its requests with the account it is viewing; it can only
+ * make the server hide more, never show more.
+ */
+function inBusinessUserView(req: Request): boolean {
+  const viewing = req.get("x-business-user-view");
+  return !!viewing && viewing === (req.user?.activeBusinessAccountId || req.user?.businessAccountId);
+}
+
 export function contactViewMaskMiddleware(req: Request, res: Response, next: NextFunction) {
   const path = req.path;
   if (!path.startsWith("/api/leads") && !path.startsWith("/api/conversations") && !path.startsWith("/api/journey-leads")
@@ -202,7 +212,7 @@ export function contactViewMaskMiddleware(req: Request, res: Response, next: Nex
   const send = res.json.bind(res);
   res.json = ((body: unknown) => {
     // Errors and super admins: as is. Decided at send time, after requireAuth has set req.user.
-    if (res.statusCode >= 400 || !req.user || req.user.role === "super_admin") return send(body);
+    if (res.statusCode >= 400 || !req.user || (req.user.role === "super_admin" && !inBusinessUserView(req))) return send(body);
     accountsFor(req, path)
       .then(async ids => (ids && ids.length && (await anyHides(ids)) ? hideForRoute(path, body) : body))
       // If the check itself fails, hide rather than risk showing the details.

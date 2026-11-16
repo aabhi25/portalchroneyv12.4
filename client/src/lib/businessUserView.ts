@@ -40,3 +40,34 @@ export function applyBusinessUserView<T>(me: T): T {
   }
   return me;
 }
+
+/** Tells the server this tab is in business user view, so it hides what the account's users can't see. */
+export const BUSINESS_USER_VIEW_HEADER = "X-Business-User-View";
+
+/**
+ * Adds BUSINESS_USER_VIEW_HEADER (the account being viewed) to the portal's own /api requests while
+ * the switch is on. It only ever makes the server send less (hidden contact details), never more.
+ */
+function installBusinessUserViewHeader(): void {
+  if (typeof window === "undefined" || (window as any).__businessUserViewFetch) return;
+  (window as any).__businessUserViewFetch = true;
+  const original = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    const accountId = storedAccountId();
+    if (!accountId) return original(input, init);
+    const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    let sameOriginApi = false;
+    try {
+      const url = new URL(href, window.location.href);
+      sameOriginApi = url.origin === window.location.origin && url.pathname.startsWith("/api/");
+    } catch {
+      sameOriginApi = false;
+    }
+    if (!sameOriginApi) return original(input, init);
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    headers.set(BUSINESS_USER_VIEW_HEADER, accountId);
+    return original(input, { ...init, headers });
+  };
+}
+
+installBusinessUserViewHeader();

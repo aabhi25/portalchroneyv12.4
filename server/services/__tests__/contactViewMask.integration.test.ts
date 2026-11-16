@@ -111,6 +111,10 @@ async function main() {
 
   user = { id: 's1', role: 'super_admin', businessAccountId: A.id, activeBusinessAccountId: A.id };
   expect((await get('/api/leads')).leads[0].phone === PHONE, 'Super admin sees the real details');
+  const asBusiness = await (await fetch(`http://127.0.0.1:${port}/api/leads`, { headers: { 'X-Business-User-View': A.id } })).json();
+  expect(asBusiness.leads[0].phone === '******3210', "Super admin in Business user view sees what the account's users see");
+  const otherAccount = await (await fetch(`http://127.0.0.1:${port}/api/leads`, { headers: { 'X-Business-User-View': B.id } })).json();
+  expect(otherAccount.leads[0].phone === PHONE, 'the switch only counts for the account being viewed');
 
   user = { id: 'u3', role: 'business_user', businessAccountId: C.id };
   expect((await get('/api/leads')).leads[0].phone === PHONE, 'Account that does not hide: real details shown');
