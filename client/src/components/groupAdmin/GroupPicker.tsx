@@ -19,22 +19,31 @@ export function GroupAdminGroupPicker() {
   }, [current, groupId, setGroupId]);
 
   if (!current) return null;
+  // Same size and icon tile as the menu items below it. (A div: the dropdown styles its inner spans.)
+  const icon = (
+    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-purple-100" aria-hidden>
+      <Layers className="h-3.5 w-3.5 text-purple-600" />
+    </div>
+  );
   if (groups.length === 1) {
     return (
-      <div className="mx-2 mb-2 flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-sm text-gray-800" title="Your group">
-        <Layers className="h-4 w-4 shrink-0 text-purple-600" />
-        <span className="truncate font-medium">{current.groupName}</span>
+      <div className="mb-2 flex h-9 items-center gap-2 rounded-lg border border-gray-200 bg-white pl-1.5 pr-2 text-[13px] font-medium text-gray-800" title={current.groupName}>
+        {icon}
+        <span className="min-w-0 truncate">{current.groupName}</span>
       </div>
     );
   }
   return (
-    <div className="mx-2 mb-2">
+    <div className="mb-2">
       <Select value={current.groupId} onValueChange={setGroupId}>
-        <SelectTrigger className="h-9 bg-white text-sm font-medium" data-testid="select-group-admin-group" aria-label="Group">
-          <span className="flex min-w-0 items-center gap-2">
-            <Layers className="h-4 w-4 shrink-0 text-purple-600" />
-            <span className="truncate"><SelectValue /></span>
-          </span>
+        <SelectTrigger
+          className="h-9 gap-2 rounded-lg border-gray-200 bg-white pl-1.5 pr-2 text-[13px] font-medium text-gray-800 shadow-none focus:ring-1 focus:ring-purple-300 focus:ring-offset-0 [&>span]:min-w-0 [&>span]:flex-1 [&>span]:text-left"
+          data-testid="select-group-admin-group"
+          aria-label="Group"
+          title={current.groupName}
+        >
+          {icon}
+          <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {groups.map(g => <SelectItem key={g.groupId} value={g.groupId}>{g.groupName}</SelectItem>)}
