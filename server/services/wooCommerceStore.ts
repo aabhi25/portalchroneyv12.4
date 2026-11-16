@@ -363,8 +363,8 @@ async function keyedCurrency(base: string, keys: WooKeys): Promise<string | null
   }
 }
 
-/** Every published product on the website, all pages. Throws WooStoreError with a plain message. */
-export async function fetchStoreProducts(storeUrl: string, opts: { maxPages?: number; keys?: WooKeys } = {}): Promise<WooFetchResult> {
+/** Every published product on the website (or the first `limit`), all pages. Throws WooStoreError with a plain message. */
+export async function fetchStoreProducts(storeUrl: string, opts: { maxPages?: number; keys?: WooKeys; limit?: number | null } = {}): Promise<WooFetchResult> {
   const base = normalizeStoreUrl(storeUrl);
   const maxPages = opts.maxPages ?? MAX_PAGES;
   const products: WooProduct[] = [];
@@ -376,8 +376,8 @@ export async function fetchStoreProducts(storeUrl: string, opts: { maxPages?: nu
     if (!Array.isArray(body)) throw new WooStoreError("The website sent back something that isn't a product list.");
     if (page === 1) {
       totalPages = Math.max(1, Number(headers.get("x-wp-totalpages")) || 1);
-      // Never sync part of a catalog: products past the limit would look deleted.
-      if (totalPages > maxPages) throw new WooStoreError(`The website has more than ${maxPages * PER_PAGE} products, which is more than the sync can read.`);
+      // Never sync part of a catalog by accident: products past the limit would look deleted.
+      if (totalPages > maxPages && !opts.limit) throw new WooStoreError(`The website has more than ${maxPages * PER_PAGE} products, which is more than the sync can read.`);
     }
     for (const raw of body) {
       const mapped = opts.keys ? mapRestProduct(raw) : mapStoreProduct(raw);
@@ -385,7 +385,9 @@ export async function fetchStoreProducts(storeUrl: string, opts: { maxPages?: nu
       seen.add(mapped.externalId);
       products.push(mapped);
       if (!opts.keys && !currency && typeof (raw as any)?.prices?.currency_code === "string") currency = (raw as any).prices.currency_code;
+      if (opts.limit && products.length >= opts.limit) break;
     }
+    if (opts.limit && products.length >= opts.limit) break;
     if (body.length < PER_PAGE && page >= totalPages) break;
   }
   if (opts.keys) currency = await keyedCurrency(base, opts.keys);

@@ -1,0 +1,1 @@
+ALTER TABLE "widget_settings" ADD COLUMN IF NOT EXISTS "woo_product_limit" integer;

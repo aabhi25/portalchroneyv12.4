@@ -6,7 +6,7 @@ import { requireAuth, requireBusinessAccount } from "../auth";
 import { storage } from "../storage";
 import { getLiveProductSource } from "../services/productSourceSwitch";
 import { normalizeStoreUrl, testStore, WooStoreError, type WooKeys } from "../services/wooCommerceStore";
-import { detectWebsite, isWebsiteReadMode } from "../services/websiteStores";
+import { detectWebsite, isWebsiteReadMode, parseProductLimit } from "../services/websiteStores";
 import { disconnectWooCommerce, savedWooKeys, syncWooCommerce, WOO_SYNC_HOUR_CHOICES, type WooReadMode, type WooSyncResult } from "../services/wooCommerceSync";
 
 /**
@@ -53,6 +53,7 @@ async function loadState(businessAccountId: string) {
       consumerSecret: widgetSettings.wooConsumerSecret,
       connected: widgetSettings.wooConnected,
       syncHours: widgetSettings.wooSyncHours,
+      productLimit: widgetSettings.wooProductLimit,
       status: widgetSettings.wooSyncStatus,
       startedAt: widgetSettings.wooSyncStartedAt,
       lastSyncedAt: widgetSettings.wooLastSyncedAt,
@@ -95,6 +96,7 @@ router.get("/api/woocommerce/status", requireAuth, requireBusinessAccount, async
       hasKeys: !!(state.consumerKey && state.consumerSecret),
       syncHours,
       syncHourChoices: WOO_SYNC_HOUR_CHOICES,
+      productLimit: state.productLimit ?? null,
       syncing: state.status === "syncing",
       lastSyncedAt: state.lastSyncedAt ?? null,
       lastResult: (state.lastResult as WooSyncResult | null) ?? null,
@@ -157,8 +159,10 @@ router.post("/api/woocommerce/connect", requireAuth, requireBusinessAccount, req
     if (state?.featureOn !== "true") return res.status(400).json({ error: "Switch Website products on in Features first." });
     let storeUrl: string;
     let choice: ReturnType<typeof readChoice>;
+    let productLimit: number | null;
     try {
       storeUrl = normalizeStoreUrl(req.body?.storeUrl);
+      productLimit = parseProductLimit(req.body?.productLimit);
       if (req.body?.readMode === "auto" || req.body?.readMode == null) {
         // No way chosen on the page: check the website now.
         const found = await detectWebsite(storeUrl);
@@ -176,7 +180,7 @@ router.post("/api/woocommerce/connect", requireAuth, requireBusinessAccount, req
       await storage.upsertWidgetSettings(businessAccountId, { wooSyncHours: hours });
     }
     // The chat switches to the website's products only if this first sync works.
-    const result = await waitForSync(syncWooCommerce(businessAccountId, "connect", { storeUrl, ...choice }));
+    const result = await waitForSync(syncWooCommerce(businessAccountId, "connect", { storeUrl, ...choice, productLimit }));
     if (!result) return res.json({ success: true, pending: true, message: "Reading the website's products. Big shops take a few minutes; this page updates when it's done." });
     res.json({ success: result.ok, result, message: result.ok ? `Connected. ${result.total} products are now used in chat.` : result.error });
   } catch (error: any) {
@@ -202,10 +206,23 @@ router.put("/api/woocommerce/settings", requireAuth, requireBusinessAccount, req
   try {
     const businessAccountId = accountOf(req);
     if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
-    const hours = Number(req.body?.syncHours);
-    if (!WOO_SYNC_HOUR_CHOICES.includes(hours)) return res.status(400).json({ error: "Pick how often to re-read the website." });
-    await storage.upsertWidgetSettings(businessAccountId, { wooSyncHours: hours });
-    res.json({ success: true, syncHours: hours });
+    const changes: { wooSyncHours?: number; wooProductLimit?: number | null } = {};
+    if (req.body?.syncHours !== undefined) {
+      const hours = Number(req.body.syncHours);
+      if (!WOO_SYNC_HOUR_CHOICES.includes(hours)) return res.status(400).json({ error: "Pick how often to re-read the website." });
+      changes.wooSyncHours = hours;
+    }
+    // A new product limit is used from the next sync (the page runs one straight away).
+    if (req.body?.productLimit !== undefined) {
+      try {
+        changes.wooProductLimit = parseProductLimit(req.body.productLimit);
+      } catch (e: any) {
+        return res.status(400).json({ error: e.message });
+      }
+    }
+    if (Object.keys(changes).length === 0) return res.status(400).json({ error: "Nothing to save." });
+    await storage.upsertWidgetSettings(businessAccountId, changes as any);
+    res.json({ success: true, ...changes });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

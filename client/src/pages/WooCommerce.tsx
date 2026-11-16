@@ -45,6 +45,9 @@ export default function WooCommerce() {
   const [consumerSecret, setConsumerSecret] = useState("");
   // Changing the website, the way it's read or the keys while connected.
   const [editing, setEditing] = useState(false);
+  // Only the first N products (a demo needs a few, not the whole catalog).
+  const [limitOn, setLimitOn] = useState(false);
+  const [limitN, setLimitN] = useState("50");
 
   useEffect(() => {
     if (!status) return;
@@ -54,6 +57,14 @@ export default function WooCommerce() {
   useEffect(() => {
     if (status?.readMode) setReadMode(status.readMode);
   }, [status?.readMode]);
+  useEffect(() => {
+    if (!status) return;
+    setLimitOn(status.productLimit != null);
+    if (status.productLimit != null) setLimitN(String(status.productLimit));
+  }, [status?.productLimit]);
+
+  const limitValid = !limitOn || (/^\d+$/.test(limitN.trim()) && Number(limitN) >= 1 && Number(limitN) <= 100000);
+  const limitValue = limitOn && limitValid ? Number(limitN) : null;
 
   const readBody = () => useKeys
     ? { storeUrl, readMode: "keys", consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim() }
@@ -91,7 +102,7 @@ export default function WooCommerce() {
   });
 
   const connectMutation = useMutation({
-    mutationFn: () => apiRequest<{ success: boolean; pending?: boolean; message: string }>("POST", "/api/woocommerce/connect", { ...readBody(), syncHours: Number(syncHours) }),
+    mutationFn: () => apiRequest<{ success: boolean; pending?: boolean; message: string }>("POST", "/api/woocommerce/connect", { ...readBody(), syncHours: Number(syncHours), productLimit: limitValue }),
     onSuccess: (r) => {
       setConfirm(null);
       refresh();
@@ -124,6 +135,56 @@ export default function WooCommerce() {
     },
     onError: (e: Error) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
   });
+
+  // A new limit is saved, then a sync brings the catalog in line with it.
+  const limitMutation = useMutation({
+    mutationFn: () => apiRequest("PUT", "/api/woocommerce/settings", { productLimit: limitValue }),
+    onSuccess: () => syncMutation.mutate(),
+    onError: (e: Error) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
+  });
+
+  const limitPicker = (
+    <div className="space-y-1.5">
+      <Label>Products to bring in</Label>
+      <div className="flex flex-wrap items-center gap-2" role="radiogroup">
+        {([
+          { on: false, label: "All products" },
+          { on: true, label: "Only the first" },
+        ]).map(o => (
+          <button
+            key={o.label}
+            type="button"
+            role="radio"
+            aria-checked={limitOn === o.on}
+            onClick={() => setLimitOn(o.on)}
+            className={`h-9 rounded-md border px-3 text-sm transition-colors ${limitOn === o.on ? "border-purple-500 bg-purple-50 font-medium ring-1 ring-purple-500 dark:bg-purple-950/30" : "hover:bg-muted/50"}`}
+            data-testid={`radio-woo-limit-${o.on ? "some" : "all"}`}
+          >
+            {o.label}
+          </button>
+        ))}
+        {limitOn && (
+          <span className="flex items-center gap-2 text-sm">
+            <Input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={100000}
+              className={`h-9 w-24 ${limitValid ? "" : "border-red-400"}`}
+              value={limitN}
+              onChange={(e) => setLimitN(e.target.value)}
+              aria-label="How many products"
+              data-testid="input-woo-limit"
+            />
+            products
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {limitOn ? "Handy for a demo: only the first products the website lists are brought in." : "Every product on the website is brought in."}
+      </p>
+    </div>
+  );
 
   const disconnectMutation = useMutation({
     mutationFn: () => apiRequest<{ success: boolean; message: string }>("POST", "/api/woocommerce/disconnect"),
@@ -179,6 +240,7 @@ export default function WooCommerce() {
                 <div>Website: <a href={status.storeUrl ?? "#"} target="_blank" rel="noreferrer" className="font-medium text-primary underline" data-testid="text-woo-store-url">{status.storeUrl}</a></div>
                 <div data-testid="text-woo-read-mode">Reading: {readModeLabel(status.readMode)}</div>
                 <div data-testid="text-woo-live">Live in chat: <span className="font-medium">{status.counts.website} website products</span> · {status.counts.manual} manual products kept, not used in chat</div>
+                <div data-testid="text-woo-limit">Bringing in: {status.productLimit != null ? `only the first ${status.productLimit} products the website lists` : "all products"}</div>
                 {status.lastSyncedAt && <div className="text-muted-foreground">Last good sync: {when(status.lastSyncedAt)}</div>}
                 {status.nextSyncAt && !status.syncing && <div className="text-muted-foreground">Next sync: {format(new Date(status.nextSyncAt), "d MMM, h:mm a")}</div>}
               </div>
@@ -202,6 +264,14 @@ export default function WooCommerce() {
                 <Button variant="outline" onClick={() => setConfirm("disconnect")} disabled={busy} data-testid="button-woo-disconnect">
                   <Unplug className="mr-2 h-4 w-4" /> Disconnect
                 </Button>
+              </div>
+              <div className="flex flex-wrap items-end gap-3">
+                {limitPicker}
+                {(limitValue ?? null) !== (status.productLimit ?? null) && (
+                  <Button onClick={() => limitMutation.mutate()} disabled={busy || !limitValid || limitMutation.isPending} data-testid="button-woo-limit-apply">
+                    {limitMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Apply and sync
+                  </Button>
+                )}
               </div>
             </>
           ) : (
@@ -265,6 +335,7 @@ export default function WooCommerce() {
                   </p>
                 </div>
               )}
+              {limitPicker}
               <div className="space-y-1.5">
                 <Label>Re-read the website</Label>
                 <Select value={syncHours} onValueChange={setSyncHours}>
@@ -294,7 +365,7 @@ export default function WooCommerce() {
                     {testMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Test keys
                   </Button>
                 )}
-                <Button onClick={() => (status.connected ? connectMutation.mutate() : setConfirm("connect"))} disabled={!storeUrl.trim() || busy || (!useKeys && detected?.success === true && !detected.readMode) || (!useKeys && detected?.success === false)} data-testid="button-woo-connect">
+                <Button onClick={() => (status.connected ? connectMutation.mutate() : setConfirm("connect"))} disabled={!storeUrl.trim() || busy || !limitValid || (!useKeys && detected?.success === true && !detected.readMode) || (!useKeys && detected?.success === false)} data-testid="button-woo-connect">
                   {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />} {status.connected ? "Save and sync" : "Connect"}
                 </Button>
                 {status.connected && (
@@ -330,10 +401,11 @@ export default function WooCommerce() {
           <CardContent className="space-y-3 text-sm">
             {last.ok ? (
               <div className="flex flex-wrap gap-2" data-testid="text-woo-last-result">
-                <Badge variant="secondary">{last.total} on the website</Badge>
+                <Badge variant="secondary">{last.limit != null ? `${last.total} brought in` : `${last.total} on the website`}</Badge>
                 <Badge variant="secondary">{last.added} added</Badge>
                 <Badge variant="secondary">{last.updated} updated</Badge>
                 <Badge variant="secondary">{last.removed} removed</Badge>
+                {last.limit != null && <Badge variant="outline">first {last.limit} only</Badge>}
               </div>
             ) : (
               <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200" data-testid="text-woo-last-error">
@@ -361,7 +433,7 @@ export default function WooCommerce() {
           <DialogHeader>
             <DialogTitle>Use the website's products in chat?</DialogTitle>
             <DialogDescription>
-              The products on <span className="break-all">{(detected?.success && detected.storeUrl) || storeUrl.trim() || "the website"}</span> are read now. When that works, the chat uses only those products.
+              The products on <span className="break-all">{(detected?.success && detected.storeUrl) || storeUrl.trim() || "the website"}</span> are read now{limitValue ? ` (only the first ${limitValue})` : ""}. When that works, the chat uses only those products.
               {status.counts.manual > 0 ? ` Your ${status.counts.manual} manual products are kept as they are, but not used in chat while the website is connected.` : ""}
             </DialogDescription>
           </DialogHeader>

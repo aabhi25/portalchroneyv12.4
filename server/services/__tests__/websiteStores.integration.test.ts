@@ -7,7 +7,9 @@
  *  - "Check website": Shopify, WooCommerce (public list, or keys needed), other shops read from their
  *    sitemap's product pages, and websites whose products can't be found;
  *  - Connect + later syncs for a Shopify shop (2 pages) and a page-data shop: added / changed / removed,
- *    the chat switches to the website products; too many product pages failing changes nothing.
+ *    the chat switches to the website products; too many product pages failing changes nothing;
+ *  - product limit (e.g. 50 for a demo): only the first N read (no more requests than needed), lowering
+ *    it removes the rest without tripping the safety rule, raising it brings them back.
  *
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55581/postgres?sslmode=disable \
  *   WEBSITE_STORES_TEST_DB=1 npx tsx server/services/__tests__/websiteStores.integration.test.ts
@@ -141,9 +143,14 @@ async function main() {
     if (u.pathname === '/') return send(res, 200, '<html><script type="text/x-magento-init">{}</script></html>', 'text/html');
     send(res, 404, 'not found', 'text/plain');
   });
+  let wooRequests = 0;
   const woo = await startSite((u, res) => {
     if (u.pathname === '/wp-json/wc/store/v1/products') {
-      return send(res, 200, JSON.stringify([{ id: 1, name: 'Strep A', prices: { price: '10000', currency_code: 'INR', currency_minor_unit: 2 } }]), 'application/json', { 'x-wp-total': '42' });
+      // 42 products, per_page at a time.
+      wooRequests++;
+      const per = Number(u.searchParams.get('per_page') || 10), page = Number(u.searchParams.get('page') || 1);
+      const all = Array.from({ length: 42 }, (_, i) => ({ id: i + 1, name: i === 0 ? 'Strep A' : `Kit ${i + 1}`, prices: { price: '10000', currency_code: 'INR', currency_minor_unit: 2 } }));
+      return send(res, 200, JSON.stringify(all.slice((page - 1) * per, page * per)), 'application/json', { 'x-wp-total': '42', 'x-wp-totalpages': String(Math.ceil(42 / per)) });
     }
     send(res, 404, '{}');
   });
@@ -157,7 +164,8 @@ async function main() {
   const { storage } = await import('../../storage');
   const { and, eq } = await import('drizzle-orm');
   const { businessAccounts, products, categories, productCategories } = await import('@shared/schema');
-  const { mapShopifyProduct, extractPageProduct, detectWebsite, findProductPages } = await import('../websiteStores');
+  const { mapShopifyProduct, extractPageProduct, detectWebsite, findProductPages, fetchShopifyProducts, fetchPageDataProducts, parseProductLimit } = await import('../websiteStores');
+  const { fetchStoreProducts } = await import('../wooCommerceStore');
   const { syncWooCommerce } = await import('../wooCommerceSync');
   const { getLiveProductSource } = await import('../productSourceSwitch');
   const { setMessagingImageStore } = await import('../messagingImages');
@@ -234,6 +242,30 @@ async function main() {
   const c3 = await syncWooCommerce(A, 'manual');
   expect(!c3.ok && (await storage.getChatProducts(A)).length === 259, 'Shopify shop suddenly empty → nothing changed', c3.error);
   shop.items = keep;
+
+  // ── 4b. Product limit (demo) ──
+  expect(parseProductLimit('') === null && parseProductLimit('all') === null && parseProductLimit('50') === 50, 'limit: empty/all → all products, "50" → 50');
+  let limitErr = '';
+  try { parseProductLimit('0'); } catch (e: any) { limitErr = e.message; }
+  expect(/whole number/.test(limitErr), 'limit: 0 is refused in plain words', limitErr);
+  const lim = await fetchShopifyProducts(shopify.base, { limit: 50 });
+  expect(lim.products.length === 50 && lim.products[0].name === 'Ring 0', 'Shopify limit 50: the first 50 products the shop lists', lim.products.length);
+  wooRequests = 0;
+  const wooLim = await fetchStoreProducts(woo.base, { limit: 5 });
+  expect(wooLim.products.length === 5 && wooRequests === 1, 'WooCommerce limit 5: one request, 5 products', [wooLim.products.length, wooRequests]);
+  const wooAll = await fetchStoreProducts(woo.base);
+  expect(wooAll.products.length === 42, 'WooCommerce without a limit: all 42');
+  const pageLim = await fetchPageDataProducts(pageShop.base, { limit: 5 });
+  expect(pageLim.products.length === 5, 'product pages limit 5: stops after 5 products', pageLim.products.length);
+
+  const l1 = await syncWooCommerce(A, 'connect', { storeUrl: shopify.base, readMode: 'shopify', productLimit: 50 });
+  expect(l1.ok && l1.total === 50 && l1.removed === 209 && l1.limit === 50, 'lower the limit to 50: 209 removed on purpose (safety rule not tripped)', l1);
+  expect((await storage.getWidgetSettings(A))?.wooProductLimit === 50 && (await storage.getChatProducts(A)).length === 50, 'limit saved; chat has 50 products');
+  const l2 = await syncWooCommerce(A, 'scheduled');
+  expect(l2.ok && l2.total === 50 && l2.unchanged === 50, 'later syncs keep the limit', l2);
+  await storage.upsertWidgetSettings(A, { wooProductLimit: null } as any);
+  const l3 = await syncWooCommerce(A, 'manual');
+  expect(l3.ok && l3.total === 259 && l3.added === 209 && !l3.limit, 'limit removed: all products back', l3);
 
   // ── 5. Connect a shop read from its product pages ──
   const B = (await storage.createBusinessAccount({ name: `Pages test ${rnd()}`, website: 'https://example.test' } as any)).id;

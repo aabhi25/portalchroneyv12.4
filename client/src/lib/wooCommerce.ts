@@ -32,6 +32,8 @@ export interface WooStatus {
   hasKeys: boolean;
   syncHours: number;
   syncHourChoices: number[];
+  /** Only the first N products the website lists (e.g. 50 for a demo); null = all. */
+  productLimit: number | null;
   syncing: boolean;
   lastSyncedAt: string | null;
   lastResult: {
@@ -44,6 +46,7 @@ export interface WooStatus {
     removed: number;
     unchanged: number;
     currency: string | null;
+    limit?: number | null;
     error?: string;
     problems?: { name: string; message: string }[];
   } | null;

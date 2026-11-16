@@ -17,6 +17,8 @@ import { prepareMessagingImages, removeMessagingImages } from "./messagingImages
  *
  * Safety rule: if the website suddenly sends no products, or less than half of what we have, nothing is
  * changed and the sync is reported as failed, so a hiccup on the website can't empty the chat.
+ * A product limit (`woo_product_limit`, e.g. 50 for a demo) brings in only the first N products the
+ * website lists; lowering it removes the rest on purpose, so the rule compares against the limit.
  */
 
 export interface WooSyncResult {
@@ -29,6 +31,7 @@ export interface WooSyncResult {
   removed: number;
   unchanged: number;
   currency: string | null;
+  limit?: number | null; // only the first N products were brought in
   error?: string;
   problems?: { name: string; message: string }[];
 }
@@ -148,7 +151,7 @@ export function savedWooKeys(settings: { wooConsumerKey?: string | null; wooCons
 export async function syncWooCommerce(
   businessAccountId: string,
   trigger: WooSyncResult["trigger"],
-  opts: { storeUrl?: string; readMode?: WooReadMode; keys?: WooKeys } = {},
+  opts: { storeUrl?: string; readMode?: WooReadMode; keys?: WooKeys; productLimit?: number | null } = {},
 ): Promise<WooSyncResult> {
   if (!(await claimSync(businessAccountId))) {
     return emptyResult(trigger, "A sync is already running. Wait for it to finish.");
@@ -162,7 +165,8 @@ export async function syncWooCommerce(
     const storeUrl = readMode === "shopify" || readMode === "pagedata" ? siteOrigin(String(typedUrl ?? "")) : normalizeStoreUrl(typedUrl);
     const keys = readMode === "keys" ? opts.keys ?? savedWooKeys(settings) : undefined;
     if (readMode === "keys" && !keys) throw new WooStoreError("Add the website's consumer key and secret first.");
-    const fetched = await readWebsiteProducts(storeUrl, readMode, keys);
+    const limit = opts.productLimit !== undefined ? opts.productLimit : settings?.wooProductLimit ?? null;
+    const fetched = await readWebsiteProducts(storeUrl, readMode, keys, limit);
 
     const existing = await db
       .select()
@@ -173,8 +177,9 @@ export async function syncWooCommerce(
     if (fetched.products.length === 0) {
       throw new WooStoreError("The website sent back no products, so nothing was changed. Check that the products are published.");
     }
-    if (existing.length >= SAFETY_MIN_EXISTING && fetched.products.length < existing.length / 2) {
-      throw new WooStoreError(`The website sent back only ${fetched.products.length} products (we have ${existing.length}), so nothing was changed. If products really were removed, press Sync now again after checking the website.`);
+    const expected = limit ? Math.min(existing.length, limit) : existing.length;
+    if (expected >= SAFETY_MIN_EXISTING && fetched.products.length < expected / 2) {
+      throw new WooStoreError(`The website sent back only ${fetched.products.length} products (we have ${expected}), so nothing was changed. If products really were removed, press Sync now again after checking the website.`);
     }
     // The website shows prices per visitor country (a currency plugin): never mix currencies silently.
     // Failed attempts carry the last good currency forward, so this is the currency of the last good sync.
@@ -261,12 +266,13 @@ export async function syncWooCommerce(
     const result: WooSyncResult = {
       ok: true, at: new Date().toISOString(), trigger,
       total: fetched.products.length, added, updated, removed: gone.length, unchanged,
-      currency: fetched.currency, ...(problems.length ? { problems: problems.slice(0, 20) } : {}),
+      currency: fetched.currency, limit, ...(problems.length ? { problems: problems.slice(0, 20) } : {}),
     };
     await finish(businessAccountId, result, trigger === "connect" ? {
       wooStoreUrl: storeUrl,
       wooConnected: "true",
       wooReadMode: readMode,
+      wooProductLimit: limit,
       // Keys are kept only for the keys mode (encrypted); reading the public list forgets them.
       wooConsumerKey: keys ? encrypt(keys.key) : null,
       wooConsumerSecret: keys ? encrypt(keys.secret) : null,

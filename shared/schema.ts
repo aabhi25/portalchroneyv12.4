@@ -1037,6 +1037,7 @@ export const widgetSettings = pgTable("widget_settings", {
   wooConsumerSecret: text("woo_consumer_secret"), // encrypted (cs_...), only for 'keys'
   wooConnected: text("woo_connected").notNull().default("false"), // 'true' once the first sync worked; 'false' after Disconnect
   wooSyncHours: integer("woo_sync_hours").notNull().default(24), // Re-read the website every N hours
+  wooProductLimit: integer("woo_product_limit"), // Bring in only the first N products the website lists (e.g. 50 for a demo); null = all
   wooSyncStatus: text("woo_sync_status").notNull().default("idle"), // 'idle' | 'syncing' | 'completed' | 'failed'
   wooSyncStartedAt: timestamp("woo_sync_started_at"), // A 'syncing' older than an hour is treated as stuck
   wooLastSyncedAt: timestamp("woo_last_synced_at"), // Last successful sync

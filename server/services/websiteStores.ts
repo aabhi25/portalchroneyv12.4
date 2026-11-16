@@ -152,13 +152,17 @@ async function shopifyCurrency(origin: string): Promise<string | null> {
   }
 }
 
-export async function fetchShopifyProducts(storeUrl: string, opts: { maxPages?: number } = {}): Promise<WooFetchResult> {
+export async function fetchShopifyProducts(storeUrl: string, opts: { maxPages?: number; limit?: number | null } = {}): Promise<WooFetchResult> {
   const origin = siteOrigin(storeUrl);
   const maxPages = opts.maxPages ?? SHOPIFY_MAX_PAGES;
+  const limit = opts.limit ?? null;
   const products: WooProduct[] = [];
   const seen = new Set<string>();
   for (let page = 1; ; page++) {
-    if (page > maxPages) throw new WooStoreError(`The website has more than ${maxPages * SHOPIFY_PER_PAGE} products, which is more than the sync can read.`);
+    if (page > maxPages) {
+      if (limit) break;
+      throw new WooStoreError(`The website has more than ${maxPages * SHOPIFY_PER_PAGE} products, which is more than the sync can read.`);
+    }
     const list = await shopifyPage(origin, SHOPIFY_PER_PAGE, page);
     if (!list) {
       throw new WooStoreError(page === 1
@@ -170,7 +174,9 @@ export async function fetchShopifyProducts(storeUrl: string, opts: { maxPages?: 
       if (!mapped || seen.has(mapped.externalId)) continue;
       seen.add(mapped.externalId);
       products.push(mapped);
+      if (limit && products.length >= limit) break;
     }
+    if (limit && products.length >= limit) break;
     if (list.length < SHOPIFY_PER_PAGE) break;
   }
   return { products, currency: await shopifyCurrency(origin) };
@@ -380,12 +386,13 @@ async function readPage(pageUrl: string) {
   return { product: extractPageProduct(res.text, res.url.toString()) };
 }
 
-export async function fetchPageDataProducts(storeUrl: string, opts: { maxPages?: number } = {}): Promise<WooFetchResult> {
+export async function fetchPageDataProducts(storeUrl: string, opts: { maxPages?: number; limit?: number | null } = {}): Promise<WooFetchResult> {
   const origin = siteOrigin(storeUrl);
   const maxPages = opts.maxPages ?? PAGE_MAX;
+  const limit = opts.limit ?? null;
   const { pages } = await findProductPages(origin);
   if (pages.length === 0) throw new WooStoreError("No product pages were found in the website's sitemap.");
-  if (pages.length > maxPages) throw new WooStoreError(`The website lists more than ${maxPages} product pages, which is more than the sync can read.`);
+  if (pages.length > maxPages && !limit) throw new WooStoreError(`The website lists more than ${maxPages} product pages, which is more than the sync can read.`);
 
   const products: WooProduct[] = [];
   const seen = new Set<string>();
@@ -393,13 +400,14 @@ export async function fetchPageDataProducts(storeUrl: string, opts: { maxPages?:
   let failed = 0;
   let next = 0;
   const worker = async () => {
-    while (next < pages.length) {
+    // With a limit, pages are read in sitemap order until enough products are found.
+    while (next < pages.length && !(limit && products.length >= limit)) {
       const pageUrl = pages[next++];
       try {
         const r = await readPage(pageUrl);
         if ("gone" in r || !r.product) continue;
         const { currency, ...product } = r.product;
-        if (seen.has(product.externalId)) continue;
+        if (seen.has(product.externalId) || (limit && products.length >= limit)) continue;
         seen.add(product.externalId);
         products.push(product);
         if (currency) currencies.set(currency, (currencies.get(currency) ?? 0) + 1);
@@ -411,8 +419,9 @@ export async function fetchPageDataProducts(storeUrl: string, opts: { maxPages?:
   };
   await Promise.all(Array.from({ length: PAGE_CONCURRENCY }, worker));
   // Too many pages that didn't load would look like deleted products: change nothing.
-  if (failed > Math.max(5, pages.length * 0.2)) {
-    throw new WooStoreError(`${failed} of ${pages.length} product pages didn't load, so nothing was changed. Try again later.`);
+  const tried = Math.min(next, pages.length);
+  if (failed > Math.max(5, tried * 0.2)) {
+    throw new WooStoreError(`${failed} of ${tried} product pages didn't load, so nothing was changed. Try again later.`);
   }
   const currency = Array.from(currencies.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   return { products, currency };
@@ -559,11 +568,24 @@ export async function detectWebsite(input: unknown): Promise<WebsiteDetection> {
   };
 }
 
-/** Every product on the website, read the way that suits it. Throws WooStoreError with a plain message. */
-export async function readWebsiteProducts(storeUrl: string, readMode: WebsiteReadMode, keys?: WooKeys): Promise<WooFetchResult> {
-  if (readMode === "shopify") return fetchShopifyProducts(storeUrl);
-  if (readMode === "pagedata") return fetchPageDataProducts(storeUrl);
-  return fetchStoreProducts(storeUrl, { keys: readMode === "keys" ? keys : undefined });
+/**
+ * Every product on the website, read the way that suits it. `limit`: only the first N products the website
+ * lists (a demo needs a few, not the whole catalog). Throws WooStoreError with a plain message.
+ */
+export async function readWebsiteProducts(storeUrl: string, readMode: WebsiteReadMode, keys?: WooKeys, limit?: number | null): Promise<WooFetchResult> {
+  if (readMode === "shopify") return fetchShopifyProducts(storeUrl, { limit });
+  if (readMode === "pagedata") return fetchPageDataProducts(storeUrl, { limit });
+  return fetchStoreProducts(storeUrl, { keys: readMode === "keys" ? keys : undefined, limit });
+}
+
+export const PRODUCT_LIMIT_MAX = 100_000;
+
+/** A product limit from a form: a whole number from 1, or null for all products. Throws WooStoreError. */
+export function parseProductLimit(v: unknown): number | null {
+  if (v === null || v === undefined || v === "" || v === "all") return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > PRODUCT_LIMIT_MAX) throw new WooStoreError("Type how many products to bring in (a whole number from 1), or choose all products.");
+  return n;
 }
 
 export const isWebsiteReadMode = (v: unknown): v is WebsiteReadMode => v === "public" || v === "keys" || v === "shopify" || v === "pagedata";
