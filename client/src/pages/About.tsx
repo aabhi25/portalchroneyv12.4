@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import TrainingNavTabs from "@/components/TrainingNavTabs";
 import { ChannelPicker, ChannelBadge, ChannelFilterSelect, matchesChannelFilter, type ChannelFilterValue } from "@/components/ChannelPicker";
 import { type KnowledgeChannel } from "@shared/knowledgeChannels";
@@ -89,6 +90,24 @@ interface AnalyzedContent {
   businessHours?: string;
   pricingInfo?: string;
   additionalInfo: string;
+  /** Fields copied word for word from the website (not read by the AI). */
+  exactFromWebsite?: ("phone" | "email" | "address" | "businessHours")[];
+}
+
+/** POST /api/website-analysis/pages: the website's pages worth reading (server/services/websitePages.ts). */
+interface FoundPage {
+  url: string;
+  kind: string;
+  label: string;
+  picked: boolean;
+  alreadyRead?: boolean;
+}
+interface PageDiscovery {
+  pages: FoundPage[];
+  leftOut: { products: number; collections: number; blog: number; other: number; sitemaps: string[] };
+  source: "sitemap" | "links";
+  defaultPick: number;
+  maxPick: number;
 }
 
 interface BusinessAccountInfo {
@@ -134,6 +153,9 @@ export default function About() {
   const [selectedPageContent, setSelectedPageContent] = useState<{url: string; content: string | null} | null>(null);
   const previousStatusRef = useRef<string | null>(null);
   const [pageChannelFilter, setPageChannelFilter] = useState<ChannelFilterValue>("all");
+  // Page list shown before a full scan: the pages found on the website, the best ones ticked.
+  const [pagePickerOpen, setPagePickerOpen] = useState(false);
+  const [chosenPages, setChosenPages] = useState<Set<string>>(new Set());
 
   const { data: accountInfo } = useQuery<BusinessAccountInfo>({
     queryKey: ["/api/about"],
@@ -221,8 +243,18 @@ export default function About() {
     }
   }, [analysisData, previousContent, queryClient]);
 
+  const discoverMutation = useMutation({
+    mutationFn: async (): Promise<PageDiscovery> => {
+      const response = await fetch("/api/website-analysis/pages", { method: "POST", credentials: "include" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Couldn't look through the website");
+      return body;
+    },
+    onSuccess: (found) => setChosenPages(new Set(found.pages.filter(p => p.picked).map(p => p.url))),
+  });
+
   const analyzeMutation = useMutation({
-    mutationFn: async (data: { websiteUrl: string; additionalPages?: string[]; analyzeOnlyAdditional?: boolean }) => {
+    mutationFn: async (data: { websiteUrl: string; additionalPages?: string[]; analyzeOnlyAdditional?: boolean; pages?: string[] }) => {
       const response = await fetch("/api/website-analysis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -242,7 +274,9 @@ export default function About() {
       setAdditionalPages([]);
       toast({
         title: "Analysis Started",
-        description: variables.analyzeOnlyAdditional
+        description: variables.pages
+          ? `Reading ${variables.pages.length} ${variables.pages.length === 1 ? "page" : "pages"}. This takes a minute or two...`
+          : variables.analyzeOnlyAdditional
           ? `Analyzing ${variables.additionalPages?.length || 0} additional pages. Data will be merged with existing analysis...`
           : variables.additionalPages && variables.additionalPages.length > 0 
             ? `Analyzing ${variables.additionalPages.length + 1} pages. This may take a few minutes...`
@@ -438,13 +472,33 @@ export default function About() {
       });
       return;
     }
+    // Pages typed in "Want more details" are read together with the homepage, as before.
+    if (additionalPages.length > 0) {
+      if (analysisData?.analyzedContent) {
+        setPreviousContent(JSON.parse(JSON.stringify(analysisData.analyzedContent)));
+      }
+      analyzeMutation.mutate({ websiteUrl, additionalPages, analyzeOnlyAdditional: false });
+      return;
+    }
+    // Otherwise: look through the website and let the business choose the pages.
+    setPagePickerOpen(true);
+    discoverMutation.mutate();
+  };
+
+  const handleReadChosenPages = (pages?: string[]) => {
     if (analysisData?.analyzedContent) {
       setPreviousContent(JSON.parse(JSON.stringify(analysisData.analyzedContent)));
     }
-    analyzeMutation.mutate({ 
-      websiteUrl, 
-      additionalPages: additionalPages.length > 0 ? additionalPages : undefined,
-      analyzeOnlyAdditional: false 
+    setPagePickerOpen(false);
+    // No list (the website couldn't be looked through): the old full scan from the homepage links.
+    analyzeMutation.mutate(pages ? { websiteUrl, pages } : { websiteUrl, analyzeOnlyAdditional: false });
+  };
+
+  const togglePage = (url: string, on: boolean) => {
+    setChosenPages(prev => {
+      const next = new Set(prev);
+      if (on) next.add(url); else next.delete(url);
+      return next;
     });
   };
 
@@ -485,7 +539,13 @@ export default function About() {
 
   const handleSaveEdit = () => {
     if (editedContent) {
-      updateMutation.mutate(editedContent);
+      // A field changed by hand is no longer "exact from the website".
+      const original = content;
+      const exact = (editedContent.exactFromWebsite || []).filter(f =>
+        f === "businessHours"
+          ? editedContent.businessHours === original?.businessHours
+          : editedContent.contactInfo?.[f] === original?.contactInfo?.[f]);
+      updateMutation.mutate({ ...editedContent, exactFromWebsite: exact });
     }
   };
 
@@ -1255,7 +1315,7 @@ export default function About() {
                           <div className="flex items-start gap-3">
                             <Mail className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
                             <div>
-                              <p className="text-xs text-gray-500 font-semibold mb-1">Email</p>
+                              <p className="text-xs text-gray-500 font-semibold mb-1">Email{content.exactFromWebsite?.includes("email") && <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700" title="Copied word for word from the website">exact from website</span>}</p>
                               <p className="text-gray-900">{content.contactInfo.email}</p>
                             </div>
                           </div>
@@ -1264,7 +1324,7 @@ export default function About() {
                           <div className="flex items-start gap-3">
                             <Phone className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
                             <div>
-                              <p className="text-xs text-gray-500 font-semibold mb-1">Phone</p>
+                              <p className="text-xs text-gray-500 font-semibold mb-1">Phone{content.exactFromWebsite?.includes("phone") && <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700" title="Copied word for word from the website">exact from website</span>}</p>
                               <p className="text-gray-900">{content.contactInfo.phone}</p>
                             </div>
                           </div>
@@ -1273,7 +1333,7 @@ export default function About() {
                           <div className="flex items-start gap-3 md:col-span-2">
                             <MapPin className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
                             <div>
-                              <p className="text-xs text-gray-500 font-semibold mb-1">Address</p>
+                              <p className="text-xs text-gray-500 font-semibold mb-1">Address{content.exactFromWebsite?.includes("address") && <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700" title="Copied word for word from the website">exact from website</span>}</p>
                               <p className="text-gray-900">{content.contactInfo.address}</p>
                             </div>
                           </div>
@@ -1282,7 +1342,7 @@ export default function About() {
                           <div className="flex items-start gap-3">
                             <Calendar className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" />
                             <div>
-                              <p className="text-xs text-gray-500 font-semibold mb-1">Business Hours</p>
+                              <p className="text-xs text-gray-500 font-semibold mb-1">Business Hours{content.exactFromWebsite?.includes("businessHours") && <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700" title="Copied word for word from the website">exact from website</span>}</p>
                               <p className="text-gray-900">{content.businessHours}</p>
                             </div>
                           </div>
@@ -1325,6 +1385,77 @@ export default function About() {
       </div>
 
       {/* Reset Confirmation Dialog */}
+      {/* Pages to read: found on the website (sitemap + homepage links), the best ones ticked */}
+      <Dialog open={pagePickerOpen} onOpenChange={setPagePickerOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col" data-testid="dialog-scan-pages">
+          <DialogHeader>
+            <DialogTitle>Choose the pages to read</DialogTitle>
+            <DialogDescription>
+              The pages that answer customers' questions (about, contact, FAQ, shipping, returns, stores…) are ticked.
+              Tick or untick pages, then press Read.
+            </DialogDescription>
+          </DialogHeader>
+          {discoverMutation.isPending ? (
+            <div className="flex items-center gap-2 py-10 justify-center text-sm text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin" /> Looking through {websiteUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}…
+            </div>
+          ) : discoverMutation.isError ? (
+            <div className="space-y-3 py-4 text-sm">
+              <p className="flex items-start gap-2 text-red-700"><AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />{discoverMutation.error.message}</p>
+              <Button variant="outline" onClick={() => handleReadChosenPages()} data-testid="button-scan-from-links">Read the homepage and its links instead</Button>
+            </div>
+          ) : discoverMutation.data ? (() => {
+            const found = discoverMutation.data;
+            const origin = (() => { try { return new URL(found.pages[0]?.url || websiteUrl).origin; } catch { return ""; } })();
+            // Rows stay where they started (suggested / more), only the tick changes.
+            const ticked = found.pages.filter(p => p.picked);
+            const rest = found.pages.filter(p => !p.picked);
+            const tooMany = chosenPages.size > found.maxPick;
+            const leftOut = [
+              found.leftOut.products && `${found.leftOut.products.toLocaleString()} product pages`,
+              found.leftOut.collections && `${found.leftOut.collections.toLocaleString()} collection pages`,
+              found.leftOut.blog && `${found.leftOut.blog.toLocaleString()} blog posts`,
+            ].filter(Boolean).join(", ");
+            const row = (p: FoundPage) => (
+              <div key={p.url} onClick={() => togglePage(p.url, !chosenPages.has(p.url))} className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-50 cursor-pointer" data-testid={`row-scan-page-${p.kind}`}>
+                <Checkbox checked={chosenPages.has(p.url)} onCheckedChange={(v) => togglePage(p.url, v === true)} onClick={(e) => e.stopPropagation()} aria-label={p.url} />
+                <span className="hidden w-32 shrink-0 sm:block"><Badge variant="outline" className="text-[11px] font-medium">{p.label}</Badge></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-gray-800" title={p.url}>{p.url.replace(origin, "") || "/"}</span>
+                  <span className="block text-[11px] text-gray-500 sm:hidden">{p.label}{p.alreadyRead ? " · read before" : ""}</span>
+                </span>
+                {p.alreadyRead && <span className="hidden shrink-0 text-[11px] text-gray-400 sm:inline">read before</span>}
+              </div>
+            );
+            return (
+              <>
+                <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border p-2 space-y-0.5">
+                  {ticked.map(row)}
+                  {rest.length > 0 && <div className="px-2 pt-3 pb-1 text-xs font-semibold text-gray-500">More pages found ({rest.length})</div>}
+                  {rest.map(row)}
+                </div>
+                <p className="text-xs text-gray-500">
+                  {found.source === "sitemap" ? "Found in the website's sitemap and homepage links." : "Found from the homepage links (the website has no sitemap)."}
+                  {leftOut && <> Left out: {leftOut} — products belong in Products.</>}
+                </p>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {tooMany && <span className="mr-auto text-xs text-red-600">Tick at most {found.maxPick} pages.</span>}
+                  <Button variant="outline" onClick={() => setPagePickerOpen(false)}>Cancel</Button>
+                  <Button
+                    onClick={() => handleReadChosenPages(Array.from(chosenPages))}
+                    disabled={chosenPages.size === 0 || tooMany || analyzeMutation.isPending}
+                    className="bg-gradient-to-r from-purple-600 to-blue-600 text-white"
+                    data-testid="button-scan-read-pages"
+                  >
+                    <Sparkles className="w-4 h-4 mr-2" /> Read {chosenPages.size} {chosenPages.size === 1 ? "page" : "pages"}
+                  </Button>
+                </div>
+              </>
+            );
+          })() : null}
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog open={showResetDialog} onOpenChange={setShowResetDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>

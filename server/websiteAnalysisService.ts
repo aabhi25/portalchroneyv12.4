@@ -4,6 +4,8 @@ import { storage } from "./storage";
 import { promises as dns } from "dns";
 import { aiUsageLogger } from "./services/aiUsageLogger";
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
+import { allowLocal } from "./services/wooCommerceStore";
+import { discoverInfoPages, extractSiteFacts, faqText, mainPageText, pageKey, type SiteFacts } from "./services/websitePages";
 
 interface AnalyzedWebsiteContent {
   businessName: string;
@@ -21,7 +23,15 @@ interface AnalyzedWebsiteContent {
   businessHours?: string;
   pricingInfo?: string;
   additionalInfo: string;
+  /** Fields taken word for word from the website (phone/email links, its published business details), not from the AI. */
+  exactFromWebsite?: ("phone" | "email" | "address" | "businessHours")[];
 }
+
+/** Pages read at once, and how much of each page the business summary gets (the AI can't take a whole website at once). */
+const SCAN_CONCURRENCY = 4;
+const SUMMARY_CHARS_PER_PAGE = 12_000;
+const SUMMARY_CHARS_TOTAL = 180_000;
+const EXACT_PAGE_TEXT_CHARS = 8_000;
 
 interface EvidenceBackedField<T> {
   value: T;
@@ -498,6 +508,136 @@ Extract and organize the key business information as bullet points.`;
    * Now includes multi-page crawling for comprehensive analysis
    */
   async analyzeWebsite(websiteUrl: string, businessAccountId: string, openaiApiKey: string): Promise<void> {
+    // The pages worth reading come from the website's sitemap (see websitePages.ts); the old
+    // homepage-links way below is only used when that can't run.
+    let chosen: string[] | null = null;
+    try {
+      const earlier = (await storage.getAnalyzedPages(businessAccountId)).map(p => p.pageUrl);
+      const found = await discoverInfoPages(websiteUrl, earlier);
+      chosen = found.pages.filter(p => p.picked).map(p => p.url);
+    } catch (error) {
+      console.warn('[Website Analysis] Page list from the sitemap failed, using homepage links:', error instanceof Error ? error.message : error);
+    }
+    if (chosen && chosen.length > 0) return this.scanChosenPages(websiteUrl, chosen, businessAccountId, openaiApiKey);
+    return this.analyzeWebsiteFromLinks(websiteUrl, businessAccountId, openaiApiKey);
+  }
+
+  /**
+   * A full scan of the pages the business chose (Website scan › page list): each page is read, the business
+   * summary is rebuilt from all of them, and the saved pages are replaced: a page read again replaces its
+   * old copy, pages no longer chosen are removed, and a page that fails to load keeps its last good copy.
+   * Facts the website states exactly (phone/email links, its published business details and FAQs) are
+   * kept word for word instead of being summarised.
+   */
+  async scanChosenPages(websiteUrl: string, pageUrls: string[], businessAccountId: string, openaiApiKey: string): Promise<void> {
+    const timeout = this.createCancellableTimeout(
+      300000,
+      'Website analysis timed out after 5 minutes. The website may be too slow or unresponsive.'
+    );
+    try {
+      await Promise.race([this.performChosenScan(websiteUrl, pageUrls, businessAccountId, openaiApiKey), timeout.promise]);
+      timeout.cancel();
+    } catch (error) {
+      timeout.cancel();
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      console.error('[Website Analysis] Error:', errorMessage);
+      await storage.updateWebsiteAnalysisStatus(businessAccountId, 'failed', errorMessage);
+      throw error;
+    }
+  }
+
+  private async performChosenScan(websiteUrl: string, pageUrls: string[], businessAccountId: string, openaiApiKey: string): Promise<void> {
+    await storage.updateWebsiteAnalysisStatus(businessAccountId, 'analyzing');
+    const unique = Array.from(new Map(pageUrls.map(u => [pageKey(u), u])).values());
+    const read = new Map<string, { content: string; html: string; facts: SiteFacts }>();
+    let next = 0;
+    const worker = async () => {
+      while (next < unique.length) {
+        const url = unique[next++];
+        try {
+          const { content, html } = await this.scrapeWebsiteWithHtml(url);
+          read.set(url, { content, html, facts: extractSiteFacts(html) });
+        } catch (error) {
+          console.error('[Website Analysis] Error reading page:', url, error instanceof Error ? error.message : error);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, unique.length) }, worker));
+    if (read.size === 0) throw new Error('None of the chosen pages could be read. Check that the website is online.');
+
+    // Business summary from all pages read (in the order chosen, each page capped so the whole fits).
+    let combined = '';
+    for (const url of unique) {
+      const page = read.get(url);
+      if (!page || combined.length >= SUMMARY_CHARS_TOTAL) continue;
+      const name = new URL(url).pathname.split('/').filter(Boolean).pop() || 'homepage';
+      combined += `${name.toUpperCase()} PAGE (${url}):\n${page.content.slice(0, SUMMARY_CHARS_PER_PAGE)}\n\n`;
+    }
+    const analyzed = await this.analyzeWithOpenAI(combined.slice(0, SUMMARY_CHARS_TOTAL), openaiApiKey, businessAccountId);
+    this.applyExactFacts(analyzed, Array.from(read.values()).map(p => p.facts));
+
+    await storage.upsertWebsiteAnalysis(businessAccountId, {
+      websiteUrl,
+      status: 'completed',
+      analyzedContent: JSON.stringify(analyzed),
+    });
+
+    // Each page: AI bullet points + its exact FAQs; FAQ pages without marked-up questions keep their text word for word.
+    const urls = Array.from(read.keys());
+    let i = 0;
+    const saver = async () => {
+      while (i < urls.length) {
+        const url = urls[i++];
+        const page = read.get(url)!;
+        try {
+          let text = await this.processContentToBulletPoints(page.content, url, openaiApiKey, businessAccountId);
+          const exact = faqText(page.facts.faqs);
+          if (exact) {
+            text = `${text}\n\n${exact}`;
+          } else if (/(^|[-_/])(faqs?|frequently-asked-questions|questions|help|support)([-_/.]|$)/i.test(new URL(url).pathname)) {
+            // Pages whose questions are filled in by JavaScript give only menu crumbs here: skipped.
+            const body = mainPageText(page.html);
+            if (body.replace(/[•|\s]/g, '').length >= 300) text = `${text}\n\nFull page text (exact wording):\n${body.slice(0, EXACT_PAGE_TEXT_CHARS)}`;
+          }
+          await storage.createAnalyzedPage({ businessAccountId, pageUrl: url, extractedContent: text });
+        } catch (error) {
+          console.error('[Website Analysis] Error saving page:', url, error);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, urls.length) }, saver));
+
+    // Pages no longer chosen are removed (chosen pages that failed to load keep their last good copy), and
+    // only the newest copy of each page is kept (two scans at once could each save one).
+    const keep = new Set(unique.map(pageKey));
+    const seen = new Set<string>();
+    for (const old of await storage.getAnalyzedPages(businessAccountId)) { // newest first
+      const key = pageKey(old.pageUrl);
+      if (!keep.has(key) || seen.has(key)) await storage.deleteAnalyzedPage(old.id, businessAccountId);
+      seen.add(key);
+    }
+
+    await storage.updateWebsiteAnalysisStatus(businessAccountId, 'completed');
+    console.log(`[Website Analysis] Scan done for ${businessAccountId}: ${read.size} of ${unique.length} pages read`);
+  }
+
+  /** Phone, email, address and hours the website states exactly replace what the AI read from the text. */
+  private applyExactFacts(content: AnalyzedWebsiteContent, all: SiteFacts[]): void {
+    const phones = Array.from(new Set(all.flatMap(f => f.phones))).slice(0, 2);
+    const emails = Array.from(new Set(all.flatMap(f => f.emails))).slice(0, 2);
+    const address = all.find(f => f.address)?.address;
+    const hours = all.find(f => f.hours)?.hours;
+    const exact: NonNullable<AnalyzedWebsiteContent['exactFromWebsite']> = [];
+    content.contactInfo = content.contactInfo || {};
+    if (phones.length) { content.contactInfo.phone = phones.join(', '); exact.push('phone'); }
+    if (emails.length) { content.contactInfo.email = emails.join(', '); exact.push('email'); }
+    if (address) { content.contactInfo.address = address; exact.push('address'); }
+    if (hours) { content.businessHours = hours; exact.push('businessHours'); }
+    if (exact.length) content.exactFromWebsite = exact;
+  }
+
+  /** The old way of choosing pages (links on the homepage), used when the sitemap way can't run. */
+  private async analyzeWebsiteFromLinks(websiteUrl: string, businessAccountId: string, openaiApiKey: string): Promise<void> {
     try {
       // Update status to analyzing
       await storage.updateWebsiteAnalysisStatus(businessAccountId, 'analyzing');
@@ -708,7 +848,10 @@ Extract and organize the key business information as bullet points.`;
             });
             console.log('[Website Analysis] Saved analyzed page with processed content:', pageUrl);
           } else {
-            // No content available for this page (scraping failed)
+            // No content available for this page (scraping failed): shown as not read, unless an earlier
+            // good copy exists (saving would replace it).
+            const earlier = (await storage.getAnalyzedPages(businessAccountId)).some(p => pageKey(p.pageUrl) === pageKey(pageUrl));
+            if (earlier) continue;
             await storage.createAnalyzedPage({
               businessAccountId,
               pageUrl,
@@ -914,6 +1057,9 @@ CRITICAL: Do NOT remove any existing data. Only add to it and update when necess
 
     const hostname = parsedUrl.hostname.toLowerCase();
 
+    // Tests only: a stand-in website on this machine (WOO_ALLOW_LOCAL_STORE=1, never set on a server).
+    if (allowLocal() && (hostname === 'localhost' || hostname === '127.0.0.1')) return parsedUrl;
+
     // Block obvious localhost strings
     if (hostname === 'localhost') {
       throw new Error('Access to localhost is not allowed');
@@ -969,6 +1115,32 @@ CRITICAL: Do NOT remove any existing data. Only add to it and update when necess
    * Scrape website and return both content and HTML (for link discovery)
    * Only used for homepage to enable multi-page crawling
    */
+  /**
+   * GET a page, following redirects within the same website (www / https / trailing-slash moves are
+   * common), each hop checked like the first address. A redirect to another website is refused.
+   */
+  private async fetchFollowingRedirects(start: URL, signal: AbortSignal): Promise<Response> {
+    const bare = (h: string) => h.toLowerCase().replace(/^www\./, '');
+    let url = start;
+    for (let hop = 0; hop < 5; hop++) {
+      const response = await fetch(url.href, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; ChroneyBot/1.0; +https://portal.aichroney.com)',
+        },
+        signal,
+        redirect: 'manual',
+      });
+      const location = response.headers.get('location');
+      if (response.status < 300 || response.status >= 400 || !location) return response;
+      const next = new URL(location, url);
+      if (bare(next.hostname) !== bare(start.hostname)) {
+        throw new Error('Website redirects to another website. Please provide the final URL.');
+      }
+      url = await this.validateUrl(next.href);
+    }
+    throw new Error('Website redirected too many times.');
+  }
+
   private async scrapeWebsiteWithHtml(url: string): Promise<{ content: string; html: string }> {
     // Validate URL and resolve DNS to prevent SSRF
     const validatedUrl = await this.validateUrl(url);
@@ -978,19 +1150,9 @@ CRITICAL: Do NOT remove any existing data. Only add to it and update when necess
     const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
     try {
-      const response = await fetch(validatedUrl.href, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; ChroneyBot/1.0; +https://portal.aichroney.com)',
-        },
-        signal: controller.signal,
-        redirect: 'manual',
-      });
+      const response = await this.fetchFollowingRedirects(validatedUrl, controller.signal);
 
       clearTimeout(timeoutId);
-
-      if (response.status >= 300 && response.status < 400) {
-        throw new Error('Website redirects are not supported. Please provide the final URL.');
-      }
 
       if (!response.ok) {
         throw new Error(`Failed to fetch website: HTTP ${response.status}`);
@@ -1168,20 +1330,10 @@ CRITICAL: Do NOT remove any existing data. Only add to it and update when necess
     const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
     try {
-      const response = await fetch(validatedUrl.href, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; ChroneyBot/1.0; +https://portal.aichroney.com)',
-        },
-        signal: controller.signal,
-        redirect: 'manual', // Disable automatic redirects to prevent redirect-based SSRF bypass
-      });
+      // Same-website redirects are followed hop by hop, each checked (no redirect-based SSRF).
+      const response = await this.fetchFollowingRedirects(validatedUrl, controller.signal);
 
       clearTimeout(timeoutId);
-
-      // Handle redirects manually (don't follow them for security)
-      if (response.status >= 300 && response.status < 400) {
-        throw new Error('Website redirects are not supported. Please provide the final URL.');
-      }
 
       if (!response.ok) {
         // Sanitize error message to avoid leaking internal details

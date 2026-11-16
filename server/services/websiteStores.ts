@@ -40,13 +40,13 @@ interface PublicResponse {
 }
 
 /** GET a public address (redirects checked one by one). Network/address problems throw; HTTP errors come back as a status. */
-export async function fetchPublic(urlString: string, accept = "*/*", timeoutMs = REQUEST_TIMEOUT_MS): Promise<PublicResponse> {
+export async function fetchPublic(urlString: string, accept = "*/*", timeoutMs = REQUEST_TIMEOUT_MS, userAgent = USER_AGENT): Promise<PublicResponse> {
   let url = new URL(urlString);
   for (let hop = 0; hop < 5; hop++) {
     await assertPublicHost(url);
     let res: Response;
     try {
-      res = await fetch(url, { redirect: "manual", headers: { Accept: accept, "User-Agent": USER_AGENT }, signal: AbortSignal.timeout(timeoutMs) });
+      res = await fetch(url, { redirect: "manual", headers: { Accept: accept, "User-Agent": userAgent }, signal: AbortSignal.timeout(timeoutMs) });
     } catch (e: any) {
       const reason = e?.name === "TimeoutError" ? "it took too long to answer" : "it could not be reached";
       throw new WooStoreError(`The website didn't respond (${reason}). Try again later.`);
@@ -201,6 +201,29 @@ function collectProducts(node: any, out: any[], depth = 0) {
   if (node.mainEntity) collectProducts(node.mainEntity, out, depth + 1);
 }
 
+/** Every schema.org object on a page (flattened from arrays, @graph and mainEntity), for any type. */
+export function jsonLdNodes(html: string): any[] {
+  const out: any[] = [];
+  const walk = (node: any, depth: number) => {
+    if (!node || typeof node !== "object" || depth > 6) return;
+    if (Array.isArray(node)) { for (const n of node) walk(n, depth + 1); return; }
+    if (node["@type"]) out.push(node);
+    if (node["@graph"]) walk(node["@graph"], depth + 1);
+    if (node.mainEntity) walk(node.mainEntity, depth + 1);
+  };
+  const re = /<script\b[^>]*type\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const raw = m[1].trim().replace(/^<!--|-->$/g, "").replace(/^\s*\/\/\s*<!\[CDATA\[|\/\/\s*\]\]>\s*$/g, "");
+    const parsed = parseJson(raw);
+    if (parsed !== undefined) walk(parsed, 0);
+  }
+  return out;
+}
+
+/** True when a schema.org object is (one of) these types ("Product", "schema:Product", "https://schema.org/Product"). */
+export const schemaTypeIs = (node: any, wanted: string[]) => typeIs(node, wanted);
+
 function jsonLdProducts(html: string): any[] {
   const out: any[] = [];
   const re = /<script\b[^>]*type\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi;
@@ -320,7 +343,7 @@ function absoluteUrl(v: string | null, base: string): string | null {
 const bareHost = (h: string) => h.toLowerCase().replace(/^www\./, "");
 const PRODUCT_PATH = /\/(products?|p|item|items|shop|store|catalog|catalogue)\/|[-_/]p[-_]?\d+|\/dp\/|\.html$/i;
 
-function locs(xml: string, tag: "sitemap" | "url"): string[] {
+export function locs(xml: string, tag: "sitemap" | "url"): string[] {
   const out: string[] = [];
   const re = new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<loc>\\s*(?:<!\\[CDATA\\[)?([^<\\]]+?)(?:\\]\\]>)?\\s*<\\/loc>`, "gi");
   let m: RegExpExecArray | null;

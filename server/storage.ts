@@ -2848,21 +2848,23 @@ export class DatabaseStorage implements IStorage {
 
   // Analyzed Pages methods
   async createAnalyzedPage(analyzedPage: InsertAnalyzedPage): Promise<AnalyzedPage> {
-    // A re-scan inserts the page again: keep the channel tags the business gave this page URL.
+    // A re-scan replaces the page's earlier copy (same address, with or without a trailing slash) instead
+    // of adding another one, and keeps the channel tags the business gave it.
+    const url = analyzedPage.pageUrl.replace(/\/+$/, "");
+    const sameUrl = Array.from(new Set([analyzedPage.pageUrl, url, `${url}/`]));
+    const previous = await db
+      .select({ id: analyzedPages.id, channels: analyzedPages.channels })
+      .from(analyzedPages)
+      .where(and(eq(analyzedPages.businessAccountId, analyzedPage.businessAccountId), inArray(analyzedPages.pageUrl, sameUrl)))
+      .orderBy(desc(analyzedPages.analyzedAt));
     let values = analyzedPage;
-    if (analyzedPage.channels === undefined) {
-      const [previous] = await db
-        .select({ channels: analyzedPages.channels })
-        .from(analyzedPages)
-        .where(and(eq(analyzedPages.businessAccountId, analyzedPage.businessAccountId), eq(analyzedPages.pageUrl, analyzedPage.pageUrl)))
-        .orderBy(desc(analyzedPages.analyzedAt))
-        .limit(1);
-      if (previous?.channels && previous.channels.length > 0) values = { ...analyzedPage, channels: previous.channels };
-    }
-    const [created] = await db
-      .insert(analyzedPages)
-      .values(values)
-      .returning();
+    const tagged = previous.find(p => p.channels && p.channels.length > 0);
+    if (analyzedPage.channels === undefined && tagged) values = { ...analyzedPage, channels: tagged.channels };
+    const created = await db.transaction(async (tx) => {
+      if (previous.length) await tx.delete(analyzedPages).where(inArray(analyzedPages.id, previous.map(p => p.id)));
+      const [row] = await tx.insert(analyzedPages).values(values).returning();
+      return row;
+    });
     invalidateKnowledgePresence(created.businessAccountId);
     return created;
   }

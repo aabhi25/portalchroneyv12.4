@@ -26797,6 +26797,22 @@ Be constructive and helpful. Return ONLY valid JSON.`;
     }
   });
 
+  // Website scan: the website's pages worth reading (from its sitemap), best ones ticked, for the page list.
+  app.post("/api/website-analysis/pages", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      const businessAccountId = req.user?.businessAccountId;
+      if (!businessAccountId) return res.status(400).json({ error: "Business account not found" });
+      const account = await storage.getBusinessAccount(businessAccountId);
+      if (!account?.website) return res.status(400).json({ error: "Add the website address in Account settings first." });
+      const { discoverInfoPages, DEFAULT_PICK, MAX_PICK } = await import("./services/websitePages");
+      const earlier = (await storage.getAnalyzedPages(businessAccountId)).map(p => p.pageUrl);
+      const found = await discoverInfoPages(account.website, earlier);
+      res.json({ ...found, defaultPick: DEFAULT_PICK, maxPick: MAX_PICK });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Couldn't look through the website." });
+    }
+  });
+
   app.post("/api/website-analysis", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
       const businessAccountId = req.user?.businessAccountId;
@@ -26804,7 +26820,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "Business account not found" });
       }
 
-      const { websiteUrl, additionalPages, analyzeOnlyAdditional } = req.body;
+      const { websiteUrl, additionalPages, analyzeOnlyAdditional, pages } = req.body;
       if (!websiteUrl || typeof websiteUrl !== 'string') {
         return res.status(400).json({ error: "Website URL is required" });
       }
@@ -26852,6 +26868,27 @@ Be constructive and helpful. Return ONLY valid JSON.`;
 
       // Import the service here to avoid circular dependencies
       const { websiteAnalysisService } = await import("./websiteAnalysisService");
+
+      // The pages ticked in the page list: a full scan of exactly those (replaces the saved pages).
+      if (Array.isArray(pages)) {
+        const { MAX_PICK } = await import("./services/websitePages");
+        const chosen = Array.from(new Set(pages.filter((p: unknown): p is string => typeof p === "string" && !!p.trim())));
+        if (chosen.length === 0) return res.status(400).json({ error: "Tick at least one page to read." });
+        if (chosen.length > MAX_PICK) return res.status(400).json({ error: `Tick at most ${MAX_PICK} pages.` });
+        const bare = (h: string) => h.toLowerCase().replace(/^www\./, "");
+        try {
+          const site = bare(new URL(/^https?:\/\//i.test(websiteUrl) ? websiteUrl : `https://${websiteUrl}`).hostname);
+          if (chosen.some(p => !/^https?:\/\//i.test(p) || bare(new URL(p).hostname) !== site)) {
+            return res.status(400).json({ error: "All pages must be from the same website" });
+          }
+        } catch {
+          return res.status(400).json({ error: "Invalid URL format" });
+        }
+        await storage.upsertWebsiteAnalysis(businessAccountId, { websiteUrl, status: 'pending' });
+        websiteAnalysisService.scanChosenPages(websiteUrl, chosen, businessAccountId, apiKey)
+          .catch(error => console.error('[Website Analysis] Error:', error));
+        return res.json({ status: 'pending', message: `Reading ${chosen.length} ${chosen.length === 1 ? 'page' : 'pages'}. This takes a minute or two...` });
+      }
 
       // Save initial record
       await storage.upsertWebsiteAnalysis(businessAccountId, {
