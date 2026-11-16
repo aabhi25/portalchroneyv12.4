@@ -233,7 +233,9 @@ interface PreviewResponse {
   hides?: boolean;
   totalViewHidden?: number;
   hidesFromView?: boolean;
-  accounts: { businessAccountId: string; name: string; overridden: boolean; leads: number; idleChats: number; hide?: number; viewHide?: number; crm?: { leadsquared: boolean; salesforce: boolean; meritto?: boolean } }[];
+  totalWhatsappLeads?: number;
+  totalWhatsappChats?: number;
+  accounts: { businessAccountId: string; name: string; overridden: boolean; leads: number; idleChats: number; hide?: number; viewHide?: number; whatsappLeads?: number; whatsappChats?: number; crm?: { leadsquared: boolean; salesforce: boolean; meritto?: boolean } }[];
 }
 
 /** Either kind of hiding is switched on (then a preview with auto-delete off shows no "0 deleted"). */
@@ -259,7 +261,7 @@ function HideFromViewSection({ checked, onChange }: { checked: boolean; onChange
           <li>Hidden on the Leads page, chats, form/journey answers, summaries, lead downloads, the AI call list and the group admin pages. Super admins still see the real details.</li>
           <li>Nothing is deleted or overwritten: switch this off and the details show again.</li>
           <li>Accounts with no CRM: their team can't see numbers anywhere until a CRM is connected and the leads are sent to it.</li>
-          <li>Website chat leads only. Appointments, support tickets and WhatsApp/Instagram/Facebook leads keep showing their details.</li>
+          <li>Website and WhatsApp leads and chats (the WhatsApp leads page and conversations too). Appointments, support tickets and Instagram/Facebook leads keep showing their details.</li>
         </ul>
       )}
     </div>
@@ -451,7 +453,8 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                     </div>
 
                     <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
-                      <p>Deleted with each lead: its conversation, messages, journey/form answers, uploaded chat images, and linked appointments, tickets and applications.</p>
+                      <p>Deleted with each lead: its conversation, messages, journey/form answers, uploaded chat images, and linked appointments, tickets and applications.
+                        WhatsApp leads follow the same timers: the student's whole WhatsApp chat with this account goes, with its documents (the "Stop" list is kept).</p>
                       <p>A conversation is never deleted while the visitor is still chatting (30 minutes idle required). Copies in the client's CRM are not touched.</p>
                     </div>
 
@@ -474,7 +477,8 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                           <li>Hidden on the lead, in its chat messages, form/journey answers and the chat summary. Name and everything else stay.</li>
                           <li>Happens once the lead has synced to every connected CRM and the chat has gone quiet, after the final summary has reached the CRM. Leads that never sync are not hidden.</li>
                           <li>The real details are removed from our database and can't be brought back here. The CRM keeps them, and a hidden lead is never sent to the CRM again.</li>
-                          <li>Website chat leads only. Appointments and support tickets keep their contact details so reminders and replies still work.</li>
+                          <li>WhatsApp leads: only once every lead of that student is synced and the chat has been quiet for 7 days, because the number is how the AI and follow-ups reach them. If they write again, it starts as a new chat. Students who said "Stop" stay stopped.</li>
+                          <li>Appointments and support tickets keep their contact details so reminders and replies still work.</li>
                         </ul>
                       )}
                     </div>
@@ -615,7 +619,8 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                     </div>
 
                     <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
-                      <p>Deleted with each lead: its conversation, messages, journey/form answers, uploaded chat images, and linked appointments, tickets and applications.</p>
+                      <p>Deleted with each lead: its conversation, messages, journey/form answers, uploaded chat images, and linked appointments, tickets and applications.
+                        WhatsApp leads follow the same timers: the student's whole WhatsApp chat with this account goes, with its documents (the "Stop" list is kept).</p>
                       <p>A conversation is never deleted while the visitor is still chatting (30 minutes idle required). Copies in the client's CRM are not touched.</p>
                     </div>
 
@@ -638,7 +643,8 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
                           <li>Hidden on the lead, in its chat messages, form/journey answers and the chat summary. Name and everything else stay.</li>
                           <li>Happens once the lead has synced to every connected CRM and the chat has gone quiet, after the final summary has reached the CRM. Leads that never sync are not hidden.</li>
                           <li>The real details are removed from our database and can't be brought back here. The CRM keeps them, and a hidden lead is never sent to the CRM again.</li>
-                          <li>Website chat leads only. Appointments and support tickets keep their contact details so reminders and replies still work.</li>
+                          <li>WhatsApp leads: only once every lead of that student is synced and the chat has been quiet for 7 days, because the number is how the AI and follow-ups reach them. If they write again, it starts as a new chat. Students who said "Stop" stay stopped.</li>
+                          <li>Appointments and support tickets keep their contact details so reminders and replies still work.</li>
                         </ul>
                       )}
                     </div>
@@ -721,7 +727,7 @@ export function DataRetentionDialog({ open, onOpenChange, scopeType, scopeId, sc
 
 /** `showDeletes` is false when auto-delete is off and only hiding is on, so "0 deleted" isn't shown. */
 function PreviewSummary({ preview, showDeletes = true }: { preview: PreviewResponse; showDeletes?: boolean }) {
-  const affected = preview.accounts.filter(a => (showDeletes ? a.leads + a.idleChats : 0) + (a.hide ?? 0) + (preview.hidesFromView ? a.viewHide ?? 0 : 0) > 0);
+  const affected = preview.accounts.filter(a => (showDeletes ? a.leads + a.idleChats + (a.whatsappLeads ?? 0) + (a.whatsappChats ?? 0) : 0) + (a.hide ?? 0) + (preview.hidesFromView ? a.viewHide ?? 0 : 0) > 0);
   const overridden = preview.accounts.filter(a => a.overridden).length;
   const noCrm = preview.accounts.filter(a => a.crm && !a.crm.leadsquared && !a.crm.salesforce && !a.crm.meritto).length;
   return (
@@ -730,6 +736,10 @@ function PreviewSummary({ preview, showDeletes = true }: { preview: PreviewRespo
         <div>
           Deleted right away: <span className="font-semibold text-red-600">{preview.totalLeads.toLocaleString()} lead(s)</span> (with their chats)
           {" "}and <span className="font-semibold text-red-600">{preview.totalIdleChats.toLocaleString()} chat(s) with no lead</span>.
+          {((preview.totalWhatsappLeads ?? 0) + (preview.totalWhatsappChats ?? 0)) > 0 && (
+            <> WhatsApp: <span className="font-semibold text-red-600">{(preview.totalWhatsappLeads ?? 0).toLocaleString()} lead(s)</span> and{" "}
+              <span className="font-semibold text-red-600">{(preview.totalWhatsappChats ?? 0).toLocaleString()} chat(s) with no lead</span>.</>
+          )}
         </div>
       )}
       {preview.hidesFromView && (
@@ -739,7 +749,7 @@ function PreviewSummary({ preview, showDeletes = true }: { preview: PreviewRespo
       )}
       {preview.hides && (
         <div>
-          Contact details removed right away: <span className="font-semibold text-emerald-700">{(preview.totalHidden ?? 0).toLocaleString()} synced lead(s)</span>.
+          Contact details removed right away: <span className="font-semibold text-emerald-700">{(preview.totalHidden ?? 0).toLocaleString()} synced lead(s)</span> (website and WhatsApp).
         </div>
       )}
       {affected.length > 0 && (
@@ -748,7 +758,7 @@ function PreviewSummary({ preview, showDeletes = true }: { preview: PreviewRespo
             <div key={a.businessAccountId} className="flex justify-between gap-2">
               <span className="truncate">{a.name}</span>
               <span className="tabular-nums text-muted-foreground shrink-0">
-                {[showDeletes && `${a.leads} leads · ${a.idleChats} chats`, preview.hidesFromView && `${a.viewHide ?? 0} shown hidden`, preview.hides && `${a.hide ?? 0} removed`].filter(Boolean).join(" · ")}
+                {[showDeletes && `${a.leads} leads · ${a.idleChats} chats${(a.whatsappLeads ?? 0) + (a.whatsappChats ?? 0) ? ` · WhatsApp ${a.whatsappLeads ?? 0} leads, ${a.whatsappChats ?? 0} chats` : ""}`, preview.hidesFromView && `${a.viewHide ?? 0} shown hidden`, preview.hides && `${a.hide ?? 0} removed`].filter(Boolean).join(" · ")}
               </span>
             </div>
           ))}

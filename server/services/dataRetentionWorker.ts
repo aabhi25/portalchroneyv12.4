@@ -55,8 +55,11 @@ export class DataRetentionWorker {
   private async maskContacts(accountId: string, policySource: string) {
     try {
       const hidden = await maskAccountContacts(accountId);
-      if (hidden === 0) return;
-      console.log(`[Data Retention] Account ${accountId}: hid contact details on ${hidden} lead(s)`);
+      // WhatsApp: once every lead is synced and the chat has been quiet for 7 days.
+      const { maskWhatsappContacts } = await import('./whatsappRetention');
+      const whatsappHidden = await maskWhatsappContacts(accountId);
+      if (hidden + whatsappHidden === 0) return;
+      console.log(`[Data Retention] Account ${accountId}: hid contact details on ${hidden} lead(s), ${whatsappHidden} WhatsApp lead(s)`);
       await recordSystemAuditEvent({
         action: 'data_retention.contacts_masked',
         outcome: 'success',
@@ -65,7 +68,7 @@ export class DataRetentionWorker {
         businessAccountId: accountId,
         resourceType: 'business_account',
         resourceId: accountId,
-        metadata: { maskedLeads: hidden, policySource },
+        metadata: { maskedLeads: hidden, maskedWhatsappLeads: whatsappHidden, policySource },
       }).catch(err => console.error('[Data Retention] Audit write failed:', err));
     } catch (err) {
       console.error(`[Data Retention] Account ${accountId}: hiding contact details failed:`, err);
@@ -80,26 +83,30 @@ export class DataRetentionWorker {
       if (policy.maskContactsAfterSync) await this.maskContacts(accountId, policy.source);
       if (policy.mode === 'off') return;
 
+      const { countWhatsappDue, purgeWhatsapp } = await import('./whatsappRetention');
       if (policy.mode === 'dry_run') {
         const due = await countDueForAccount(accountId, policy);
+        const wa = await countWhatsappDue(accountId, policy);
         await recordAccountStatus(accountId, {
-          mode: 'dry_run', dueLeads: due.leads, dueConversations: due.idleChats, purgedLeads: 0, purgedConversations: 0,
+          mode: 'dry_run', dueLeads: due.leads + wa.leads, dueConversations: due.idleChats + wa.chats, purgedLeads: 0, purgedConversations: 0,
         });
         return;
       }
 
       const purged = await purgeAccount(accountId, policy);
+      const waPurged = await purgeWhatsapp(accountId, policy);
       const remaining = await countDueForAccount(accountId, policy);
+      const waRemaining = await countWhatsappDue(accountId, policy);
       await recordAccountStatus(accountId, {
         mode: 'live',
-        dueLeads: remaining.leads,
-        dueConversations: remaining.idleChats,
-        purgedLeads: purged.leads,
-        purgedConversations: purged.conversations,
+        dueLeads: remaining.leads + waRemaining.leads,
+        dueConversations: remaining.idleChats + waRemaining.chats,
+        purgedLeads: purged.leads + waPurged.leads,
+        purgedConversations: purged.conversations + waPurged.chats,
       });
 
-      if (purged.leads + purged.conversations > 0) {
-        console.log(`[Data Retention] Account ${accountId}: deleted ${purged.leads} lead(s), ${purged.conversations} conversation(s), ${purged.files} file(s)`);
+      if (purged.leads + purged.conversations + waPurged.leads + waPurged.chats > 0) {
+        console.log(`[Data Retention] Account ${accountId}: deleted ${purged.leads} lead(s), ${purged.conversations} conversation(s), ${purged.files} file(s); WhatsApp ${waPurged.leads} lead(s), ${waPurged.chats} chat(s) without a lead`);
         await recordSystemAuditEvent({
           action: 'data_retention.purged',
           outcome: 'success',
@@ -111,6 +118,8 @@ export class DataRetentionWorker {
           metadata: {
             deletedLeads: purged.leads,
             deletedConversations: purged.conversations,
+            deletedWhatsappLeads: waPurged.leads,
+            deletedWhatsappChats: waPurged.chats,
             deletedFiles: purged.files,
             policySource: policy.source,
             deleteSyncedAfterMinutes: policy.deleteSyncedAfterMinutes,

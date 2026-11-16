@@ -1651,6 +1651,11 @@ export async function syncWhatsappLeadToCustomCrm(
   if (!lead) {
     return { success: false, skipped: 'not_found', status: null, message: 'WhatsApp lead not found' };
   }
+  // Contact details removed after sync (auto-delete settings): never sent again.
+  const { isMaskedValue, HIDDEN_CONTACTS_MESSAGE } = await import('@shared/contactMasking');
+  if (isMaskedValue(lead.senderPhone)) {
+    return { success: false, skipped: 'not_eligible', status: lead.customCrmSyncStatus ?? null, message: HIDDEN_CONTACTS_MESSAGE };
+  }
 
   let settings = options.settings;
   if (!settings) {

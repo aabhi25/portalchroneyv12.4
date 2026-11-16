@@ -188,6 +188,9 @@ export async function syncWhatsappLeadToLeadSquared(
   const [lead] = await db.select().from(whatsappLeads).where(and(...conds)).limit(1);
   if (!lead) return { success: false, skipped: "not_found", status: null, message: "Lead not found" };
   if (lead.status === "message_only") return { success: false, skipped: "not_eligible", status: lead.leadsquaredSyncStatus, message: "This is a message, not a lead" };
+  // Contact details removed after sync (auto-delete settings): never sent again.
+  const { isMaskedValue, HIDDEN_CONTACTS_MESSAGE } = await import("@shared/contactMasking");
+  if (isMaskedValue(lead.senderPhone)) return { success: false, skipped: "not_eligible", status: lead.leadsquaredSyncStatus, message: HIDDEN_CONTACTS_MESSAGE };
   const { isQualificationRequired } = await import("./leadQualificationService");
   if (!lead.qualifiedAt && (await isQualificationRequired(lead.businessAccountId))) {
     return { success: false, skipped: "not_eligible", status: lead.leadsquaredSyncStatus, message: "This lead is still a draft (PAN and email needed)" };
@@ -322,21 +325,21 @@ export async function runWhatsappLsqSyncOnce(now = new Date()): Promise<number> 
   const res = await db.execute(sql`
     (SELECT w.id, 'auto' AS mode FROM whatsapp_leads w
       JOIN whatsapp_settings s ON s.business_account_id = w.business_account_id AND s.auto_sync_to_leadsquared = 'true'
-      WHERE COALESCE(w.leadsquared_sync_status, '') = '' AND w.status <> 'message_only'
+      WHERE COALESCE(w.leadsquared_sync_status, '') = '' AND w.status <> 'message_only' AND w.sender_phone NOT LIKE '%***%'
         AND w.received_at >= ${windowStart}
         AND GREATEST(w.updated_at, COALESCE(w.last_message_at, w.updated_at)) <= ${quiet}
       ORDER BY w.received_at LIMIT ${BATCH})
     UNION ALL
     (SELECT w.id, 'update' AS mode FROM whatsapp_leads w
       JOIN whatsapp_settings s ON s.business_account_id = w.business_account_id AND s.auto_sync_to_leadsquared = 'true'
-      WHERE w.leadsquared_sync_status = 'synced' AND w.leadsquared_synced_at >= ${windowStart}
+      WHERE w.leadsquared_sync_status = 'synced' AND w.leadsquared_synced_at >= ${windowStart} AND w.sender_phone NOT LIKE '%***%'
         AND GREATEST(w.updated_at, COALESCE(w.last_message_at, w.updated_at))
             > COALESCE(w.leadsquared_next_retry_at, w.leadsquared_synced_at) + interval '1 minute'
         AND GREATEST(w.updated_at, COALESCE(w.last_message_at, w.updated_at)) <= ${quiet}
       ORDER BY w.leadsquared_synced_at LIMIT ${BATCH})
     UNION ALL
     (SELECT w.id, 'retry' AS mode FROM whatsapp_leads w
-      WHERE w.leadsquared_sync_status IN ('failed', 'pending')
+      WHERE w.leadsquared_sync_status IN ('failed', 'pending') AND w.sender_phone NOT LIKE '%***%'
         AND (w.leadsquared_next_retry_at IS NULL OR w.leadsquared_next_retry_at <= ${ts(now)})
         AND w.leadsquared_retry_count < ${LSQ_MAX_RETRY_COUNT}
       ORDER BY w.leadsquared_next_retry_at NULLS FIRST LIMIT ${BATCH})

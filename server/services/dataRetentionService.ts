@@ -425,7 +425,10 @@ export async function countLeadsWithContacts(accountId: string): Promise<number>
   const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(leads).where(sql`${leads.businessAccountId} = ${accountId}
     AND ${leads.contactsMaskedAt} IS NULL
     AND (COALESCE(${leads.phone}, '') <> '' OR COALESCE(${leads.email}, '') <> '')`);
-  return row?.n ?? 0;
+  // WhatsApp leads too (their number is never empty).
+  const wa = await db.execute(sql`SELECT count(*)::int AS n FROM whatsapp_leads
+    WHERE business_account_id = ${accountId} AND status <> 'message_only' AND COALESCE(sender_phone, '') NOT LIKE '%***%'`);
+  return (row?.n ?? 0) + Number((wa.rows[0] as any)?.n ?? 0);
 }
 
 const maskText = (v: string | null) => (v ? maskContactsInText(v) : v);
@@ -622,8 +625,8 @@ export async function getRetentionReport(accountIds: string[], from: Date, to: D
     const [purged] = await db.select({
       capturedDeleted: sql<number>`count(DISTINCT ${dataPurgeLog.recordId}) FILTER (WHERE ${dataPurgeLog.recordType} = 'lead' AND ${dataPurgeLog.capturedAt} >= ${ts(from)} AND ${dataPurgeLog.capturedAt} < ${ts(to)})::int`,
       syncedDeleted: sql<number>`count(DISTINCT ${dataPurgeLog.recordId}) FILTER (WHERE ${dataPurgeLog.recordType} = 'lead' AND ${dataPurgeLog.synced} AND ${dataPurgeLog.capturedAt} >= ${ts(from)} AND ${dataPurgeLog.capturedAt} < ${ts(to)})::int`,
-      deletedLeads: sql<number>`count(DISTINCT ${dataPurgeLog.recordId}) FILTER (WHERE ${dataPurgeLog.recordType} = 'lead' AND ${dataPurgeLog.purgedAt} >= ${ts(from)} AND ${dataPurgeLog.purgedAt} < ${ts(to)})::int`,
-      deletedConversations: sql<number>`count(DISTINCT ${dataPurgeLog.recordId}) FILTER (WHERE ${dataPurgeLog.recordType} = 'conversation' AND ${dataPurgeLog.purgedAt} >= ${ts(from)} AND ${dataPurgeLog.purgedAt} < ${ts(to)})::int`,
+      deletedLeads: sql<number>`count(DISTINCT ${dataPurgeLog.recordId}) FILTER (WHERE ${dataPurgeLog.recordType} IN ('lead', 'whatsapp_lead') AND ${dataPurgeLog.purgedAt} >= ${ts(from)} AND ${dataPurgeLog.purgedAt} < ${ts(to)})::int`,
+      deletedConversations: sql<number>`count(DISTINCT ${dataPurgeLog.recordId}) FILTER (WHERE ${dataPurgeLog.recordType} IN ('conversation', 'whatsapp_chat') AND ${dataPurgeLog.purgedAt} >= ${ts(from)} AND ${dataPurgeLog.purgedAt} < ${ts(to)})::int`,
     }).from(dataPurgeLog).where(eq(dataPurgeLog.businessAccountId, accountId));
     const [status] = await db.select().from(dataRetentionAccountStatus).where(eq(dataRetentionAccountStatus.businessAccountId, accountId));
 

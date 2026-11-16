@@ -198,6 +198,8 @@ router.post("/api/super-admin/data-retention/:scopeType/:scopeId/preview", requi
     let totalChats = 0;
     let totalHidden = 0;
     let totalViewHidden = 0;
+    let totalWhatsappLeads = 0;
+    let totalWhatsappChats = 0;
     for (const id of accountIds) {
       // Accounts with their own override ignore the group policy.
       const override = scope.scopeType === 'group' ? await getRetentionPolicy('account', id) : null;
@@ -208,18 +210,23 @@ router.post("/api/super-admin/data-retention/:scopeType/:scopeId/preview", requi
       }
       // Hiding is counted only when it is switched on in the proposed settings.
       const due = await countDueForAccount(id, settings);
-      const hide = settings.maskContactsAfterSync ? await countMaskDueForAccount(id) : 0;
+      const { countWhatsappDue, countWhatsappMaskDue } = await import('../services/whatsappRetention');
+      const wa = await countWhatsappDue(id, settings);
+      const waHide = settings.maskContactsAfterSync ? await countWhatsappMaskDue(id) : 0;
+      const hide = (settings.maskContactsAfterSync ? await countMaskDueForAccount(id) : 0) + waHide;
       const viewHide = settings.hideContactsFromView ? await countLeadsWithContacts(id) : 0;
       const crm = await getAccountCrmTargets(id);
       totalLeads += due.leads;
       totalChats += due.idleChats;
+      totalWhatsappLeads += wa.leads;
+      totalWhatsappChats += wa.chats;
       totalHidden += hide;
       totalViewHidden += viewHide;
-      accounts.push({ businessAccountId: id, name: account?.name || id, overridden: false, crm, ...due, hide, viewHide });
+      accounts.push({ businessAccountId: id, name: account?.name || id, overridden: false, crm, ...due, whatsappLeads: wa.leads, whatsappChats: wa.chats, hide, viewHide });
     }
     res.json({
       totalLeads, totalIdleChats: totalChats, totalHidden, hides: settings.maskContactsAfterSync,
-      totalViewHidden, hidesFromView: settings.hideContactsFromView, accounts,
+      totalViewHidden, hidesFromView: settings.hideContactsFromView, totalWhatsappLeads, totalWhatsappChats, accounts,
     });
   } catch (error: any) {
     console.error('[Data Retention] Preview error:', error);

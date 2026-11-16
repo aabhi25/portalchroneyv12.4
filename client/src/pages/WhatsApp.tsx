@@ -167,6 +167,8 @@ interface JourneySummary {
 
 interface ConversationSummary {
   sender_phone: string;
+  /** Present when numbers are hidden from view: opens the chat without the number. */
+  phoneKey?: string;
   session_id: number;
   sender_name: string | null;
   message_count: number;
@@ -225,6 +227,8 @@ interface LeadField {
 
 interface SelectedConversation {
   senderPhone: string;
+  /** Sent instead of the number when numbers are hidden from view (see server/lib/contactViewMask). */
+  phoneKey?: string;
   sessionStart: string;
   sessionEnd: string;
   senderName: string | null;
@@ -582,7 +586,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
       const params = new URLSearchParams();
       params.set('sessionStart', conv.first_message_at);
       params.set('sessionEnd', conv.last_message_at);
-      const res = await fetch(`/api/whatsapp/conversations/${encodeURIComponent(conv.sender_phone)}?${params.toString()}`, {
+      const res = await fetch(`/api/whatsapp/conversations/${encodeURIComponent(conv.phoneKey || conv.sender_phone)}?${params.toString()}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -594,7 +598,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
       queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/leads"] });
       toast({ title: "Session deleted successfully" });
       setConversationToDelete(null);
-      if (selectedConversation?.senderPhone === conversationToDelete?.sender_phone) {
+      if ((selectedConversation?.phoneKey || selectedConversation?.senderPhone) === (conversationToDelete?.phoneKey || conversationToDelete?.sender_phone)) {
         setSelectedConversation(null);
       }
     },
@@ -773,7 +777,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
     queryKey: ["/api/whatsapp/conversations", selectedConversation?.senderPhone, selectedConversation?.flowSessionId, selectedConversation?.sessionStart, selectedConversation?.sessionEnd],
     queryFn: async () => {
       if (!selectedConversation) return null;
-      let url = `/api/whatsapp/conversations/${encodeURIComponent(selectedConversation.senderPhone)}`;
+      let url = `/api/whatsapp/conversations/${encodeURIComponent(selectedConversation.phoneKey || selectedConversation.senderPhone)}`;
       const params = new URLSearchParams();
       if (selectedConversation.flowSessionId) {
         params.set('flowSessionId', selectedConversation.flowSessionId);
@@ -1011,7 +1015,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
     setLoadingOlderMessages(true);
     try {
       const oldestTimestamp = allMessages[0].receivedAt;
-      let url = `/api/whatsapp/conversations/${encodeURIComponent(selectedConversation.senderPhone)}`;
+      let url = `/api/whatsapp/conversations/${encodeURIComponent(selectedConversation.phoneKey || selectedConversation.senderPhone)}`;
       const params = new URLSearchParams();
       if (selectedConversation.flowSessionId) {
         params.set('flowSessionId', selectedConversation.flowSessionId);
@@ -1482,12 +1486,12 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
                   </div>
                 ) : (
                   conversationsData.conversations.map((conversation) => {
-                    const sessionKey = `${conversation.sender_phone}-${conversation.session_id}`;
+                    const sessionKey = `${conversation.phoneKey || conversation.sender_phone}-${conversation.session_id}`;
                     const sessionDate = format(parseUTCDate(conversation.first_message_at), "MMM d, yyyy");
                     const isToday = format(parseUTCDate(conversation.last_message_at), "yyyy-MM-dd") === format(new Date(), "yyyy-MM-dd");
                     const hasJourneys = conversation.journeys && conversation.journeys.length > 0;
                     const isExpanded = expandedConversations.has(sessionKey);
-                    const isActive = selectedConversation?.senderPhone === conversation.sender_phone &&
+                    const isActive = (selectedConversation?.phoneKey || selectedConversation?.senderPhone) === (conversation.phoneKey || conversation.sender_phone) &&
                       selectedConversation?.sessionStart === conversation.first_message_at;
 
                     return (
@@ -1496,6 +1500,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
                           className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-all duration-200 group ${isActive ? 'bg-emerald-50 border-l-4 border-l-emerald-500' : 'hover:bg-gray-50 border-l-4 border-l-transparent'}`}
                           onClick={() => setSelectedConversation({
                             senderPhone: conversation.sender_phone,
+                            phoneKey: conversation.phoneKey,
                             sessionStart: conversation.first_message_at,
                             sessionEnd: conversation.last_message_at,
                             senderName: conversation.sender_name
@@ -1585,6 +1590,7 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
                                     e.stopPropagation();
                                     setSelectedConversation({
                                       senderPhone: conversation.sender_phone,
+                                      phoneKey: conversation.phoneKey,
                                       sessionStart: journey.first_message_at,
                                       sessionEnd: journey.last_message_at,
                                       senderName: conversation.sender_name,

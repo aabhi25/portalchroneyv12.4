@@ -78,7 +78,7 @@ async function main() {
   const leadRow = async () => (await db.select().from(schema.leads).where(eq(schema.leads.id, lead.id)))[0];
   app.get('/api/leads', async (_req, res) => { res.json({ leads: [await leadRow()], total: 1 }); });
   app.get('/api/leads/unified', (_req, res) => {
-    res.json({ leads: [{ channel: 'website', id: lead.id, phone: PHONE, email: EMAIL }, { channel: 'whatsapp', id: 'w1', phone: '919812345678' }], total: 2 });
+    res.json({ leads: [{ channel: 'website', id: lead.id, phone: PHONE, email: EMAIL }, { channel: 'whatsapp', id: 'w1', phone: '919812345678' }, { channel: 'instagram', id: 'i1', phone: '919812300000' }], total: 3 });
   });
   app.get('/api/conversations/:id/messages', async (req, res) => {
     res.json(await db.select().from(schema.messages).where(eq(schema.messages.conversationId, req.params.id)));
@@ -99,7 +99,7 @@ async function main() {
   const msgs = await get(`/api/conversations/${conv.id}/messages`);
   expect(!JSON.stringify(msgs).includes('98765 43210') && !JSON.stringify(msgs).includes(EMAIL), 'Chat messages: details hidden');
   const unified = await get('/api/leads/unified');
-  expect(unified.leads[0].phone.includes('*') && unified.leads[1].phone === '919812345678', 'Combined list: website hidden, WhatsApp row untouched');
+  expect(unified.leads[0].phone.includes('*') && unified.leads[1].phone.includes('*') && unified.leads[2].phone === '919812300000', 'Combined list: website and WhatsApp hidden, Instagram row untouched');
   const groupView = await get(`/api/group-admin/groups/${group.id}/leads`);
   user = { id: 'g1', role: 'account_group_admin' };
   const groupView2 = await get(`/api/group-admin/groups/${group.id}/leads`);

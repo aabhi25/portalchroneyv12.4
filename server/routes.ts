@@ -33091,13 +33091,15 @@ Return ONLY a valid JSON object in this format:
         return res.status(403).json({ error: "WhatsApp is not enabled for this business account" });
       }
 
-      const { senderPhone } = req.params;
+      // The page sends a phoneKey instead of the number when numbers are hidden from view.
+      const { phoneFromParam } = await import("./lib/contactViewMask");
+      const senderPhone = phoneFromParam(decodeURIComponent(req.params.senderPhone));
       const { sessionStart, sessionEnd, flowSessionId, limit, before } = req.query;
 
       const { whatsappService } = await import("./services/whatsappService");
       const result = await whatsappService.getConversationMessages(
         businessAccountId, 
-        decodeURIComponent(senderPhone),
+        senderPhone,
         sessionStart as string | undefined,
         sessionEnd as string | undefined,
         flowSessionId as string | undefined,
@@ -33124,12 +33126,14 @@ Return ONLY a valid JSON object in this format:
         return res.status(403).json({ error: "WhatsApp is not enabled for this business account" });
       }
 
-      const { senderPhone } = req.params;
+      // The page sends a phoneKey instead of the number when numbers are hidden from view.
+      const { phoneFromParam } = await import("./lib/contactViewMask");
+      const senderPhone = phoneFromParam(decodeURIComponent(req.params.senderPhone));
       const { sessionStart, sessionEnd } = req.query;
       const { whatsappService } = await import("./services/whatsappService");
       const deleted = await whatsappService.deleteConversation(
         businessAccountId, 
-        decodeURIComponent(senderPhone),
+        senderPhone,
         sessionStart as string | undefined,
         sessionEnd as string | undefined
       );

@@ -114,6 +114,7 @@ export class CrmSyncRecoveryWorker {
           AND ccs.enabled = true
           AND ccs.auto_sync_enabled = true
         WHERE wl.customer_name IS NOT NULL
+          AND wl.sender_phone NOT LIKE '%***%' -- contact details removed after sync: never sent again
           AND wl.customer_name <> ''
           AND (
             (

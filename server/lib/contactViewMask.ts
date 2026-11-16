@@ -5,9 +5,11 @@
  * still see the real details.
  *
  * Applied in one place: a middleware that hides contacts in the JSON of every portal route that
- * shows website leads or their chats (lists, details, exports, timelines, group admin views).
+ * shows website or WhatsApp leads or their chats (lists, details, exports, timelines, group admin
+ * views, the WhatsApp leads and conversations pages).
  * Exports build their file in the browser from that JSON, so they are covered too.
  */
+import crypto from "crypto";
 import type { NextFunction, Request, Response } from "express";
 import { inArray } from "drizzle-orm";
 import { db } from "../db";
@@ -68,7 +70,38 @@ async function anyHides(accountIds: string[]): Promise<boolean> {
 // them would break links and lookups.
 const SKIP_KEY = /^(id|key|url|href|src|path)$|(Id|Ids|_id|_ids|Url|_url|Href|Path|_path|At|_at|Key)$/;
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-const PHONE_KEY = /^(phone|mobile|whatsapp|whatsappNumber|phoneNumber|contactNumber|customerPhone)$/i;
+const PHONE_KEY = /^(phone|mobile|whatsapp|whatsappNumber|phoneNumber|contactNumber|customerPhone|customer_phone|senderPhone|sender_phone)$/i;
+const CONTACT_KEY = /^(phone|email|senderPhone|sender_phone|customerPhone|customer_phone|customerEmail|customer_email)$/;
+
+// ---------------------------------------------------------------------------
+// WhatsApp chats are opened by the student's number. When it is hidden, the page gets a
+// "phoneKey" instead: the number sealed with the server's key (same number → same key, so the
+// page can compare them), which the WhatsApp conversation routes accept in place of the number.
+// ---------------------------------------------------------------------------
+
+const PHONE_KEY_PREFIX = "wak.";
+const phoneKeySecret = () => crypto.createHash("sha256").update(`wa-phone-key:${process.env.ENCRYPTION_KEY || process.env.SESSION_SECRET || ""}`).digest();
+
+export function phoneKeyFor(phone: string): string {
+  const key = phoneKeySecret();
+  const iv = crypto.createHmac("sha256", key).update(phone).digest().subarray(0, 12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const sealed = Buffer.concat([cipher.update(phone, "utf8"), cipher.final()]);
+  return PHONE_KEY_PREFIX + Buffer.concat([iv, cipher.getAuthTag(), sealed]).toString("base64url");
+}
+
+/** A route's phone parameter: the number itself, or the number inside a phoneKey. */
+export function phoneFromParam(param: string): string {
+  if (!param.startsWith(PHONE_KEY_PREFIX)) return param;
+  try {
+    const buf = Buffer.from(param.slice(PHONE_KEY_PREFIX.length), "base64url");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", phoneKeySecret(), buf.subarray(0, 12));
+    decipher.setAuthTag(buf.subarray(12, 28));
+    return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString("utf8");
+  } catch {
+    return param;
+  }
+}
 
 /** Hides phones/emails in free text, leaving any IDs inside it untouched. */
 function hideInText(text: string): string {
@@ -99,9 +132,12 @@ export function hideContactsForView<T>(value: T, key = ""): T {
   if (value && typeof value === "object" && !(value instanceof Date) && !Buffer.isBuffer(value)) {
     const out: Record<string, unknown> = {};
     let changedContact = false;
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const record = value as Record<string, unknown>;
+    const sender = record.senderPhone ?? record.sender_phone;
+    if (typeof sender === "string" && sender && !isMaskedValue(sender)) out.phoneKey = phoneKeyFor(sender);
+    for (const [k, v] of Object.entries(record)) {
       const next = hideContactsForView(v, k);
-      if ((k === "phone" || k === "email") && next !== v) changedContact = true;
+      if (CONTACT_KEY.test(k) && next !== v) changedContact = true;
       out[k] = next;
     }
     if (changedContact) out.contactsHiddenFromView = true;
@@ -123,16 +159,18 @@ const ACCOUNT_ROUTES: { method: string; path: RegExp }[] = [
   { method: "GET", path: /^\/api\/analytics\/visitor-journeys(\/[^/]+)?$/ },
   { method: "GET", path: /^\/api\/insights\/conversation-analysis$/ },
   { method: "GET", path: /^\/api\/calling\/calls(\/[^/]+)?$/ },
+  { method: "GET", path: /^\/api\/whatsapp\/leads(\/[^/]+)?$/ },
+  { method: "GET", path: /^\/api\/whatsapp\/conversations(\/[^/]+)?$/ },
 ];
 
 /** Group admin routes: hidden when any account of the group hides. */
 const GROUP_ROUTE = /^\/api\/group-admin\/groups\/([^/]+)\/(leads|conversations|journey-responses|journey-responses-by-lead|accounts\/[^/]+\/conversation-analysis)(\/|$)/;
 
-/** In the combined Leads list, only website leads are hidden (WhatsApp/Instagram/Facebook keep theirs). */
+/** In the combined Leads list, website and WhatsApp leads are hidden (Instagram/Facebook keep theirs). */
 function hideForRoute(path: string, body: unknown): unknown {
   if (/^\/api\/leads\/unified(\/export)?$/.test(path) && body && typeof body === "object" && Array.isArray((body as any).leads)) {
     const b = body as { leads: any[] };
-    return { ...b, leads: b.leads.map(row => (row?.channel === "website" ? hideContactsForView(row) : row)) };
+    return { ...b, leads: b.leads.map(row => (row?.channel === "website" || row?.channel === "whatsapp" ? hideContactsForView(row) : row)) };
   }
   return hideContactsForView(body);
 }
@@ -157,7 +195,8 @@ export function contactViewMaskMiddleware(req: Request, res: Response, next: Nex
   const path = req.path;
   if (!path.startsWith("/api/leads") && !path.startsWith("/api/conversations") && !path.startsWith("/api/journey-leads")
     && !path.startsWith("/api/analytics/visitor-journeys") && !path.startsWith("/api/insights/conversation-analysis")
-    && !path.startsWith("/api/calling/calls") && !path.startsWith("/api/group-admin/groups/")) {
+    && !path.startsWith("/api/calling/calls") && !path.startsWith("/api/group-admin/groups/")
+    && !path.startsWith("/api/whatsapp/leads") && !path.startsWith("/api/whatsapp/conversations")) {
     return next();
   }
   const send = res.json.bind(res);
