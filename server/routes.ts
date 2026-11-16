@@ -13598,6 +13598,59 @@ Return ONLY the refined instruction, nothing else.`
     }
   });
 
+  // Group Admin: the group's WhatsApp chats (the "WhatsApp" side of Conversations), read-only.
+  // Registered before /conversations/:conversationId so "whatsapp" isn't taken for a chat id.
+  app.get("/api/group-admin/groups/:groupId/conversations/whatsapp", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId } = req.params;
+      const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+      if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
+      if (!permissions.canViewConversations) return res.status(403).json({ error: "No permission to view conversations" });
+
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+      const groupAccountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
+      const accountId = req.query.accountId as string | undefined;
+      const accountIds = accountId ? groupAccountIds.filter(id => id === accountId) : groupAccountIds;
+      const fromDateStr = req.query.fromDate as string | undefined;
+      const toDateStr = req.query.toDate as string | undefined;
+      const { listGroupWhatsappChats } = await import("./services/groupWhatsappChats");
+      const { chats, total } = await listGroupWhatsappChats(accountIds, {
+        search: (req.query.search as string | undefined) || undefined,
+        from: fromDateStr ? new Date(fromDateStr) : undefined,
+        to: toDateStr ? new Date(toDateStr) : undefined,
+      }, { limit, offset: (page - 1) * limit });
+      res.json({ chats, total, page, limit, hasMore: (page - 1) * limit + chats.length < total });
+    } catch (error: any) {
+      console.error('[Group Admin] Error fetching WhatsApp chats:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Group Admin: one WhatsApp chat's messages (read-only). :phone is the row's phoneKey.
+  app.get("/api/group-admin/groups/:groupId/conversations/whatsapp/:accountId/:phone", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId, accountId } = req.params;
+      const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+      if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
+      if (!permissions.canViewConversations) return res.status(403).json({ error: "No permission to view conversations" });
+
+      const { phoneFromParam } = await import("./lib/contactViewMask");
+      const senderPhone = phoneFromParam(decodeURIComponent(req.params.phone));
+      const accountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
+      const { groupWhatsappChatMessages } = await import("./services/groupWhatsappChats");
+      const result = await groupWhatsappChatMessages(accountIds, accountId, senderPhone, {
+        limit: Math.min(parseInt(req.query.limit as string) || 50, 100),
+        before: (req.query.before as string | undefined) || undefined,
+      });
+      if (!result) return res.status(404).json({ error: "Chat not found" });
+      res.json(result);
+    } catch (error: any) {
+      console.error('[Group Admin] Error fetching WhatsApp chat:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Group Admin: Get single conversation details
   app.get("/api/group-admin/groups/:groupId/conversations/:conversationId", requireAuth, requireGroupAdmin, async (req, res) => {
     try {

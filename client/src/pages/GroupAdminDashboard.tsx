@@ -48,6 +48,7 @@ import type { CrmTarget } from "@/components/leads/LeadCrm";
 import type { Lead } from "@shared/schema";
 import { FaWhatsapp } from "react-icons/fa";
 import { GroupWhatsappLeadsList, type GroupWhatsappLead } from "@/components/leads/GroupWhatsappLeadsList";
+import { GroupWhatsappChatList, GroupWhatsappChatThread, useGroupWhatsappChats, type GroupWhatsappChat } from "@/components/conversations/GroupWhatsappChats";
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'currentMonth' | 'lastMonth' | 'custom';
 
@@ -268,6 +269,10 @@ export default function GroupAdminDashboard() {
   const [isExportingConvo, setIsExportingConvo] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [convoFilterOpen, setConvoFilterOpen] = useState(false);
+  // Which chats Conversations lists: website chats (default) or WhatsApp chats (read-only).
+  const [convoChannel, setConvoChannel] = useState<'website' | 'whatsapp'>('website');
+  const [waChatsPage, setWaChatsPage] = useState(1);
+  const [selectedWaChat, setSelectedWaChat] = useState<GroupWhatsappChat | null>(null);
 
   const [chatDialogOpen, setChatDialogOpen] = useState(false);
   const [chatDialogConversationId, setChatDialogConversationId] = useState<string | null>(null);
@@ -402,6 +407,18 @@ export default function GroupAdminDashboard() {
       prevLeadsFiltersRef.current = { leadsSearch, leadsDatePreset, leadsFromDate, leadsToDate, leadsAccountFilter };
     }
   }, [leadsSearch, leadsDatePreset, leadsFromDate, leadsToDate, leadsAccountFilter]);
+
+  const waChatsParams = useMemo(() => {
+    const params = new URLSearchParams();
+    const { from, to } = getDateRange(convoDatePreset, convoFromDate, convoToDate);
+    if (from) params.append('fromDate', from.toISOString());
+    if (to) params.append('toDate', to.toISOString());
+    if (convoSearch.trim()) params.append('search', convoSearch.trim());
+    if (convoAccountFilter && convoAccountFilter !== 'all') params.append('accountId', convoAccountFilter);
+    return params.toString();
+  }, [convoDatePreset, convoFromDate, convoToDate, convoSearch, convoAccountFilter]);
+  useEffect(() => { setWaChatsPage(1); }, [waChatsParams, selectedGroupId]);
+  useEffect(() => { setSelectedWaChat(null); }, [selectedGroupId]);
 
   useEffect(() => {
     const prev = prevConvoFiltersRef.current;
@@ -713,9 +730,25 @@ export default function GroupAdminDashboard() {
     };
   }, []);
 
+  // The account filters list the group's accounts (not the analytics data, which is empty for
+  // admins without "view analytics").
+  const { data: linkedAccountsData } = useQuery<{ accounts: { id: string; name: string }[] }>({
+    queryKey: ["/api/group-admin/groups", selectedGroupId, "linked-accounts"],
+    queryFn: async () => {
+      const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/linked-accounts`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch accounts");
+      return res.json();
+    },
+    enabled: !!selectedGroupId,
+  });
   const accountsForFilter = useMemo(() => {
-    return analyticsData?.accountBreakdown?.map(a => ({ businessAccountId: a.businessAccountId, businessName: a.businessName })) || [];
-  }, [analyticsData]);
+    return (linkedAccountsData?.accounts || [])
+      .map(a => ({ businessAccountId: a.id, businessName: a.name }))
+      .sort((a, b) => a.businessName.localeCompare(b.businessName));
+  }, [linkedAccountsData]);
+
+  const waChatsQuery = useGroupWhatsappChats(selectedGroupId, waChatsParams, waChatsPage, !!selectedGroup?.canViewConversations);
+  const showingWaChats = convoChannel === 'whatsapp';
 
   const exportLeadsToExcel = async () => {
     if (!selectedGroupId || !selectedGroup?.canExportData) return;
@@ -1668,21 +1701,41 @@ export default function GroupAdminDashboard() {
             </Card>
           ) : (
             <div className="flex h-[calc(100vh-48px)] w-full bg-gray-50 min-h-0 overflow-hidden rounded-lg border">
-              <div className={`w-full md:w-96 border-r border-gray-200 bg-white flex-col min-h-0 overflow-hidden ${selectedConversationId ? 'hidden md:flex' : 'flex'}`}>
+              <div className={`w-full md:w-96 border-r border-gray-200 bg-white flex-col min-h-0 overflow-hidden ${(showingWaChats ? selectedWaChat : selectedConversationId) ? 'hidden md:flex' : 'flex'}`}>
                 <div className="p-4 border-b border-gray-200">
                   <div className="flex items-center justify-between mb-3">
                     <h2 className="text-xl font-bold text-gray-900">Conversations</h2>
-                    {selectedGroup?.canExportData && (
+                    {selectedGroup?.canExportData && !showingWaChats && (
                       <Button variant="outline" size="sm" onClick={exportConversationsToExcel} disabled={isExportingConvo}>
                         {isExportingConvo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                       </Button>
                     )}
                   </div>
+                  <div className="mb-3 grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1" role="tablist" aria-label="Chat source">
+                    {([
+                      { key: 'website', label: 'Website', count: conversationsData?.total, icon: <MessageSquare className="w-3.5 h-3.5" />, active: 'text-purple-700' },
+                      { key: 'whatsapp', label: 'WhatsApp', count: waChatsQuery.data?.total, icon: <FaWhatsapp className="w-3.5 h-3.5" />, active: 'text-green-700' },
+                    ] as const).map(t => (
+                      <button
+                        key={t.key}
+                        role="tab"
+                        aria-selected={convoChannel === t.key}
+                        onClick={() => setConvoChannel(t.key)}
+                        className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium transition-all ${
+                          convoChannel === t.key ? `bg-white shadow-sm ${t.active}` : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        {t.icon}
+                        {t.label}
+                        <span className="text-xs tabular-nums text-gray-400">{(t.count ?? 0).toLocaleString()}</span>
+                      </button>
+                    ))}
+                  </div>
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                     <Input
                       type="text"
-                      placeholder="Search conversations..."
+                      placeholder={showingWaChats ? "Search by name or number..." : "Search conversations..."}
                       value={convoSearch}
                       onChange={(e) => setConvoSearch(e.target.value)}
                       className="pl-10"
@@ -1858,7 +1911,7 @@ export default function GroupAdminDashboard() {
 
                 <RetentionBanner policies={retentionPolicies} totalAccounts={retentionAccountCount} onViewReport={() => setRetentionReportOpen(true)} />
                 {/* Type Filter Chips */}
-                <div className="px-4 py-2 border-b border-gray-200 flex items-center gap-2 flex-wrap">
+                <div className={`px-4 py-2 border-b border-gray-200 flex items-center gap-2 flex-wrap ${showingWaChats ? 'hidden' : ''}`}>
                   {([
                     { key: 'all' as const, label: 'All', icon: null },
                     { key: 'chat' as const, label: 'Chat', icon: <MessageSquare className="w-3 h-3" /> },
@@ -1880,7 +1933,7 @@ export default function GroupAdminDashboard() {
                   ))}
                 </div>
 
-                {canDeleteConversations && filteredConversations.length > 0 && (
+                {canDeleteConversations && !showingWaChats && filteredConversations.length > 0 && (
                   <div className="px-4 py-2 border-b border-gray-200 flex items-center gap-2 bg-gray-50/60">
                     <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
                       <Checkbox
@@ -1920,7 +1973,18 @@ export default function GroupAdminDashboard() {
                 )}
 
                 <div className="flex-1 overflow-y-auto overscroll-contain">
-                  {loadingConversations ? (
+                  {showingWaChats ? (
+                    <GroupWhatsappChatList
+                      chats={waChatsQuery.data?.chats || []}
+                      total={waChatsQuery.data?.total || 0}
+                      page={waChatsPage}
+                      onPage={setWaChatsPage}
+                      loading={waChatsQuery.isLoading}
+                      selected={selectedWaChat ? { accountId: selectedWaChat.businessAccountId, phoneKey: selectedWaChat.phoneKey } : null}
+                      onSelect={setSelectedWaChat}
+                      hasFilters={!!convoSearch.trim() || convoDatePreset !== 'all' || convoAccountFilter !== 'all'}
+                    />
+                  ) : loadingConversations ? (
                     <div className="flex justify-center py-8">
                       <div className="w-6 h-6 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
                     </div>
@@ -2027,7 +2091,7 @@ export default function GroupAdminDashboard() {
                     </div>
                   )}
 
-                  {convoTotalPages > 1 && (
+                  {!showingWaChats && convoTotalPages > 1 && (
                     <div className="mt-auto border-t border-gray-200 p-4 bg-white">
                       <div className="flex items-center justify-between gap-2">
                         <Button variant="outline" size="sm" onClick={() => setConversationsPage(p => Math.max(1, p - 1))} disabled={conversationsPage === 1} className="flex items-center gap-1">
@@ -2043,8 +2107,20 @@ export default function GroupAdminDashboard() {
                 </div>
               </div>
 
-              <div className={`flex-1 flex-col bg-gray-50 min-h-0 overflow-hidden ${selectedConversationId ? 'flex' : 'hidden md:flex'}`}>
-                {selectedConversation ? (
+              <div className={`flex-1 flex-col bg-gray-50 min-h-0 overflow-hidden ${(showingWaChats ? selectedWaChat : selectedConversationId) ? 'flex' : 'hidden md:flex'}`}>
+                {showingWaChats ? (
+                  selectedWaChat && selectedGroupId ? (
+                    <GroupWhatsappChatThread key={`${selectedWaChat.businessAccountId}:${selectedWaChat.phoneKey}`} groupId={selectedGroupId} chat={selectedWaChat} onBack={() => setSelectedWaChat(null)} />
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center text-center p-4">
+                      <div>
+                        <FaWhatsapp className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                        <h3 className="text-lg font-medium text-gray-900 mb-2">Select a WhatsApp chat</h3>
+                        <p className="text-sm text-gray-500">Choose a chat from the list to read it</p>
+                      </div>
+                    </div>
+                  )
+                ) : selectedConversation ? (
                   <>
                     <button
                       type="button"
