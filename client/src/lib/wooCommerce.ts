@@ -1,4 +1,26 @@
-/** WooCommerce product sync, shared by Products › WooCommerce and the Catalog page. */
+/** Website product sync (Shopify, WooCommerce or other shops), shared by Products › Website products and the Catalog page. */
+
+/** How the website's products are read (server/services/websiteStores.ts). */
+export type WebsiteReadMode = "public" | "keys" | "shopify" | "pagedata";
+
+export const readModeLabel = (m: WebsiteReadMode) =>
+  m === "keys" ? "WooCommerce, with the website's keys (saved encrypted)"
+    : m === "shopify" ? "Shopify, the public product list (no keys)"
+      : m === "pagedata" ? "the website's product pages (from its sitemap)"
+        : "WooCommerce, the public product list (no keys)";
+
+/** POST /api/woocommerce/detect: what kind of shop the address is. */
+export interface WebsiteDetection {
+  platform: "shopify" | "woocommerce" | "other";
+  platformName: string | null;
+  readMode: "public" | "shopify" | "pagedata" | null;
+  storeUrl: string;
+  total: number | null;
+  sample: string[];
+  currency: string | null;
+  needsKeys: boolean;
+  message: string;
+}
 
 /** GET /api/woocommerce/status (server/routes/wooCommerce.ts). */
 export interface WooStatus {
@@ -6,7 +28,7 @@ export interface WooStatus {
   connected: boolean;
   liveSource: "woocommerce" | "catalog";
   storeUrl: string | null;
-  readMode: "public" | "keys";
+  readMode: WebsiteReadMode;
   hasKeys: boolean;
   syncHours: number;
   syncHourChoices: number[];

@@ -38,7 +38,7 @@ export interface HubAccess {
   training: boolean;
   products: boolean;
   shopify: boolean;
-  /** WooCommerce switched on in Features (the WooCommerce tab is for super admins only). */
+  /** Website products (WooCommerce, Shopify…) switched on in Features (the tab is for super admins only). */
   wooCommerce: boolean;
   appointments: boolean;
   orders: boolean;
@@ -400,7 +400,7 @@ export const HUB_AREAS: HubArea[] = [
       { key: "catalog", label: "Catalog", href: "/admin/products", matches: exact("/admin/products") },
       { key: "import", label: "Import from Excel", href: "/products/import-excel", matches: exact("/products/import-excel") },
       { key: "shopify", label: "Shopify", href: "/admin/shopify", matches: exact("/admin/shopify"), visible: a => a.shopify },
-      { key: "woocommerce", label: "WooCommerce", href: "/admin/woocommerce", matches: exact("/admin/woocommerce"), visible: a => a.wooCommerce && a.isSuperAdminViewing },
+      { key: "woocommerce", label: "Website products", href: "/admin/woocommerce", matches: exact("/admin/woocommerce"), visible: a => a.wooCommerce && a.isSuperAdminViewing },
     ],
   },
   {

@@ -48,7 +48,7 @@ export interface WooKeys {
   secret: string;
 }
 
-const allowLocal = () => process.env.WOO_ALLOW_LOCAL_STORE === "1";
+export const allowLocal = () => process.env.WOO_ALLOW_LOCAL_STORE === "1";
 
 /** "accurex.net/shop?x=1" → "https://accurex.net". Throws a WooStoreError with a plain message. */
 export function normalizeStoreUrl(input: unknown): string {
@@ -83,7 +83,7 @@ function isPrivateIp(ip: string): boolean {
   return false;
 }
 
-async function assertPublicHost(url: URL): Promise<void> {
+export async function assertPublicHost(url: URL): Promise<void> {
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if ((host === "localhost" || host === "127.0.0.1") && allowLocal()) return;
   if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) {

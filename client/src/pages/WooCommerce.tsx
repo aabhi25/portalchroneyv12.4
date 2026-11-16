@@ -12,8 +12,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
-import { WOO_STATUS_KEY, type WooStatus } from "@/lib/wooCommerce";
-import { AlertTriangle, CheckCircle2, Globe, KeyRound, Link2, Loader2, Pencil, PlugZap, RefreshCw, Unplug, XCircle } from "lucide-react";
+import { WOO_STATUS_KEY, readModeLabel, type WebsiteDetection, type WebsiteReadMode, type WooStatus } from "@/lib/wooCommerce";
+import { AlertTriangle, CheckCircle2, Globe, KeyRound, Loader2, Pencil, PlugZap, RefreshCw, ScanSearch, Unplug, XCircle } from "lucide-react";
 
 
 const hoursLabel = (h: number) =>
@@ -22,8 +22,9 @@ const hoursLabel = (h: number) =>
 const when = (iso: string) => `${format(new Date(iso), "d MMM, h:mm a")} (${formatDistanceToNow(new Date(iso), { addSuffix: true })})`;
 
 /**
- * Products → WooCommerce (super admins). Reads the website's public product list (no keys), or the
- * WooCommerce API with the website's consumer key + secret (saved encrypted, never shown again).
+ * Products → Website products (super admins). The website address is checked first (Shopify, WooCommerce or
+ * another shop) and its products are read the way that suits it; a WooCommerce website can also be read with
+ * its consumer key + secret (saved encrypted, never shown again).
  * While connected the chat uses only the website's products; manual products are kept but not used.
  */
 export default function WooCommerce() {
@@ -36,7 +37,10 @@ export default function WooCommerce() {
   const [syncHours, setSyncHours] = useState("24");
   const [test, setTest] = useState<{ success: boolean; message: string; sample?: string[]; currency?: string | null } | null>(null);
   const [confirm, setConfirm] = useState<"connect" | "disconnect" | null>(null);
-  const [readMode, setReadMode] = useState<"public" | "keys">("public");
+  const [readMode, setReadMode] = useState<WebsiteReadMode>("public");
+  // What "Check website" found for the address typed (cleared when the address changes).
+  const [detected, setDetected] = useState<(WebsiteDetection & { success: true }) | { success: false; message: string } | null>(null);
+  const useKeys = readMode === "keys";
   const [consumerKey, setConsumerKey] = useState("");
   const [consumerSecret, setConsumerSecret] = useState("");
   // Changing the website, the way it's read or the keys while connected.
@@ -51,9 +55,29 @@ export default function WooCommerce() {
     if (status?.readMode) setReadMode(status.readMode);
   }, [status?.readMode]);
 
-  const readBody = () => readMode === "keys"
-    ? { storeUrl, readMode, consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim() }
-    : { storeUrl, readMode };
+  const readBody = () => useKeys
+    ? { storeUrl, readMode: "keys", consumerKey: consumerKey.trim(), consumerSecret: consumerSecret.trim() }
+    : detected?.success && detected.readMode
+      ? { storeUrl: detected.storeUrl, readMode: detected.readMode }
+      // Not checked yet: the server checks the website on Connect.
+      : { storeUrl, readMode: "auto" };
+
+  const detectMutation = useMutation({
+    mutationFn: () => apiRequest<(WebsiteDetection & { success: true }) | { success: false; message: string }>("POST", "/api/woocommerce/detect", { storeUrl }),
+    onSuccess: (r) => {
+      setDetected(r);
+      if (r.success && r.needsKeys && !r.readMode) setReadMode("keys");
+      else if (r.success && r.readMode) setReadMode(r.readMode);
+    },
+    onError: (e: Error) => setDetected({ success: false, message: e.message }),
+  });
+
+  const changeUrl = (v: string) => {
+    setStoreUrl(v);
+    setTest(null);
+    setDetected(null);
+    if (!useKeys) setReadMode("public");
+  };
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: WOO_STATUS_KEY });
@@ -67,26 +91,27 @@ export default function WooCommerce() {
   });
 
   const connectMutation = useMutation({
-    mutationFn: () => apiRequest<{ success: boolean; message: string }>("POST", "/api/woocommerce/connect", { ...readBody(), syncHours: Number(syncHours) }),
+    mutationFn: () => apiRequest<{ success: boolean; pending?: boolean; message: string }>("POST", "/api/woocommerce/connect", { ...readBody(), syncHours: Number(syncHours) }),
     onSuccess: (r) => {
       setConfirm(null);
       refresh();
       if (r.success) {
         setEditing(false);
         setTest(null);
+        setDetected(null);
         setConsumerKey("");
         setConsumerSecret("");
       }
-      toast(r.success ? { title: "WooCommerce connected", description: r.message } : { title: "Couldn't connect", description: r.message, variant: "destructive" });
+      toast(r.pending ? { title: "Reading the website", description: r.message } : r.success ? { title: "Website connected", description: r.message } : { title: "Couldn't connect", description: r.message, variant: "destructive" });
     },
     onError: (e: Error) => toast({ title: "Couldn't connect", description: e.message, variant: "destructive" }),
   });
 
   const syncMutation = useMutation({
-    mutationFn: () => apiRequest<{ success: boolean; message: string }>("POST", "/api/woocommerce/sync-now"),
+    mutationFn: () => apiRequest<{ success: boolean; pending?: boolean; message: string }>("POST", "/api/woocommerce/sync-now"),
     onSuccess: (r) => {
       refresh();
-      toast(r.success ? { title: "Synced", description: r.message } : { title: "Sync failed", description: r.message, variant: "destructive" });
+      toast(r.pending ? { title: "Reading the website", description: r.message } : r.success ? { title: "Synced", description: r.message } : { title: "Sync failed", description: r.message, variant: "destructive" });
     },
     onError: (e: Error) => toast({ title: "Sync failed", description: e.message, variant: "destructive" }),
   });
@@ -119,7 +144,7 @@ export default function WooCommerce() {
       <div className="max-w-3xl p-1" data-testid="woocommerce-page">
         <Card>
           <CardContent className="py-6 text-sm text-muted-foreground">
-            WooCommerce is switched off for this account. Switch it on in <Link href={SETTINGS_PATHS.features} className="text-primary underline">Features</Link> first.
+            Website products are switched off for this account. Switch them on in <Link href={SETTINGS_PATHS.features} className="text-primary underline">Features</Link> first.
           </CardContent>
         </Card>
       </div>
@@ -142,9 +167,9 @@ export default function WooCommerce() {
               : <Badge variant="secondary" className="ml-1" data-testid="badge-woo-not-connected">Not connected</Badge>}
           </CardTitle>
           <CardDescription>
-            Products are read from the website: from its public product list (just the website link), or with the
-            WooCommerce keys from the website's developer. While connected, the chat (website, WhatsApp, Instagram,
-            Facebook and voice) uses only the website's products.
+            Type the shop's website address. We check what it's built on (Shopify, WooCommerce or another shop) and
+            read its products the right way, usually from the link alone. While connected, the chat (website, WhatsApp,
+            Instagram, Facebook and voice) uses only the website's products.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -152,7 +177,7 @@ export default function WooCommerce() {
             <>
               <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
                 <div>Website: <a href={status.storeUrl ?? "#"} target="_blank" rel="noreferrer" className="font-medium text-primary underline" data-testid="text-woo-store-url">{status.storeUrl}</a></div>
-                <div data-testid="text-woo-read-mode">Reading: {status.readMode === "keys" ? "with the website's keys (saved encrypted)" : "the public product list (no keys)"}</div>
+                <div data-testid="text-woo-read-mode">Reading: {readModeLabel(status.readMode)}</div>
                 <div data-testid="text-woo-live">Live in chat: <span className="font-medium">{status.counts.website} website products</span> · {status.counts.manual} manual products kept, not used in chat</div>
                 {status.lastSyncedAt && <div className="text-muted-foreground">Last good sync: {when(status.lastSyncedAt)}</div>}
                 {status.nextSyncAt && !status.syncing && <div className="text-muted-foreground">Next sync: {format(new Date(status.nextSyncAt), "d MMM, h:mm a")}</div>}
@@ -171,8 +196,8 @@ export default function WooCommerce() {
                   {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                   {busy ? "Syncing…" : "Sync now"}
                 </Button>
-                <Button variant="outline" onClick={() => { setEditing(true); setTest(null); setStoreUrl(status.storeUrl || ""); }} disabled={busy} data-testid="button-woo-change">
-                  <Pencil className="mr-2 h-4 w-4" /> Change website or keys
+                <Button variant="outline" onClick={() => { setEditing(true); setTest(null); setDetected(null); setStoreUrl(status.storeUrl || ""); }} disabled={busy} data-testid="button-woo-change">
+                  <Pencil className="mr-2 h-4 w-4" /> Change website
                 </Button>
                 <Button variant="outline" onClick={() => setConfirm("disconnect")} disabled={busy} data-testid="button-woo-disconnect">
                   <Unplug className="mr-2 h-4 w-4" /> Disconnect
@@ -183,31 +208,46 @@ export default function WooCommerce() {
             <>
               <div className="space-y-1.5">
                 <Label htmlFor="woo-url">Website address</Label>
-                <Input id="woo-url" placeholder="https://example.com" value={storeUrl} onChange={(e) => { setStoreUrl(e.target.value); setTest(null); }} data-testid="input-woo-store-url" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>How to read the products</Label>
-                <div className="grid gap-2 sm:grid-cols-2" role="radiogroup">
-                  {([
-                    { mode: "public" as const, icon: Link2, title: "Website link only", text: "Reads the public product list that shoppers see. No keys needed." },
-                    { mode: "keys" as const, icon: KeyRound, title: "Website link + keys", text: "Uses the WooCommerce keys from the website's developer. Also works if the public list is switched off or blocked." },
-                  ]).map(o => (
-                    <button
-                      key={o.mode}
-                      type="button"
-                      role="radio"
-                      aria-checked={readMode === o.mode}
-                      onClick={() => { setReadMode(o.mode); setTest(null); }}
-                      className={`rounded-md border p-3 text-left text-sm transition-colors ${readMode === o.mode ? "border-purple-500 bg-purple-50 ring-1 ring-purple-500 dark:bg-purple-950/30" : "hover:bg-muted/50"}`}
-                      data-testid={`radio-woo-mode-${o.mode}`}
-                    >
-                      <div className="flex items-center gap-2 font-medium"><o.icon className="h-4 w-4 text-purple-600" /> {o.title}</div>
-                      <div className="mt-1 text-muted-foreground">{o.text}</div>
-                    </button>
-                  ))}
+                <div className="flex flex-wrap gap-2">
+                  <Input id="woo-url" className="min-w-[14rem] flex-1" placeholder="https://example.com" value={storeUrl} onChange={(e) => changeUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && storeUrl.trim()) detectMutation.mutate(); }} data-testid="input-woo-store-url" />
+                  <Button variant="outline" onClick={() => detectMutation.mutate()} disabled={!storeUrl.trim() || detectMutation.isPending} data-testid="button-woo-detect">
+                    {detectMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ScanSearch className="mr-2 h-4 w-4" />} Check website
+                  </Button>
                 </div>
+                {detectMutation.isPending && <p className="text-xs text-muted-foreground">Looking at the website… this can take up to a minute.</p>}
               </div>
-              {readMode === "keys" && (
+              {detected && (
+                <div className={`flex items-start gap-2 rounded-md border p-3 text-sm ${detected.success && (detected.readMode || detected.needsKeys) ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200" : "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"}`} data-testid="text-woo-detect-result">
+                  {detected.success && detected.readMode ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+                  <div className="min-w-0">
+                    {detected.success && detected.platformName && <Badge variant="outline" className="mb-1 bg-white/60" data-testid="badge-woo-platform">{detected.platformName}</Badge>}
+                    <div>{detected.message}</div>
+                    {detected.success && (detected.total != null || detected.sample.length > 0) && (
+                      <div className="mt-1 opacity-80">
+                        {detected.total != null && detected.platform === "woocommerce" && `${detected.total} products. `}
+                        {detected.sample.length > 0 && `For example: ${detected.sample.slice(0, 3).join(", ")}`}
+                        {detected.currency ? ` · prices in ${detected.currency}` : ""}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {(useKeys || (detected?.success && detected.platform === "woocommerce") || (status.connected && status.readMode === "keys")) && (
+                <label className="flex items-center gap-2 text-sm" data-testid="label-woo-use-keys">
+                  <input
+                    type="checkbox"
+                    checked={useKeys}
+                    onChange={(e) => {
+                      setTest(null);
+                      setReadMode(e.target.checked ? "keys" : (detected?.success && detected.readMode) || "public");
+                    }}
+                    className="h-4 w-4 accent-purple-600"
+                    data-testid="checkbox-woo-use-keys"
+                  />
+                  <KeyRound className="h-4 w-4 text-purple-600" /> Use the WooCommerce keys from the website's developer
+                </label>
+              )}
+              {useKeys && (
                 <div className="space-y-3 rounded-md border p-3">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
@@ -243,15 +283,22 @@ export default function WooCommerce() {
                   </div>
                 </div>
               )}
+              {status.syncing && (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/30 p-3 text-sm" data-testid="text-woo-reading">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Reading the website's products… big shops take a few minutes. You can leave this page.
+                </div>
+              )}
               <div className="flex flex-wrap gap-3">
-                <Button variant="outline" onClick={() => testMutation.mutate()} disabled={!storeUrl.trim() || testMutation.isPending} data-testid="button-woo-test">
-                  {testMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Test connection
-                </Button>
-                <Button onClick={() => (status.connected ? connectMutation.mutate() : setConfirm("connect"))} disabled={!storeUrl.trim() || busy} data-testid="button-woo-connect">
+                {useKeys && (
+                  <Button variant="outline" onClick={() => testMutation.mutate()} disabled={!storeUrl.trim() || testMutation.isPending} data-testid="button-woo-test">
+                    {testMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Test keys
+                  </Button>
+                )}
+                <Button onClick={() => (status.connected ? connectMutation.mutate() : setConfirm("connect"))} disabled={!storeUrl.trim() || busy || (!useKeys && detected?.success === true && !detected.readMode) || (!useKeys && detected?.success === false)} data-testid="button-woo-connect">
                   {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />} {status.connected ? "Save and sync" : "Connect"}
                 </Button>
                 {status.connected && (
-                  <Button variant="ghost" onClick={() => { setEditing(false); setTest(null); setReadMode(status.readMode); setConsumerKey(""); setConsumerSecret(""); setStoreUrl(status.storeUrl || ""); }} disabled={busy} data-testid="button-woo-cancel-change">
+                  <Button variant="ghost" onClick={() => { setEditing(false); setTest(null); setDetected(null); setReadMode(status.readMode); setConsumerKey(""); setConsumerSecret(""); setStoreUrl(status.storeUrl || ""); }} disabled={busy} data-testid="button-woo-cancel-change">
                     Cancel
                   </Button>
                 )}
@@ -314,8 +361,8 @@ export default function WooCommerce() {
           <DialogHeader>
             <DialogTitle>Use the website's products in chat?</DialogTitle>
             <DialogDescription>
-              The products on {storeUrl.trim() || "the website"} are read now. When that works, the chat uses only those products.
-              {status.counts.manual > 0 ? ` Your ${status.counts.manual} manual products are kept as they are, but not used in chat while WooCommerce is connected.` : ""}
+              The products on <span className="break-all">{(detected?.success && detected.storeUrl) || storeUrl.trim() || "the website"}</span> are read now. When that works, the chat uses only those products.
+              {status.counts.manual > 0 ? ` Your ${status.counts.manual} manual products are kept as they are, but not used in chat while the website is connected.` : ""}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -330,7 +377,7 @@ export default function WooCommerce() {
       <Dialog open={confirm === "disconnect"} onOpenChange={(o) => !o && setConfirm(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Disconnect WooCommerce?</DialogTitle>
+            <DialogTitle>Disconnect the website?</DialogTitle>
             <DialogDescription>
               The chat goes back to your {status.counts.manual} manual products straight away. The {status.counts.website} website products
               are kept, greyed out, so connecting again is quick. Automatic syncs stop.

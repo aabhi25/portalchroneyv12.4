@@ -574,13 +574,13 @@ export default function AdminProducts() {
                   <div className="rounded-xl border border-purple-200 bg-purple-50/60 px-4 py-3 text-sm dark:border-purple-900 dark:bg-purple-950/30" data-testid="banner-live-in-chat">
                     {wooLive ? (
                       <p>
-                        <span className="font-semibold">Live in chat: WooCommerce website</span> · {wooStatus.counts.website} products
+                        <span className="font-semibold">Live in chat: website products</span> · {wooStatus.counts.website} products
                         {wooStatus.lastSyncedAt && <> · last synced {format(new Date(wooStatus.lastSyncedAt), "d MMM, h:mm a")}</>}
                       </p>
                     ) : (
                       <p>
                         <span className="font-semibold">Live in chat: your manual products</span> ({wooStatus.counts.manual})
-                        {wooStatus.counts.website > 0 && <> · website products are not used while WooCommerce is disconnected</>}
+                        {wooStatus.counts.website > 0 && <> · website products are not used while the website is disconnected</>}
                       </p>
                     )}
                     {wooLive && wooStatus.lastResult && !wooStatus.lastResult.ok && (
@@ -592,7 +592,7 @@ export default function AdminProducts() {
                   </div>
                   <div className="inline-flex flex-wrap gap-1 rounded-lg border bg-muted/40 p-1" role="tablist">
                     {([
-                      { view: "woocommerce" as const, label: "From WooCommerce", count: wooStatus.counts.website, live: wooLive },
+                      { view: "woocommerce" as const, label: "From the website", count: wooStatus.counts.website, live: wooLive },
                       { view: "manual" as const, label: "Added by hand", count: wooStatus.counts.manual, live: !wooLive },
                     ]).map(t => (
                       <button
@@ -615,7 +615,7 @@ export default function AdminProducts() {
                     </p>
                   )}
                   {!viewingWebsite && wooLive && (
-                    <p className="text-sm text-muted-foreground">You can still edit these, but the chat won't use them while WooCommerce is connected.</p>
+                    <p className="text-sm text-muted-foreground">You can still edit these, but the chat won't use them while the website is connected.</p>
                   )}
                 </div>
               )}
@@ -1098,7 +1098,7 @@ export default function AdminProducts() {
                           {product.source === 'woocommerce' && (
                             <Badge className="text-[10px] bg-purple-600/90 hover:bg-purple-600 text-white border-0 shadow-sm backdrop-blur-sm" data-testid={`badge-website-${product.id}`}>
                               <Globe className="w-2.5 h-2.5 mr-1" />
-                              WooCommerce
+                              Website
                             </Badge>
                           )}
                           {product.stockStatus === 'out_of_stock' && (

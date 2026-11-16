@@ -3,13 +3,15 @@ import { db } from "../db";
 import { reportError } from "../lib/errorReporter";
 import { businessAccounts, categories, productCategories, products, productTags, tags, widgetSettings } from "@shared/schema";
 import { storage } from "../storage";
-import { fetchStoreProducts, normalizeStoreUrl, WooStoreError, type WooKeys, type WooProduct } from "./wooCommerceStore";
+import { normalizeStoreUrl, WooStoreError, type WooKeys, type WooProduct } from "./wooCommerceStore";
+import { isWebsiteReadMode, readWebsiteProducts, siteOrigin, type WebsiteReadMode } from "./websiteStores";
 import { decrypt, encrypt } from "./encryptionService";
 import { onProductSourceChanged } from "./productSourceSwitch";
 import { prepareMessagingImages, removeMessagingImages } from "./messagingImages";
 
 /**
- * Brings a business's WooCommerce website products into its catalog (source 'woocommerce') and keeps them
+ * Brings a business's website products into its catalog (source 'woocommerce', the name from when only
+ * WooCommerce was supported; Shopify and other shops use it too, see websiteStores.ts) and keeps them
  * in step: new ones added, changed ones updated, ones gone from the website removed. Manual products are
  * never touched. Runs on Connect, on "Sync now" and on a timer (every `woo_sync_hours`, default 24).
  *
@@ -125,7 +127,7 @@ function productFields(p: WooProduct) {
   };
 }
 
-export type WooReadMode = "public" | "keys";
+export type WooReadMode = WebsiteReadMode;
 
 /** The saved keys, decrypted (only for the 'keys' read mode). */
 export function savedWooKeys(settings: { wooConsumerKey?: string | null; wooConsumerSecret?: string | null } | null | undefined): WooKeys | undefined {
@@ -154,11 +156,13 @@ export async function syncWooCommerce(
   const settings = await storage.getWidgetSettings(businessAccountId);
   const previous = (settings?.wooLastResult as WooSyncResult | null) ?? null;
   try {
-    const storeUrl = normalizeStoreUrl(opts.storeUrl ?? settings?.wooStoreUrl);
-    const readMode: WooReadMode = opts.readMode ?? (settings?.wooReadMode === "keys" ? "keys" : "public");
+    const readMode: WooReadMode = opts.readMode ?? (isWebsiteReadMode(settings?.wooReadMode) ? settings!.wooReadMode as WooReadMode : "public");
+    const typedUrl = opts.storeUrl ?? settings?.wooStoreUrl;
+    // Shopify and other shops are read from the website root; WooCommerce keeps a WordPress sub-folder.
+    const storeUrl = readMode === "shopify" || readMode === "pagedata" ? siteOrigin(String(typedUrl ?? "")) : normalizeStoreUrl(typedUrl);
     const keys = readMode === "keys" ? opts.keys ?? savedWooKeys(settings) : undefined;
     if (readMode === "keys" && !keys) throw new WooStoreError("Add the website's consumer key and secret first.");
-    const fetched = await fetchStoreProducts(storeUrl, { keys });
+    const fetched = await readWebsiteProducts(storeUrl, readMode, keys);
 
     const existing = await db
       .select()

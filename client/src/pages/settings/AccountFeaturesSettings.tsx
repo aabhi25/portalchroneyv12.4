@@ -446,12 +446,12 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           {flagSwitch("shopifyEnabled", "Shopify")}
         </Row>
         <Row
-          icon={Globe} tint="bg-purple-600" label="WooCommerce"
-          description="Use the products on the business's WooCommerce website in chat, instead of the manual products"
+          icon={Globe} tint="bg-purple-600" label="Website products"
+          description="Use the products on the business's own website (Shopify, WooCommerce or another shop) in chat, instead of the manual products"
           hint={!hasProducts ? "Needs Website chat, WhatsApp or Jewelry Showcase switched on to show up." : null}
-          below={ba.wooCommerceEnabled ? <p className="mt-1 text-[12px] text-gray-500" data-testid="text-woocommerce-feature-note">Connect the website in Products › WooCommerce while viewing this account. Switching this off sends the chat back to the manual products.</p> : undefined}
+          below={ba.wooCommerceEnabled ? <p className="mt-1 text-[12px] text-gray-500" data-testid="text-woocommerce-feature-note">Connect the website in Products › Website products while viewing this account. Switching this off sends the chat back to the manual products.</p> : undefined}
         >
-          {flagSwitch("wooCommerceEnabled", "WooCommerce")}
+          {flagSwitch("wooCommerceEnabled", "Website products")}
         </Row>
       </Group>
 
