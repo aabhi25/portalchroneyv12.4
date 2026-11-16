@@ -46,6 +46,8 @@ import { DEFAULT_LEAD_COLUMNS, LeadColumnsPicker, WebsiteLeadColumnCell, knownLe
 import { LeadDetailsSheet, websiteRowFromLead } from "@/components/leads/LeadDetailsSheet";
 import type { CrmTarget } from "@/components/leads/LeadCrm";
 import type { Lead } from "@shared/schema";
+import { FaWhatsapp } from "react-icons/fa";
+import { GroupWhatsappLeadsList, type GroupWhatsappLead } from "@/components/leads/GroupWhatsappLeadsList";
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'currentMonth' | 'lastMonth' | 'custom';
 
@@ -249,6 +251,8 @@ export default function GroupAdminDashboard() {
   const [leadsFromDate, setLeadsFromDate] = useState<Date | undefined>(undefined);
   const [leadsToDate, setLeadsToDate] = useState<Date | undefined>(undefined);
   const [leadsAccountFilter, setLeadsAccountFilter] = useState<string>("all");
+  // Which leads the Leads page lists: website leads (default) or WhatsApp leads.
+  const [leadsChannel, setLeadsChannel] = useState<'website' | 'whatsapp'>('website');
   const [isExportingLeads, setIsExportingLeads] = useState(false);
   const [isExportingLeadsPDF, setIsExportingLeadsPDF] = useState(false);
 
@@ -507,6 +511,22 @@ export default function GroupAdminDashboard() {
     initialPageParam: 1,
     enabled: !!selectedGroupId && selectedGroup?.canViewLeads,
   });
+
+  // WhatsApp leads, same filters. The first page also gives the count on the switch.
+  const whatsappLeadsQuery = useInfiniteQuery<{ leads: GroupWhatsappLead[]; total: number; hasMore: boolean }>({
+    queryKey: ["/api/group-admin/groups", selectedGroupId, "leads", "whatsapp", leadsQueryParams],
+    queryFn: async ({ pageParam = 1 }) => {
+      const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads/whatsapp?${leadsQueryParams}&page=${pageParam}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch WhatsApp leads");
+      return res.json();
+    },
+    getNextPageParam: (lastPage, allPages) => (lastPage.hasMore ? allPages.length + 1 : undefined),
+    initialPageParam: 1,
+    enabled: !!selectedGroupId && selectedGroup?.canViewLeads,
+  });
+  const whatsappLeads = useMemo(() => whatsappLeadsQuery.data?.pages.flatMap(p => p.leads) || [], [whatsappLeadsQuery.data]);
+  const whatsappLeadsTotal = whatsappLeadsQuery.data?.pages[0]?.total ?? 0;
+  const showingWhatsapp = leadsChannel === 'whatsapp';
 
   const allLeads = useMemo(() => leadsInfiniteData?.pages.flatMap(p => p.leads) || [], [leadsInfiniteData]);
   const leadsTotal = leadsInfiniteData?.pages[0]?.total || 0;
@@ -1133,18 +1153,18 @@ export default function GroupAdminDashboard() {
                       <div className="flex items-center gap-3">
                         <h1 className="text-xl font-bold text-gray-900 tracking-tight">Leads Management</h1>
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700 tabular-nums">
-                          {leadsTotal?.toLocaleString() || 0} total
+                          {(showingWhatsapp ? whatsappLeadsTotal : leadsTotal)?.toLocaleString() || 0} total
                         </span>
-                        {leadsUniqueLeads !== null && (
+                        {!showingWhatsapp && leadsUniqueLeads !== null && (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-600 tabular-nums">
                             {leadsUniqueLeads.toLocaleString()} unique leads
                           </span>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500 mt-0.5">View and export captured leads from conversations</p>
+                      <p className="text-sm text-gray-500 mt-0.5">{showingWhatsapp ? "Leads captured on WhatsApp" : "View and export captured leads from conversations"}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className={`flex items-center gap-2 ${showingWhatsapp ? "hidden" : ""}`}>
                     {canSyncLeads && anyCrmConfigured && (
                       <Button
                         onClick={openBulkSync}
@@ -1181,8 +1201,33 @@ export default function GroupAdminDashboard() {
                 </div>
               </div>
 
+              <div className="px-6 pt-3 border-b border-gray-100 bg-white">
+                <div className="flex items-center gap-1" role="tablist" aria-label="Lead source">
+                  {([
+                    { key: 'website', label: 'Website leads', count: leadsTotal, icon: <Contact className="w-4 h-4" />, active: 'border-purple-600 text-purple-700', badge: 'bg-purple-100 text-purple-700' },
+                    { key: 'whatsapp', label: 'WhatsApp leads', count: whatsappLeadsTotal, icon: <FaWhatsapp className="w-4 h-4" />, active: 'border-green-600 text-green-700', badge: 'bg-green-100 text-green-700' },
+                  ] as const).map(t => (
+                    <button
+                      key={t.key}
+                      role="tab"
+                      aria-selected={leadsChannel === t.key}
+                      onClick={() => setLeadsChannel(t.key)}
+                      className={`-mb-px flex items-center gap-2 border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors ${
+                        leadsChannel === t.key ? t.active : 'border-transparent text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {t.icon}
+                      {t.label}
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${leadsChannel === t.key ? t.badge : 'bg-gray-100 text-gray-600'}`}>
+                        {(t.count || 0).toLocaleString()}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <RetentionBanner policies={retentionPolicies} totalAccounts={retentionAccountCount} onViewReport={() => setRetentionReportOpen(true)} />
-              <div className="px-6 py-3 border-b border-gray-100 bg-gradient-to-r from-violet-50/50 to-transparent">
+              <div className={`px-6 py-3 border-b border-gray-100 bg-gradient-to-r from-violet-50/50 to-transparent ${showingWhatsapp ? "hidden" : ""}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <Users className="w-4 h-4 text-purple-500" />
                   <span className="text-sm font-medium text-gray-700">
@@ -1317,19 +1362,30 @@ export default function GroupAdminDashboard() {
                     </SelectContent>
                   </Select>
 
-                  <LeadColumnsPicker
+                  {!showingWhatsapp && <LeadColumnsPicker
                     columns={leadTableColumns}
                     onChange={(columns) => saveLeadColumnsMutation.mutate(columns)}
                     saving={saveLeadColumnsMutation.isPending}
                     excludeKeys={GROUP_ALWAYS_SHOWN_COLUMNS}
                     alwaysShownLabel="Only Name, Account, Captured and CRM"
                     savedForLabel="Saved for everyone in this group"
-                  />
+                  />}
                 </div>
               </div>
 
               <div className="flex-1 overflow-auto">
-                {loadingLeads ? (
+                {showingWhatsapp ? (
+                  <GroupWhatsappLeadsList
+                    leads={whatsappLeads}
+                    total={whatsappLeadsTotal}
+                    loading={whatsappLeadsQuery.isLoading}
+                    hasMore={!!whatsappLeadsQuery.hasNextPage}
+                    loadingMore={whatsappLeadsQuery.isFetchingNextPage}
+                    onLoadMore={() => whatsappLeadsQuery.fetchNextPage()}
+                    hasFilters={!!leadsSearch || leadsDatePreset !== 'all' || leadsAccountFilter !== 'all'}
+                    onClearFilters={() => { setLeadsSearch(""); setLeadsDatePreset("all"); setLeadsAccountFilter("all"); }}
+                  />
+                ) : loadingLeads ? (
                   <div className="flex flex-col items-center justify-center py-20">
                     <div className="w-10 h-10 border-2 border-purple-200 border-t-purple-600 rounded-full animate-spin" />
                     <p className="text-sm text-gray-400 mt-4">Loading leads...</p>
@@ -1582,13 +1638,13 @@ export default function GroupAdminDashboard() {
                 )}
               </div>
 
-              {allLeads.length > 0 && (
+              {(showingWhatsapp ? whatsappLeads.length > 0 : allLeads.length > 0) && (
                 <div className="px-6 py-3 border-t border-gray-100 bg-gray-50/50">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500">
-                      Showing <span className="font-medium text-gray-700">{allLeads.length.toLocaleString()}</span> of <span className="font-medium text-gray-700">{leadsTotal?.toLocaleString() || 0}</span> leads
+                      Showing <span className="font-medium text-gray-700">{(showingWhatsapp ? whatsappLeads.length : allLeads.length).toLocaleString()}</span> of <span className="font-medium text-gray-700">{(showingWhatsapp ? whatsappLeadsTotal : leadsTotal)?.toLocaleString() || 0}</span> {showingWhatsapp ? "WhatsApp leads" : "leads"}
                     </span>
-                    {isFetchingNextPage && (
+                    {!showingWhatsapp && isFetchingNextPage && (
                       <div className="flex items-center gap-2 text-sm text-purple-600">
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
                         Loading more...

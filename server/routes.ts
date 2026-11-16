@@ -13790,6 +13790,55 @@ Return ONLY the refined instruction, nothing else.`
     }
   });
 
+  // Group Admin: the group's WhatsApp leads (the "WhatsApp leads" switch on the Leads page).
+  // Same filters as the website list; contact details follow the same hiding rules.
+  app.get("/api/group-admin/groups/:groupId/leads/whatsapp", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId } = req.params;
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+      const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+      if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
+      if (!permissions.canViewLeads) return res.status(403).json({ error: "No permission to view leads" });
+
+      const groupAccountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
+      const accountId = req.query.accountId as string | undefined;
+      const accountIds = accountId ? groupAccountIds.filter(id => id === accountId) : groupAccountIds;
+      const fromDateStr = req.query.fromDate as string | undefined;
+      const toDateStr = req.query.toDate as string | undefined;
+      const { queryGroupWhatsappLeads } = await import("./services/unifiedLeadsService");
+      const { leads: rows, total } = await queryGroupWhatsappLeads(accountIds, {
+        search: (req.query.search as string | undefined) || undefined,
+        from: fromDateStr ? new Date(fromDateStr) : undefined,
+        to: toDateStr ? new Date(toDateStr) : undefined,
+      }, { limit, offset: (page - 1) * limit });
+
+      const names = new Map<string, string>();
+      if (rows.length) {
+        const accts = await db.select({ id: businessAccounts.id, name: businessAccounts.name }).from(businessAccounts)
+          .where(inArray(businessAccounts.id, Array.from(new Set(rows.map(r => r.businessAccountId)))));
+        accts.forEach(a => names.set(a.id, a.name));
+      }
+      const leads = rows.map(r => ({
+        id: r.id,
+        businessAccountId: r.businessAccountId,
+        businessAccountName: names.get(r.businessAccountId) || "",
+        name: r.name,
+        phone: r.phone,
+        email: r.email,
+        capturedAt: r.capturedAt,
+        leadsquaredSyncStatus: r.crm.leadsquared?.status ?? null,
+        leadsquaredSyncError: r.crm.leadsquared?.error ?? null,
+        lastMessage: r.detail.lastMessage ?? null,
+        extractedData: r.detail.extractedData ?? {},
+      }));
+      res.json({ leads, total, page, limit, hasMore: (page - 1) * limit + leads.length < total });
+    } catch (error: any) {
+      console.error('[Group Admin] Error fetching WhatsApp leads:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Group Admin: the group's Leads table columns (in order; null = default). Any admin who can
   // view the group's leads can change them; the choice is shared by the whole group.
   app.get("/api/group-admin/groups/:groupId/leads/table-columns", requireAuth, requireGroupAdmin, async (req, res) => {
