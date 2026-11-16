@@ -271,7 +271,7 @@ async function hydrate(accountId: string, page: { channel: LeadChannel; id: stri
         score: scoreView(w),
         crm: {
           customCrm: crmState(w.customCrmSyncStatus, w.customCrmSyncError, w.customCrmSyncedAt, w.customCrmLeadId),
-          ...(w.leadsquaredSyncStatus ? { leadsquared: crmState(w.leadsquaredSyncStatus, w.leadsquaredSyncError, null, w.leadsquaredLeadId) } : {}),
+          ...(w.leadsquaredSyncStatus ? { leadsquared: crmState(w.leadsquaredSyncStatus, w.leadsquaredSyncError, w.leadsquaredSyncedAt, w.leadsquaredLeadId) } : {}),
         },
         detail: {
           senderName: w.senderName,

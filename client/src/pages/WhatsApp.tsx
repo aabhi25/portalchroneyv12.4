@@ -1270,7 +1270,8 @@ export default function WhatsApp({ embeddedPage }: { embeddedPage?: "config" | "
                     <div className="space-y-0.5">
                       <Label>Auto-sync to LeadSquared</Label>
                       <p className="text-sm text-gray-500">
-                        Automatically push captured leads to LeadSquared CRM
+                        Send new WhatsApp leads to LeadSquared about 5 minutes after the chat goes quiet, with this account's
+                        LeadSquared connection and field mappings. Details collected later are sent as an update. Older leads: use "Sync all to CRM" on the Leads page.
                       </p>
                     </div>
                     <Switch

@@ -178,6 +178,42 @@ router.get("/api/leads/unified/export", requireAuth, requireBusinessAccount, asy
   }
 });
 
+// ── WhatsApp → LeadSquared ───────────────────────────────────────────────────
+
+/** POST /api/whatsapp-leads/:leadId/leadsquared-sync — Sync / Retry one WhatsApp lead. */
+router.post("/api/whatsapp-leads/:leadId/leadsquared-sync", requireAuth, requireBusinessAccount, async (req, res) => {
+  try {
+    const accountId = await leadAccount(req, res);
+    if (!accountId) return;
+    const { syncWhatsappLeadToLeadSquared } = await import("../services/whatsappLeadLsqSync");
+    const result = await syncWhatsappLeadToLeadSquared(req.params.leadId, { mode: "manual", source: "dashboard", businessAccountId: accountId });
+    if (result.skipped === "not_found") return res.status(404).json({ error: result.message });
+    if (!result.success && (result.skipped === "not_configured" || result.skipped === "not_eligible")) return res.status(400).json({ error: result.message });
+    if (!result.success && !result.skipped) return res.status(502).json({ error: result.message, status: result.status });
+    res.json(result);
+  } catch (error: any) {
+    console.error("[WhatsAppLSQ] sync failed:", error?.message);
+    res.status(500).json({ error: "Sync failed" });
+  }
+});
+
+/** POST /api/whatsapp-leads/leadsquared-sync-all — every WhatsApp lead not yet in LeadSquared. */
+router.post("/api/whatsapp-leads/leadsquared-sync-all", requireAuth, requireBusinessAccount, async (req, res) => {
+  try {
+    const accountId = await leadAccount(req, res);
+    if (!accountId) return;
+    const settings = await storage.getWidgetSettings(accountId);
+    const { isLeadSquaredConfigured } = await import("../services/crmLeadSync");
+    if (!isLeadSquaredConfigured(settings)) return res.status(400).json({ error: "LeadSquared is not enabled/configured" });
+    const { syncAllWhatsappLeadsToLeadSquared } = await import("../services/whatsappLeadLsqSync");
+    const s = await syncAllWhatsappLeadsToLeadSquared(accountId);
+    res.json({ success: true, ...s, message: `Synced ${s.synced}, failed ${s.failed}, skipped ${s.skipped}` });
+  } catch (error: any) {
+    console.error("[WhatsAppLSQ] sync-all failed:", error?.message);
+    res.status(500).json({ error: "Sync failed" });
+  }
+});
+
 // ── Instagram / Facebook CRM sync ────────────────────────────────────────────
 
 async function socialContext(req: Request, res: Response): Promise<{ accountId: string; channel: SocialChannel } | null> {

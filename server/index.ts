@@ -25,6 +25,7 @@ import { migrateK12NotesAndVideos } from "./scripts/migrateK12NotesVideos";
 import { shopifySyncScheduler } from "./services/shopifySyncScheduler";
 import { wooCommerceSyncScheduler } from "./services/wooCommerceSync";
 import { leadsquaredRetryWorker } from "./services/leadsquaredRetryWorker";
+import { whatsappLsqSyncWorker } from "./services/whatsappLeadLsqSync";
 import { crmSyncRecoveryWorker } from "./services/crmSyncRecoveryWorker";
 import { startLeadQualificationSweep } from "./services/leadQualificationService";
 import { dataRetentionWorker } from "./services/dataRetentionWorker";
@@ -56,6 +57,7 @@ onShutdown("background-workers", () => {
   shopifySyncScheduler.stop();
   wooCommerceSyncScheduler.stop();
   leadsquaredRetryWorker.stop();
+  whatsappLsqSyncWorker.stop();
   crmSyncRecoveryWorker.stop();
   dataRetentionWorker.stop();
   merittoSyncWorker.stop();
@@ -393,6 +395,8 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     
     // Start LeadSquared retry worker for failed syncs
     leadsquaredRetryWorker.start();
+    // WhatsApp leads → LeadSquared (accounts with "Auto-sync to LeadSquared" on) and their retries
+    whatsappLsqSyncWorker.start();
 
     // Start CRM sync recovery worker (outbox pattern — retries sessions completed
     // but never CRM-synced, e.g. due to server crash during the async sync)

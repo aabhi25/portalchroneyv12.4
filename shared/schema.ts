@@ -3522,6 +3522,11 @@ export const whatsappLeads = pgTable("whatsapp_leads", {
   leadsquaredLeadId: text("leadsquared_lead_id"), // LeadSquared lead ID if synced
   leadsquaredSyncStatus: text("leadsquared_sync_status"), // null | 'pending' | 'synced' | 'failed'
   leadsquaredSyncError: text("leadsquared_sync_error"), // Error message if sync failed
+  // WhatsApp → LeadSquared (services/whatsappLeadLsqSync.ts): same retry columns as Instagram/Facebook leads.
+  leadsquaredSyncedAt: timestamp("leadsquared_synced_at"),
+  leadsquaredSyncPayload: jsonb("leadsquared_sync_payload"), // fields last sent, so a changed lead is sent again
+  leadsquaredRetryCount: integer("leadsquared_retry_count").notNull().default(0),
+  leadsquaredNextRetryAt: timestamp("leadsquared_next_retry_at"), // retry due / stale 'pending' claim deadline
   customCrmSyncStatus: text("custom_crm_sync_status"), // null | 'pending' | 'synced' | 'failed'
   customCrmLeadId: text("custom_crm_lead_id"),
   customCrmSyncError: text("custom_crm_sync_error"),
@@ -3552,6 +3557,7 @@ export const whatsappLeads = pgTable("whatsapp_leads", {
     .where(sql`status = 'new' AND customer_name IS NULL AND extracted_data IS NULL`),
   businessSenderIdx: index("whatsapp_leads_business_sender_idx").on(table.businessAccountId, table.senderPhone),
   flowSessionIdx: index("whatsapp_leads_flow_session_idx").on(table.flowSessionId),
+  lsqRetryIdx: index("whatsapp_leads_lsq_retry_idx").on(table.leadsquaredSyncStatus, table.leadsquaredNextRetryAt),
 }));
 
 export const insertWhatsappLeadSchema = createInsertSchema(whatsappLeads).omit({

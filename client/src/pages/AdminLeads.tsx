@@ -513,6 +513,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         return await apiRequest("POST", `/api/custom-crm/sync-lead/${row.id}`, {});
       }
       if (row.channel === 'whatsapp') {
+        if (crm === 'leadsquared') return await apiRequest("POST", `/api/whatsapp-leads/${row.id}/leadsquared-sync`);
         return await apiRequest("POST", `/api/custom-crm/sync-lead/${row.id}`, { leadType: 'whatsapp' });
       }
       return await apiRequest("POST", `/api/social-leads/${row.channel}/${row.id}/sync`, { crm });
@@ -541,6 +542,10 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       if (includeWebsite && isLeadsquaredConfigured) {
         const web: any = await apiRequest("POST", "/api/leadsquared/sync-all");
         messages.push(web?.message || `Website: synced ${web?.synced ?? 0}`);
+      }
+      if ((channelFilter === 'all' || channelFilter === 'whatsapp') && availableChannels.includes('whatsapp') && isLeadsquaredConfigured) {
+        const wa: any = await apiRequest("POST", "/api/whatsapp-leads/leadsquared-sync-all");
+        messages.push(`WhatsApp: ${wa?.message || ''}`);
       }
       for (const ch of socialTargets) {
         const r: any = await apiRequest("POST", `/api/social-leads/${ch}/sync-all`, {});
@@ -753,7 +758,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   const crmTargetsFor = (row: UnifiedLeadRow): { crm: SocialCrm; label: string; state: UnifiedLeadRow['crm']['customCrm'] }[] => {
     if (row.channel === 'whatsapp') {
       const out: { crm: SocialCrm; label: string; state: UnifiedLeadRow['crm']['customCrm'] }[] = [];
-      if (row.crm.leadsquared) out.push({ crm: 'leadsquared', label: 'LeadSquared', state: row.crm.leadsquared });
+      if (isLeadsquaredConfigured || row.crm.leadsquared) out.push({ crm: 'leadsquared', label: 'LeadSquared', state: row.crm.leadsquared });
       if (crmConfig?.custom_crm.configured) out.push({ crm: 'custom_crm', label: 'Custom CRM', state: row.crm.customCrm });
       return out;
     }
@@ -786,8 +791,12 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
       }
       return out;
     }
-    // WhatsApp leads reach LeadSquared through their own flow; only the Custom CRM can be re-sent from here.
-    return crmTargetsFor(row).map(t => ({ ...t, canSync: canResync(t.state) && (row.channel !== 'whatsapp' || t.crm === 'custom_crm') }));
+    return crmTargetsFor(row).map(t => ({
+      ...t,
+      canSync: row.channel === 'whatsapp' && t.crm === 'leadsquared'
+        ? !!isLeadsquaredConfigured && t.state?.status !== 'synced' && t.state?.status !== 'pending'
+        : canResync(t.state),
+    }));
   };
 
   // The open panel follows fresh data after a sync (the row may also sit under another person's row).
@@ -1684,7 +1693,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
             <AlertDialogTitle>Sync All Leads to CRM</AlertDialogTitle>
             <AlertDialogDescription>
               This will sync all unsynced {channelFilter === 'all' ? '' : `${CHANNEL_META[channelFilter].label} `}leads to your CRM
-              {channelFilter === 'all' ? ' (website leads go to LeadSquared; Instagram and Facebook leads go to every configured CRM)' : ''}.
+              {channelFilter === 'all' ? ' (website and WhatsApp leads go to LeadSquared; Instagram and Facebook leads go to every configured CRM)' : ''}.
               Leads that are already synced will be skipped.
               <div className="mt-2 p-3 bg-blue-50 rounded-md text-blue-700 text-sm">
                 This may take a few moments depending on the number of leads.
