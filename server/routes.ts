@@ -13848,11 +13848,13 @@ Return ONLY the refined instruction, nothing else.`
   app.get("/api/group-admin/groups/:groupId/leads/whatsapp", requireAuth, requireGroupAdmin, async (req, res) => {
     try {
       const { groupId } = req.params;
+      const exportAll = req.query.export === 'true';
       const page = parseInt(req.query.page as string) || 1;
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
       const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
       if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
       if (!permissions.canViewLeads) return res.status(403).json({ error: "No permission to view leads" });
+      if (exportAll && !permissions.canExportData) return res.status(403).json({ error: "No permission to export data" });
 
       const groupAccountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
       const accountId = req.query.accountId as string | undefined;
@@ -13864,13 +13866,29 @@ Return ONLY the refined instruction, nothing else.`
         search: (req.query.search as string | undefined) || undefined,
         from: fromDateStr ? new Date(fromDateStr) : undefined,
         to: toDateStr ? new Date(toDateStr) : undefined,
-      }, { limit, offset: (page - 1) * limit });
+      }, exportAll ? null : { limit, offset: (page - 1) * limit });
 
       const names = new Map<string, string>();
       if (rows.length) {
         const accts = await db.select({ id: businessAccounts.id, name: businessAccounts.name }).from(businessAccounts)
           .where(inArray(businessAccounts.id, Array.from(new Set(rows.map(r => r.businessAccountId)))));
         accts.forEach(a => names.set(a.id, a.name));
+      }
+      // "Open chat" opens the student's WhatsApp chat by a sealed key (the number may be hidden).
+      const { phoneKeyFor } = await import("./lib/contactViewMask");
+      const senders = new Map<string, string>();
+      if (rows.length) {
+        const sp = await db.select({ id: whatsappLeads.id, phone: whatsappLeads.senderPhone }).from(whatsappLeads)
+          .where(inArray(whatsappLeads.id, rows.map(r => r.id)));
+        sp.forEach(r => { if (r.phone) senders.set(r.id, phoneKeyFor(r.phone)); });
+      }
+      // Sync to LeadSquared: admins who may sync, for accounts with a WhatsApp LeadSquared connection.
+      const lsqReady = new Set<string>();
+      if (permissions.canSyncLeads && !exportAll) {
+        const { whatsappLsqConfigured } = await import("./services/whatsappLeadLsqSync");
+        for (const id of Array.from(new Set(rows.map(r => r.businessAccountId)))) {
+          if (await whatsappLsqConfigured(id)) lsqReady.add(id);
+        }
       }
       const leads = rows.map(r => ({
         id: r.id,
@@ -13882,12 +13900,34 @@ Return ONLY the refined instruction, nothing else.`
         capturedAt: r.capturedAt,
         leadsquaredSyncStatus: r.crm.leadsquared?.status ?? null,
         leadsquaredSyncError: r.crm.leadsquared?.error ?? null,
+        leadsquaredSyncedAt: r.crm.leadsquared?.syncedAt ?? null,
+        canSyncLeadSquared: lsqReady.has(r.businessAccountId),
+        chatKey: senders.get(r.id) ?? null,
         lastMessage: r.detail.lastMessage ?? null,
         extractedData: r.detail.extractedData ?? {},
       }));
-      res.json({ leads, total, page, limit, hasMore: (page - 1) * limit + leads.length < total });
+      res.json({ leads, total, page, limit, hasMore: !exportAll && (page - 1) * limit + leads.length < total });
     } catch (error: any) {
       console.error('[Group Admin] Error fetching WhatsApp leads:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Group Admin: send one WhatsApp lead to LeadSquared (the account's WhatsApp LeadSquared setup).
+  app.post("/api/group-admin/groups/:groupId/leads/whatsapp/:leadId/sync", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId, leadId } = req.params;
+      const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+      if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
+      if (!permissions.canViewLeads || !permissions.canSyncLeads) return res.status(403).json({ error: "No permission to sync leads" });
+      const accountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
+      const [lead] = await db.select({ businessAccountId: whatsappLeads.businessAccountId }).from(whatsappLeads).where(eq(whatsappLeads.id, leadId)).limit(1);
+      if (!lead || !accountIds.includes(lead.businessAccountId)) return res.status(404).json({ error: "Lead not found" });
+      const { syncWhatsappLeadToLeadSquared } = await import("./services/whatsappLeadLsqSync");
+      const result = await syncWhatsappLeadToLeadSquared(leadId, { mode: "manual", source: "group-admin", businessAccountId: lead.businessAccountId });
+      res.status(result.success ? 200 : 400).json(result);
+    } catch (error: any) {
+      console.error('[Group Admin] Error syncing WhatsApp lead:', error);
       res.status(500).json({ error: error.message });
     }
   });

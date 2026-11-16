@@ -47,7 +47,7 @@ import { LeadDetailsSheet, websiteRowFromLead } from "@/components/leads/LeadDet
 import type { CrmTarget } from "@/components/leads/LeadCrm";
 import type { Lead } from "@shared/schema";
 import { FaWhatsapp } from "react-icons/fa";
-import { GroupWhatsappLeadsList, type GroupWhatsappLead } from "@/components/leads/GroupWhatsappLeadsList";
+import { GroupWhatsappLeadSheet, GroupWhatsappLeadsList, whatsappLeadsExcelRows, type GroupWhatsappLead } from "@/components/leads/GroupWhatsappLeadsList";
 import { GroupWhatsappChatList, GroupWhatsappChatThread, useGroupWhatsappChats, type GroupWhatsappChat } from "@/components/conversations/GroupWhatsappChats";
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'currentMonth' | 'lastMonth' | 'custom';
@@ -418,7 +418,26 @@ export default function GroupAdminDashboard() {
     return params.toString();
   }, [convoDatePreset, convoFromDate, convoToDate, convoSearch, convoAccountFilter]);
   useEffect(() => { setWaChatsPage(1); }, [waChatsParams, selectedGroupId]);
-  useEffect(() => { setSelectedWaChat(null); }, [selectedGroupId]);
+  // Another group picked: the open WhatsApp chat belonged to the old one.
+  const waChatGroupRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (waChatGroupRef.current && waChatGroupRef.current !== selectedGroupId) setSelectedWaChat(null);
+    waChatGroupRef.current = selectedGroupId;
+  }, [selectedGroupId]);
+  // "Open WhatsApp chat" from a lead: /group-admin/conversations?wa=<account>&key=<phoneKey>.
+  useEffect(() => {
+    if (!location.includes("/conversations")) return;
+    const params = new URLSearchParams(window.location.search);
+    const accountId = params.get("wa");
+    const key = params.get("key");
+    if (!accountId || !key) return;
+    setConvoChannel('whatsapp');
+    setSelectedWaChat({
+      phoneKey: key, senderPhone: null, businessAccountId: accountId, businessAccountName: "",
+      name: null, messageCount: 0, lastMessage: null, lastMessageAt: "", firstMessageAt: "", isLead: true,
+    });
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [location]);
 
   useEffect(() => {
     const prev = prevConvoFiltersRef.current;
@@ -544,6 +563,45 @@ export default function GroupAdminDashboard() {
   const whatsappLeads = useMemo(() => whatsappLeadsQuery.data?.pages.flatMap(p => p.leads) || [], [whatsappLeadsQuery.data]);
   const whatsappLeadsTotal = whatsappLeadsQuery.data?.pages[0]?.total ?? 0;
   const showingWhatsapp = leadsChannel === 'whatsapp';
+  const [openWaLeadId, setOpenWaLeadId] = useState<string | null>(null);
+  const openWaLead = whatsappLeads.find(l => l.id === openWaLeadId) ?? null;
+  const [isExportingWaLeads, setIsExportingWaLeads] = useState(false);
+  const syncWaLeadMutation = useMutation({
+    mutationFn: async (lead: GroupWhatsappLead) => {
+      const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads/whatsapp/${lead.id}/sync`, { method: "POST", credentials: "include" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || body.error || "Sync failed");
+      return body as { message: string };
+    },
+    onSuccess: (body) => toast({ title: "Sent to LeadSquared", description: body.message }),
+    onError: (error: Error) => toast({ title: "LeadSquared sync failed", description: error.message, variant: "destructive" }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["/api/group-admin/groups", selectedGroupId, "leads", "whatsapp"] }),
+  });
+  const exportWhatsappLeadsToExcel = async () => {
+    if (!selectedGroupId || !selectedGroup?.canExportData) return;
+    setIsExportingWaLeads(true);
+    try {
+      const params = new URLSearchParams(leadsQueryParams);
+      params.delete('limit');
+      params.append('export', 'true');
+      const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads/whatsapp?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to export WhatsApp leads");
+      const rows: GroupWhatsappLead[] = (await res.json()).leads || [];
+      if (rows.length === 0) {
+        toast({ title: "No leads to export", description: "No WhatsApp leads match the current filters.", variant: "destructive" });
+        return;
+      }
+      const worksheet = XLSX.utils.json_to_sheet(whatsappLeadsExcelRows(rows));
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "WhatsApp leads");
+      XLSX.writeFile(workbook, `group-whatsapp-leads-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
+      toast({ title: "Export successful", description: `Exported ${rows.length} WhatsApp leads to Excel.` });
+    } catch (error: any) {
+      toast({ title: "Export failed", description: error.message, variant: "destructive" });
+    } finally {
+      setIsExportingWaLeads(false);
+    }
+  };
 
   const allLeads = useMemo(() => leadsInfiniteData?.pages.flatMap(p => p.leads) || [], [leadsInfiniteData]);
   const leadsTotal = leadsInfiniteData?.pages[0]?.total || 0;
@@ -1197,6 +1255,17 @@ export default function GroupAdminDashboard() {
                       <p className="text-sm text-gray-500 mt-0.5">{showingWhatsapp ? "Leads captured on WhatsApp" : "View and export captured leads from conversations"}</p>
                     </div>
                   </div>
+                  {showingWhatsapp && selectedGroup?.canExportData && (
+                    <Button
+                      onClick={exportWhatsappLeadsToExcel}
+                      disabled={isExportingWaLeads}
+                      variant="outline"
+                      className="border-green-200 text-green-700 hover:bg-green-50 hover:border-green-300 transition-all duration-200 shadow-sm"
+                    >
+                      {isExportingWaLeads ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      Export to Excel
+                    </Button>
+                  )}
                   <div className={`flex items-center gap-2 ${showingWhatsapp ? "hidden" : ""}`}>
                     {canSyncLeads && anyCrmConfigured && (
                       <Button
@@ -1417,6 +1486,9 @@ export default function GroupAdminDashboard() {
                     onLoadMore={() => whatsappLeadsQuery.fetchNextPage()}
                     hasFilters={!!leadsSearch || leadsDatePreset !== 'all' || leadsAccountFilter !== 'all'}
                     onClearFilters={() => { setLeadsSearch(""); setLeadsDatePreset("all"); setLeadsAccountFilter("all"); }}
+                    onOpen={(lead) => setOpenWaLeadId(lead.id)}
+                    onSync={(lead) => syncWaLeadMutation.mutate(lead)}
+                    syncingId={syncWaLeadMutation.isPending ? syncWaLeadMutation.variables?.id ?? null : null}
                   />
                 ) : loadingLeads ? (
                   <div className="flex flex-col items-center justify-center py-20">
@@ -1689,6 +1761,17 @@ export default function GroupAdminDashboard() {
             </div>
           )}
         </TabsContent>
+
+        <GroupWhatsappLeadSheet
+          lead={openWaLead}
+          onClose={() => setOpenWaLeadId(null)}
+          onSync={(lead) => syncWaLeadMutation.mutate(lead)}
+          syncing={syncWaLeadMutation.isPending && syncWaLeadMutation.variables?.id === openWaLead?.id}
+          onOpenChat={selectedGroup?.canViewConversations ? (lead) => {
+            setOpenWaLeadId(null);
+            setLocation(`/group-admin/conversations?wa=${lead.businessAccountId}&key=${encodeURIComponent(lead.chatKey!)}`);
+          } : undefined}
+        />
 
         <TabsContent value="conversations" className="mt-0 flex-1 flex flex-col">
           {!selectedGroup?.canViewConversations ? (
@@ -2110,7 +2193,12 @@ export default function GroupAdminDashboard() {
               <div className={`flex-1 flex-col bg-gray-50 min-h-0 overflow-hidden ${(showingWaChats ? selectedWaChat : selectedConversationId) ? 'flex' : 'hidden md:flex'}`}>
                 {showingWaChats ? (
                   selectedWaChat && selectedGroupId ? (
-                    <GroupWhatsappChatThread key={`${selectedWaChat.businessAccountId}:${selectedWaChat.phoneKey}`} groupId={selectedGroupId} chat={selectedWaChat} onBack={() => setSelectedWaChat(null)} />
+                    <GroupWhatsappChatThread
+                      key={`${selectedWaChat.businessAccountId}:${selectedWaChat.phoneKey}`}
+                      groupId={selectedGroupId}
+                      chat={selectedWaChat.businessAccountName ? selectedWaChat : { ...selectedWaChat, businessAccountName: accountsForFilter.find(a => a.businessAccountId === selectedWaChat.businessAccountId)?.businessName || "" }}
+                      onBack={() => setSelectedWaChat(null)}
+                    />
                   ) : (
                     <div className="flex-1 flex items-center justify-center text-center p-4">
                       <div>

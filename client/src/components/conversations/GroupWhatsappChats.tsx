@@ -188,7 +188,12 @@ export function GroupWhatsappChatThread({ groupId, chat, onBack }: {
             )}
           </div>
           <p className="truncate text-xs text-gray-500">
-            {[name ? phone : null, chat.businessAccountName, `${chat.messageCount} messages`, `since ${format(new Date(chat.firstMessageAt), "MMM d, yyyy")}`].filter(Boolean).join(" · ")}
+            {[
+              name ? phone : null,
+              chat.businessAccountName || null,
+              chat.messageCount ? `${chat.messageCount} messages` : null,
+              chat.firstMessageAt ? `since ${format(new Date(chat.firstMessageAt), "MMM d, yyyy")}` : null,
+            ].filter(Boolean).join(" · ")}
           </p>
         </div>
         <span className="hidden shrink-0 items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-[11px] font-medium text-gray-600 sm:inline-flex" title="Group admins can read WhatsApp chats but not reply">
