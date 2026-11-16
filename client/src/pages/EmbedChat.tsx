@@ -1,5 +1,6 @@
 import { shownMessageNudges } from "@shared/messageNudges";
-import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, GitCompare, Briefcase, Lock, Video, GraduationCap, Undo2, Globe, ChevronRight, Check } from "lucide-react";
+import CompareTray from "@/components/CompareTray";
+import { Sparkles, Zap, Send, Loader2, X, Mic, ChevronDown, Camera, ImageIcon, MoreVertical, MessageSquarePlus, History, ChevronLeft, Briefcase, Lock, Video, GraduationCap, Undo2, Globe, ChevronRight, Check } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -7003,6 +7004,19 @@ export default function EmbedChat() {
         </div>
       )}
 
+      {/* Products picked for comparison: a bar right above the message box (never covers it) */}
+      {settings?.productComparisonEnabled === 'true' && compareProducts.size > 0 && !showComparisonView && (
+        <CompareTray
+          products={allProducts.filter(p => compareProducts.has(p.id))}
+          count={compareProducts.size}
+          chatColor={chatColor}
+          chatColorEnd={chatColorEnd}
+          onRemove={handleCompareToggle}
+          onClear={() => setCompareProducts(new Set())}
+          onCompare={() => setShowComparisonView(true)}
+        />
+      )}
+
       {/* Chat Input - Fixed at bottom with safe area padding - only show if mode allows it */}
       {/* Also hide when form journey is complete - user cannot continue chatting after completing form journey */}
       {!isMenuMode && (settings?.chatMode === 'both' || settings?.chatMode === 'chat-only' || !settings?.chatMode) && !activeFormStep && !isFormJourneyComplete && !chatEnded && (
@@ -7647,17 +7661,6 @@ export default function EmbedChat() {
       
       {/* Urgency offer renders on parent page via postMessage, not inside iframe */}
 
-      {/* Floating Compare Button - Show when products are selected for comparison */}
-      {settings?.productComparisonEnabled === 'true' && compareProducts.size > 0 && (
-        <button
-          onClick={() => setShowComparisonView(true)}
-          className="fixed bottom-24 right-4 flex items-center gap-2 px-4 py-2 text-white rounded-full shadow-lg transition-all duration-200 hover:scale-105 z-40"
-          style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd})` }}
-        >
-          <GitCompare className="w-4 h-4" />
-          Compare ({compareProducts.size})
-        </button>
-      )}
 
       {/* Order Detail Overlay */}
       <OrderDetailOverlay

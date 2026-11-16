@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ShoppingBag, ShoppingCart, Check, GitCompare, ChevronRight, Loader2, Sparkles, ExternalLink } from "lucide-react";
+import { ShoppingBag, ShoppingCart, Check, ChevronRight, Loader2, Sparkles, ExternalLink } from "lucide-react";
+import { COMPARE_MAX } from "@/components/CompareTray";
 import { FaWhatsapp } from "react-icons/fa";
 import {
   Dialog,
@@ -204,6 +205,7 @@ export function ProductCard({
             <div
               key={product.id}
               onClick={() => { setSelectedProduct(product); handleTranslateDescription(product); }}
+              style={comparisonEnabled && compareProducts.has(product.id) ? { borderColor: chatColor, boxShadow: `0 0 0 1px ${chatColor}` } : undefined}
               className="group relative flex-shrink-0 w-[220px] bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden hover:shadow-lg hover:border-purple-300 dark:hover:border-purple-700 transition-all duration-200 snap-start cursor-pointer"
             >
               <div className="relative w-full h-[160px] bg-gradient-to-br from-purple-50 to-blue-50 dark:from-purple-950/20 dark:to-blue-950/20">
@@ -239,19 +241,27 @@ export function ProductCard({
                   </div>
                 )}
 
-                {comparisonEnabled && (
-                  <button
-                    onClick={(e) => handleCompareToggle(product.id, e)}
-                    className={`absolute top-1.5 left-1.5 p-1.5 rounded-full transition-all duration-200 ${
-                      compareProducts.has(product.id)
-                        ? 'bg-purple-600 text-white'
-                        : 'bg-white/80 text-gray-600 hover:bg-purple-100'
-                    }`}
-                    title={compareProducts.has(product.id) ? "Remove from compare" : "Add to compare"}
-                  >
-                    <GitCompare className="w-3.5 h-3.5" />
-                  </button>
-                )}
+                {comparisonEnabled && (() => {
+                  const picked = compareProducts.has(product.id);
+                  const full = !picked && compareProducts.size >= COMPARE_MAX;
+                  return (
+                    <button
+                      onClick={(e) => { if (!full) handleCompareToggle(product.id, e); else e.stopPropagation(); }}
+                      aria-pressed={picked}
+                      className={`absolute top-1.5 left-1.5 flex h-6 items-center gap-1 rounded-full pl-1.5 pr-2 text-[11px] font-semibold shadow-sm transition-all duration-200 ${
+                        picked ? 'text-white' : full ? 'bg-white/90 text-gray-400' : 'bg-white/95 text-gray-700 hover:bg-white'
+                      }`}
+                      style={picked ? { backgroundColor: chatColor } : undefined}
+                      title={picked ? "Remove from compare" : full ? `You can compare up to ${COMPARE_MAX} products` : "Add to compare"}
+                      data-testid={`button-compare-${product.id}`}
+                    >
+                      <span className={`grid h-3.5 w-3.5 place-items-center rounded-[4px] border ${picked ? 'border-white bg-white' : 'border-gray-400'}`}>
+                        {picked && <Check className="h-2.5 w-2.5" style={{ color: chatColor }} strokeWidth={3.5} />}
+                      </span>
+                      {picked ? "Comparing" : "Compare"}
+                    </button>
+                  );
+                })()}
               </div>
 
               <div className="p-2.5">

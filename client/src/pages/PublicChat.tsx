@@ -1,3 +1,4 @@
+import CompareTray from "@/components/CompareTray";
 import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -7,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { 
   AlertCircle, Send, Loader2, Sparkles, Lock, Camera, X, Globe, 
-  ChevronDown, MoreVertical, MessageSquarePlus, History, Scale, Image as ImageIcon, Briefcase, Mic
+  ChevronDown, MoreVertical, MessageSquarePlus, History, Image as ImageIcon, Briefcase, Mic
 } from "lucide-react";
 import { ProductCard } from "@/components/ProductCard";
 import { ConversationStarters } from "@/components/ConversationStarters";
@@ -1775,6 +1776,19 @@ export default function PublicChat() {
           </div>
         )}
 
+        {/* Products picked for comparison: a bar right above the message box (never covers it) */}
+        {productComparisonEnabled && compareProducts.size > 0 && !showComparisonView && (
+          <CompareTray
+            products={allProducts.filter(p => compareProducts.has(p.id))}
+            count={compareProducts.size}
+            chatColor={chatColor}
+            chatColorEnd={chatColorEnd}
+            onRemove={handleCompareToggle}
+            onClear={() => setCompareProducts(new Set())}
+            onCompare={() => setShowComparisonView(true)}
+          />
+        )}
+
         {/* Input Area */}
         {!activeFormStep && (
           <div className="flex-shrink-0 border-t border-gray-200 bg-gray-100">
@@ -1866,17 +1880,6 @@ export default function PublicChat() {
           </div>
         )}
 
-        {/* Product Comparison Floating Button */}
-        {productComparisonEnabled && compareProducts.size > 0 && !showComparisonView && (
-          <button
-            onClick={() => setShowComparisonView(true)}
-            className="absolute bottom-24 right-6 flex items-center gap-2 px-4 py-3 rounded-full shadow-lg text-white font-medium transition-all hover:scale-105"
-            style={{ background: `linear-gradient(135deg, ${chatColor} 0%, ${chatColorEnd} 100%)` }}
-          >
-            <Scale className="w-5 h-5" />
-            Compare ({compareProducts.size})
-          </button>
-        )}
 
         {/* Product Comparison View */}
         {showComparisonView && (
