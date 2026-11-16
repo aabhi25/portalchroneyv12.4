@@ -15,10 +15,16 @@
  * details contradict it (different phone, email or name), which suggests a different person on a
  * shared device. A reused lead counts a repeat enquiry (enquiry_count, last_enquiry_at) and keeps
  * both chats in lead_conversations, so each of them still shows the lead and links to the other.
+ *
+ * No lead without a way to reach the person: a new lead is created only once it has a mobile number
+ * or an email. Details given before that (a name, the city) are kept on the conversation
+ * (lead_capture_state.pendingLead; the name also becomes the chat's title) and go on the lead when
+ * a number or email arrives. The result then has `lead: null` and `pending` set.
  */
 import { and, asc, desc, eq, gt, ne, sql } from 'drizzle-orm';
 import { db } from '../../db';
 import { conversations, leadConversations, leads, type Lead } from '@shared/schema';
+import { parseLeadCaptureState, type PendingLead } from './state';
 
 export const RETURNING_VISITOR_DAYS = 30;
 
@@ -48,7 +54,10 @@ export interface LeadUpsert {
 }
 
 export interface LeadUpsertResult {
-  lead: Lead;
+  /** null when nothing reachable was given yet (see `pending`). */
+  lead: Lead | null;
+  /** Details kept on the conversation until a mobile or email arrives. */
+  pending?: PendingLead;
   created: boolean;
   changed: LeadField[];
   reusedFromConversationId: string | null;
@@ -72,13 +81,14 @@ export async function upsertConversationLead(input: LeadUpsert): Promise<LeadUps
   const result = await writeConversationLead(input);
   // AI Calling (B): the lead got a phone number → maybe queue an automatic call (fire-and-forget; the
   // trigger calls each lead automatically at most once, dedupes by number and never throws).
-  if (result.changed.includes('phone') && result.lead?.phone) {
+  if (result.lead && result.changed.includes('phone') && result.lead.phone) {
     import('../calling/leadTrigger').then(m => m.triggerAutoLeadCall(result.lead)).catch(() => undefined);
   }
   // Same turn, not one turn later: link the customer profile as soon as the lead has a new phone /
   // email (whatsappHandoffService.linkWebsiteLeadProfile never throws).
-  if (result.changed.includes('phone') || result.changed.includes('email')) {
-    const link = import('../whatsappHandoffService').then(m => m.linkWebsiteLeadProfile(result.lead)).catch(() => undefined);
+  if (result.lead && (result.changed.includes('phone') || result.changed.includes('email'))) {
+    const lead = result.lead;
+    const link = import('../whatsappHandoffService').then(m => m.linkWebsiteLeadProfile(lead)).catch(() => undefined);
     await Promise.race([link, new Promise(r => setTimeout(r, PROFILE_LINK_WAIT_MS).unref?.())]);
   }
   return result;
@@ -156,19 +166,44 @@ function writeConversationLead(input: LeadUpsert): Promise<LeadUpsertResult> {
       return { lead, created: false, changed, reusedFromConversationId: reusedFrom };
     }
 
+    // No lead yet: details given earlier in this chat (before any mobile or email) join this one.
+    const stateRes: any = await tx.execute(sql`SELECT lead_capture_state FROM conversations WHERE id = ${conversationId} FOR UPDATE`);
+    const state = parseLeadCaptureState(stateRes.rows?.[0]?.lead_capture_state ?? null);
+    const earlier = state.pendingLead || {};
+    const pick = (f: keyof PendingLead) => norm(input.values[f]) || norm(earlier[f]) || null;
+    const merged: PendingLead = {
+      name: pick('name'), city: pick('city'), sourceUrl: pick('sourceUrl'), landingUrl: pick('landingUrl'), message: pick('message'),
+    };
+
+    if (!norm(input.values.phone) && !norm(input.values.email)) {
+      // Not a lead yet: keep what was given on the conversation (the name also titles the chat).
+      const pending = Object.fromEntries(Object.entries(merged).filter(([, v]) => v)) as PendingLead;
+      const next = { ...state, pendingLead: Object.keys(pending).length ? pending : undefined };
+      await tx.execute(sql`UPDATE conversations SET lead_capture_state = ${JSON.stringify(next)}::jsonb WHERE id = ${conversationId}`);
+      if (pending.name) {
+        await tx.update(conversations).set({ title: pending.name })
+          .where(and(eq(conversations.id, conversationId), eq(conversations.businessAccountId, businessAccountId)));
+      }
+      const changed: LeadField[] = norm(input.values.name) && norm(input.values.name) !== norm(earlier.name) ? ['name'] : [];
+      return { lead: null, pending, created: false, changed, reusedFromConversationId: null };
+    }
+
     const values = {
       businessAccountId,
       conversationId,
-      name: norm(input.values.name) || null,
+      name: merged.name,
       email: norm(input.values.email) || null,
       phone: norm(input.values.phone) || null,
-      message: norm(input.values.message) || input.createMessage || 'Via Chat',
-      city: norm(input.values.city) || null,
-      sourceUrl: norm(input.values.sourceUrl) || null,
-      landingUrl: norm(input.values.landingUrl) || null,
+      message: merged.message || input.createMessage || 'Via Chat',
+      city: merged.city,
+      sourceUrl: merged.sourceUrl,
+      landingUrl: merged.landingUrl,
       lastEnquiryAt: sql`now()`, // the database's clock, like created_at
     };
     const [lead] = await tx.insert(leads).values(values).returning();
+    if (state.pendingLead) {
+      await tx.execute(sql`UPDATE conversations SET lead_capture_state = ${JSON.stringify({ ...state, pendingLead: undefined })}::jsonb WHERE id = ${conversationId}`);
+    }
     const changed = fields.filter(f => !!(values as any)[f] && f !== 'message');
     return { lead, created: true, changed, reusedFromConversationId: null };
   }));

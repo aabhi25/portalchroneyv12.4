@@ -1099,7 +1099,14 @@ Return JSON:
       };
     }
 
-    // ── No conversation (legacy callers): plain create, gated CRM sync. ──
+    // ── No conversation (legacy callers): plain create, gated CRM sync — only with a mobile or email. ──
+    if (!context.conversationId && !values.email && !values.phone && !waNumber) {
+      return {
+        success: true,
+        data: { leadId: null, saved: Object.keys(values), rejected, nextField: null, partialLead: true },
+        message: `Noted: ${Object.keys(values).map(labelOf).join(', ')}. Ask for a mobile number or email to save the enquiry.`,
+      };
+    }
     if (!context.conversationId) {
       const lead = await storage.createLead({
         businessAccountId: context.businessAccountId,
@@ -1149,7 +1156,7 @@ Return JSON:
             values: { ...values, message, city: context.visitorCity || null },
             createMessage: 'Via Chat (pending OTP)',
           });
-          console.log(`[OTP] Partial lead ${up.lead.id} ${up.created ? 'created' : 'updated'} (no CRM sync until verified)`);
+          console.log(`[OTP] Partial lead ${up.lead?.id} ${up.created ? 'created' : 'updated'} (no CRM sync until verified)`);
         } catch (err) {
           console.error('[OTP] Failed to save partial lead while gating:', err);
         }
@@ -1177,6 +1184,33 @@ Return JSON:
       conversationId,
       values: { ...values, message, city: context.visitorCity || null },
     });
+    const savedFields = Object.keys(values);
+    if (!up.lead) {
+      // A name alone isn't a lead: kept on the chat (and as its title) until a mobile or email arrives.
+      console.log(`[Lead Pending] conversation ${conversationId}: ${up.changed.join(', ') || 'no changes'} kept until a mobile or email is given`);
+      let pendingPlan: LeadPlan | null = null;
+      try {
+        pendingPlan = await planForConversation({
+          conversationId, config: leadConfig,
+          known: { name: up.pending?.name || null, email: null, phone: null },
+          userMessage: userMessage || context.userMessage || '',
+        });
+      } catch (err) {
+        console.error('[Lead Capture] next-field planning failed (non-fatal):', err);
+      }
+      const pendingNext = pendingPlan?.next ? { field: pendingPlan.next.id, label: pendingPlan.next.label, mode: pendingPlan.next.mode } : null;
+      const notes: string[] = [];
+      if (savedFields.length) notes.push(`Noted: ${savedFields.map(labelOf).join(', ')}.`);
+      if (rejected.length) notes.push(`Not saved: ${rejectedText}. Ask the visitor to re-enter only their ${labelOf(rejected[0].field)}.`);
+      else if (pendingNext) notes.push(`Next detail allowed now: ${pendingNext.label} (${pendingNext.mode === 'block' ? 'ask before answering' : 'optional — only after answering'}). Ask for nothing else.`);
+      else notes.push('No other contact detail is due now — do not ask for more.');
+      return {
+        success: true,
+        data: { leadId: null, saved: savedFields, rejected, nextField: pendingNext, partialLead: true },
+        ...(phoneRejectionReason ? { phoneRejectionReason } : {}),
+        message: notes.join(' '),
+      };
+    }
     const lead = up.lead;
     console.log(`[Lead ${up.created ? 'Create' : 'Update'}] lead ${lead.id} conversation ${conversationId}: ${up.changed.join(', ') || 'no changes'}${up.reusedFromConversationId ? ` (returning visitor, lead moved from ${up.reusedFromConversationId})` : ''}`);
 
@@ -1215,7 +1249,6 @@ Return JSON:
         .catch(err => console.error('[Lead Capture] Topic extraction failed:', err));
     }
     const nextField = plan?.next ? { field: plan.next.id, label: plan.next.label, mode: plan.next.mode } : null;
-    const savedFields = Object.keys(values);
     const parts: string[] = [];
     if (savedFields.length) parts.push(`Saved: ${savedFields.map(labelOf).join(', ')}.`);
     if (waNumber || waSame !== undefined) parts.push('WhatsApp details noted.');

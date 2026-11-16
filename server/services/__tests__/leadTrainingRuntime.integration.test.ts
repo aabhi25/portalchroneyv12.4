@@ -115,6 +115,13 @@ async function main() {
     return { events, calls, main, cont, rules: main?.finalRules || '', text, convId };
   }
   const leadsOf = (convId: string) => db.select().from(schema.leads).where(eq(schema.leads.conversationId, convId));
+  // A name alone isn't a lead: it waits on the chat (lead_capture_state.pendingLead) until a mobile or email.
+  const nameOf = async (convId: string) => {
+    const [l] = await leadsOf(convId);
+    if (l?.name) return l.name;
+    const { loadLeadCaptureState } = await import('../leadCapture/state');
+    return (await loadLeadCaptureState(convId)).pendingLead?.name || null;
+  };
   const nowLine = (rules: string) => (rules.match(/^NOW: (.*)$/m) || [])[1] || '';
 
   // ═════════ 1. Custom timing per field + message count survives a restart (items 6, 7, 11) ═════════
@@ -138,8 +145,9 @@ async function main() {
     expect(/^MANDATORY/.test(nowLine(r3.rules)) && /their name/.test(nowLine(r3.rules)), 'msg #3 (counted in the DB): name is asked, blocking', nowLine(r3.rules));
     expect(/may I have your name/i.test(r3.text), 'reply asks for the name', r3.text);
     const r4 = await say(biz, v, 'Rahul Verma');
-    const [lead4] = await leadsOf(r1.convId);
-    expect(lead4?.name === 'Rahul Verma', 'bare name after the ask is saved', lead4?.name);
+    const name4 = await nameOf(r1.convId);
+    expect(name4 === 'Rahul Verma', 'bare name after the ask is kept', name4);
+    expect((await leadsOf(r1.convId)).length === 0, 'a name alone is not a lead yet');
     expect(/^MANDATORY/.test(nowLine(r4.rules)) && /mobile number/.test(nowLine(r4.rules)), 'msg #4: mobile (its own customAskAfter=4) is next', nowLine(r4.rules));
     const r5 = await say(biz, v, '+91 98450 12345');
     const [lead5] = await leadsOf(r1.convId);
@@ -291,7 +299,8 @@ async function main() {
     fake.script = null;
     const [l2] = await leadsOf(r1.convId);
     const t2 = textOf(r2.cont?.messages.find(m => m.role === 'tool')?.content);
-    expect(l2?.name === 'Priya Shah' && !l2?.phone, 'valid name saved, invalid phone not saved', { name: l2?.name, phone: l2?.phone });
+    const name2 = await nameOf(r1.convId);
+    expect(name2 === 'Priya Shah' && !l2, 'valid name kept, invalid phone not saved, no lead yet', { name: name2, lead: !!l2 });
     expect(/re-enter only their mobile number/.test(t2) && !/answer their original question/.test(t2), 'instruction: re-enter only the mobile number', t2);
     expect(!/May I also have/.test(t2) && !/phone number and/.test(t2), 'no canned multi-field question', t2);
     expect(/re-enter your mobile number/i.test(r2.text), 'reply asks to re-enter the number', r2.text);
@@ -314,17 +323,17 @@ async function main() {
     await say(biz, v, 'fees kitni hai?');
     fake.script = null;
     const r3 = await say(biz, v, 'mera naam Rahul hai');
-    const [lead] = await leadsOf(r3.convId);
-    expect(lead?.name === 'Rahul', '"mera naam Rahul hai" saved as Rahul', lead?.name);
-    expect((r3.main?.tools || []).some((t: any) => t.function?.name === 'capture_lead') || !!lead?.name, 'capture_lead offered while a field is missing');
+    const name9 = await nameOf(r3.convId);
+    expect(name9 === 'Rahul', '"mera naam Rahul hai" kept as Rahul', name9);
+    expect((r3.main?.tools || []).some((t: any) => t.function?.name === 'capture_lead') || !!name9, 'capture_lead offered while a field is missing');
     const v2 = visitor();
     await say(biz, v2, 'hello');
     fake.script = (call) => call.purpose === 'main' ? { content: 'Aapka naam kya hai?' } : null;
     await say(biz, v2, 'course details batao');
     fake.script = null;
     const rb = await say(biz, v2, 'Rahul');
-    const [lb] = await leadsOf(rb.convId);
-    expect(lb?.name === 'Rahul', 'bare "Rahul" after "Aapka naam kya hai?" saved', lb?.name);
+    const nameB = await nameOf(rb.convId);
+    expect(nameB === 'Rahul', 'bare "Rahul" after "Aapka naam kya hai?" kept', nameB);
     const v3 = visitor();
     const tools = (await say(biz, v3, 'main Kiran hoon')).main?.tools || [];
     expect(tools.some((t: any) => t.function?.name === 'capture_lead'), '"main Kiran hoon" → capture_lead offered');

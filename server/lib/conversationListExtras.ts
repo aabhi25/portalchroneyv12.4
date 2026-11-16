@@ -1,5 +1,6 @@
 // Conversation list rows (business account and group admin): who the visitor is, what they're
 // after, and the lead / journey / form badges.
+import { hasContactValue } from "./leadContact";
 import { db } from "../db";
 import { leads, leadConversations, conversations, journeySessions, conversationJourneys, journeyResponses, messages } from "@shared/schema";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
@@ -83,7 +84,8 @@ export async function conversationListExtras(
         enquiryCountByLead.set(row.id, row.enquiryCount ?? 1);
         const topics = (row.topicsOfInterest as string[]) || [];
         const badge = topics.includes('Discount Availed') ? 'Discount Availed' : 'Lead Captured';
-        leadBadgeMap.set(row.conversationId, badge);
+        // A name without a mobile or email isn't a lead (the name still labels the chat).
+        if (hasContactValue(row)) leadBadgeMap.set(row.conversationId, badge);
         if (topics.includes('Via Form')) viaFormConvIds.add(row.conversationId);
         if (!leadContact.has(row.conversationId)) {
           leadContact.set(row.conversationId, { name: row.name, phone: row.phone, email: row.email });

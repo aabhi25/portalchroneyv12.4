@@ -102,6 +102,12 @@ export async function loadKnownAnswers(conversationId: string, businessAccountId
   if (lead?.phone?.trim()) known.set('phone', { answer: lead.phone.trim(), journeyId: null });
   if (lead?.email?.trim()) known.set('email', { answer: lead.email.trim(), journeyId: null });
   if (lead?.name && isValidLeadName(lead.name)) known.set('name', { answer: lead.name.trim(), journeyId: null });
+  else if (!lead) {
+    // A name given before any mobile or email waits on the chat (not a lead yet).
+    const { loadLeadCaptureState } = await import('./leadCapture/state');
+    const pendingName = (await loadLeadCaptureState(conversationId)).pendingLead?.name;
+    if (pendingName && isValidLeadName(pendingName)) known.set('name', { answer: pendingName.trim(), journeyId: null });
+  }
   const rows = await db
     .select({
       response: journeyResponses.response,

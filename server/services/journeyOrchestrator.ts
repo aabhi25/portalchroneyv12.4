@@ -803,15 +803,18 @@ export class JourneyOrchestrator {
         businessAccountId, conversationId,
         values: { ...values, city, sourceUrl: origin?.sourceUrl || null, landingUrl: origin?.landingUrl || null },
       });
-      if (journeyState) journeyState.leadId = up.lead.id;
+      // A name alone isn't a lead yet: it waits on the chat for the mobile or email answer.
+      const lead = up.lead;
+      if (!lead) return { captchaRequired: false };
+      if (journeyState) journeyState.leadId = lead.id;
       if (up.changed.length === 0) return { captchaRequired: false };
-      console.log(`[Journey Lead] ${up.created ? 'Created' : 'Updated'} lead ${up.lead.id}: ${up.changed.join(', ')}`);
+      console.log(`[Journey Lead] ${up.created ? 'Created' : 'Updated'} lead ${lead.id}: ${up.changed.join(', ')}`);
       let captchaRequired = false;
-      if (up.changed.includes('phone') && up.lead.phone) {
-        const gate = await applyMidChatPhoneGate({ businessAccountId, conversationId, leadId: up.lead.id, phone: up.lead.phone, leadConfig, channel });
+      if (up.changed.includes('phone') && lead.phone) {
+        const gate = await applyMidChatPhoneGate({ businessAccountId, conversationId, leadId: lead.id, phone: lead.phone, leadConfig, channel });
         captchaRequired = gate.captchaLocked;
       }
-      syncConversationLeadIfReady({ leadId: up.lead.id, businessAccountId, conversationId, changedFields: up.changed, channel, source: 'journey' })
+      syncConversationLeadIfReady({ leadId: lead.id, businessAccountId, conversationId, changedFields: up.changed, channel, source: 'journey' })
         .catch(err => console.error('[Journey Lead] CRM sync failed:', err));
       return { captchaRequired };
     } catch (error) {

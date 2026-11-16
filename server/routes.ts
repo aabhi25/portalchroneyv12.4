@@ -1,4 +1,5 @@
 import { normalizeCountryCode, normalizePhoneCodeStyle } from "@shared/phoneFormat";
+import { leadHasContact } from "./lib/leadContact";
 import { fetchWithTimeout, LONG_FETCH_TIMEOUT_MS } from "./lib/fetchWithTimeout";
 import type { Express, Request, Response as ExpressResponse } from "express";
 import { getLogBuffer, logEvents } from './services/logCapture';
@@ -3388,6 +3389,11 @@ Return JSON:
       // Require at least one contact field
       if (!name && !phone && !email) {
         return res.status(400).json({ error: "At least one contact field is required" });
+      }
+      // A name without a mobile or email isn't a lead: nothing to follow up on, so nothing is saved.
+      if (!String(phone || '').trim() && !String(email || '').trim()) {
+        console.log(`[Widget Form] Name-only submission for ${businessAccountId}: not saved as a lead`);
+        return res.json({ success: true, leadId: null, saved: false });
       }
 
       if (phone) {
@@ -14691,7 +14697,7 @@ Return ONLY the refined instruction, nothing else.`
         id: leads.id, conversationId: leads.conversationId,
         topicsOfInterest: leads.topicsOfInterest, sourceUrl: leads.sourceUrl,
         email: leads.email, phone: leads.phone,
-      }).from(leads).where(and(...leadDateConds));
+      }).from(leads).where(and(...leadDateConds, leadHasContact));
 
       // Build phone-based dedup key for form conversations (phone is the reliable identity for form fills)
       const formConvPhoneMap = new Map<string, string>();
@@ -14840,7 +14846,7 @@ Return ONLY the refined instruction, nothing else.`
         .from(conversations).where(and(...convDateConds));
       const allLeadsRaw = await db.select({
         id: leads.id, conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest, phone: leads.phone, businessAccountId: leads.businessAccountId,
-      }).from(leads).where(and(...leadDateConds));
+      }).from(leads).where(and(...leadDateConds, leadHasContact));
       const formLeadConvIds = new Set(
         allLeadsRaw
           .filter(l => ((l.topicsOfInterest as string[]) || []).includes('Via Form') && l.conversationId)
@@ -14921,7 +14927,7 @@ Return ONLY the refined instruction, nothing else.`
 
         const [acctLeadsRaw, acctConvIds, acctJourneyInRange, acctAllJourney] = await Promise.all([
           db.select({ id: leads.id, conversationId: leads.conversationId, topicsOfInterest: leads.topicsOfInterest, sourceUrl: leads.sourceUrl, email: leads.email, phone: leads.phone })
-            .from(leads).where(and(...acctLeadConds)),
+            .from(leads).where(and(...acctLeadConds, leadHasContact)),
           db.select({ id: conversations.id, visitorToken: conversations.visitorToken }).from(conversations).where(and(...acctConvConds)),
           db.select({ conversationId: journeySessions.conversationId })
             .from(journeySessions).where(and(...acctJourneyConds)),
@@ -15351,7 +15357,7 @@ Return ONLY the refined instruction, nothing else.`
           topicsOfInterest: leads.topicsOfInterest,
         })
         .from(leads)
-        .where(and(...leadConds))
+        .where(and(...leadConds, leadHasContact))
         .orderBy(desc(leads.createdAt));
 
       // Deduplicate leads by email > phone > id, keeping the most recent row per person
@@ -15622,7 +15628,7 @@ Format your response as JSON with this structure:
       // Fetch raw leads and conversations in parallel
       const [acctLeadsRaw, acctConvRows] = await Promise.all([
         db.select({ id: leads.id, conversationId: leads.conversationId, email: leads.email, phone: leads.phone, topicsOfInterest: leads.topicsOfInterest })
-          .from(leads).where(and(...leadConds)),
+          .from(leads).where(and(...leadConds, leadHasContact)),
         db.select({ id: conversations.id, visitorToken: conversations.visitorToken })
           .from(conversations).where(and(...convConds)),
       ]);
@@ -28826,7 +28832,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         db.select({ conversationId: leads.conversationId, phone: leads.phone })
           .from(leads)
           .where(and(eq(leads.businessAccountId, businessAccountId), sql`${leads.topicsOfInterest}::text LIKE '%Via Form%'`, sql`${leads.phone} IS NOT NULL AND ${leads.phone} != ''`)),
-        db.select({ total: count() }).from(leads).where(and(...leadConditions)),
+        db.select({ total: count() }).from(leads).where(and(...leadConditions, leadHasContact)),
       ]);
       const dashFormPhoneMap = new Map<string, string>();
       for (const l of dashFormLeadRows) {
@@ -29558,6 +29564,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
             COUNT(CASE WHEN created_at >= ${todayIST}::date AND created_at < (${todayIST}::date + interval '1 day') THEN 1 END)::int AS today
           FROM leads
           WHERE created_at >= ${mtdStartIST}::date
+            AND (COALESCE(TRIM(phone), '') <> '' OR COALESCE(TRIM(email), '') <> '')
           GROUP BY business_account_id
         `),
         db.execute(sql`

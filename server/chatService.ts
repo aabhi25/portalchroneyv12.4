@@ -1776,9 +1776,11 @@ Response:`;
     if (!leadTrainingConfig || context.skipLeadTraining || conversationId.startsWith('temp_')) return { turn: null, lead };
     const realName = (v?: string | null) => (v && v.trim() && v.trim() !== 'Anonymous' ? v.trim() : null);
     try {
+      // A name given before any mobile or email is kept on the chat (not a lead yet): still known.
+      let pendingName = lead ? null : ((await loadLeadCaptureState(conversationId)).pendingLead?.name || null);
       const said = await contactInfoSaidInChat(
         leadTrainingConfig,
-        lead ? { name: realName(lead.name), email: lead.email, phone: lead.phone } : null,
+        lead ? { name: realName(lead.name), email: lead.email, phone: lead.phone } : pendingName ? { name: pendingName, email: null, phone: null } : null,
         history as any,
         userMessage,
         context.businessAccountId,
@@ -1792,7 +1794,8 @@ Response:`;
           policy: { name: 'fill', email: 'fill' },
         });
         lead = up.lead;
-        if (up.changed.length) {
+        if (!up.lead) pendingName = up.pending?.name || pendingName;
+        if (up.lead && up.changed.length) {
           console.log(`[Lead Capture] Saved ${up.changed.join(', ')} the visitor already gave in chat`);
           syncConversationLeadIfReady({ leadId: up.lead.id, businessAccountId: context.businessAccountId, conversationId, changedFields: up.changed, channel: context.channel, source: 'said_in_chat' }).catch(() => undefined);
         }
@@ -1801,7 +1804,7 @@ Response:`;
       const turn = await prepareLeadTurn({
         conversationId,
         config: leadTrainingConfig,
-        known: { name: realName(lead?.name), email: lead?.email || null, phone: lead?.phone || null },
+        known: { name: realName(lead?.name) || pendingName, email: lead?.email || null, phone: lead?.phone || null },
         userMessage,
         n: args.n,
         lastAssistantMessage: lastAssistant,
@@ -1908,6 +1911,11 @@ Response:`;
         policy: { name: 'fill' },
       });
       const lead = up.lead;
+      if (!lead) {
+        // A name alone isn't a lead: kept on the chat until a mobile or email arrives.
+        if (up.changed.length) console.log(`[Auto Lead Capture] Kept ${up.changed.join(', ')} on conversation ${conversationId} (no mobile or email yet)`);
+        return;
+      }
       if (up.changed.length === 0 && !up.created && !up.reusedFromConversationId) return;
       console.log(`[Auto Lead Capture] ${up.created ? 'Created' : 'Updated'} lead ${lead.id}: ${up.changed.join(', ')}`);
 

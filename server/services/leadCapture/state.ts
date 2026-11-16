@@ -46,6 +46,16 @@ export interface LeadCaptureState {
   /** Whether the visitor declined in the latest processed message (for the prompt). */
   declinedNow?: LeadFieldId[];
   whatsapp?: { sameAsMobile?: boolean | null; number?: string | null };
+  /** Details given before any mobile or email (a name alone isn't a lead): saved on the lead once one arrives. */
+  pendingLead?: PendingLead;
+}
+
+export interface PendingLead {
+  name?: string | null;
+  city?: string | null;
+  sourceUrl?: string | null;
+  landingUrl?: string | null;
+  message?: string | null;
 }
 
 export const emptyFieldState = (): LeadFieldState => ({ asked: 0, lastAskedAt: null, declines: 0, ignored: 0, asksAfterCap: 0, pending: false });
@@ -74,6 +84,7 @@ export function parseLeadCaptureState(raw: unknown): LeadCaptureState {
     processedUserMsg: Number(obj.processedUserMsg) || 0,
     declinedNow: Array.isArray(obj.declinedNow) ? obj.declinedNow : undefined,
     whatsapp: obj.whatsapp && typeof obj.whatsapp === 'object' ? obj.whatsapp : undefined,
+    pendingLead: obj.pendingLead && typeof obj.pendingLead === 'object' ? obj.pendingLead : undefined,
   };
 }
 

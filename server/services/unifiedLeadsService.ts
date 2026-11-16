@@ -32,6 +32,7 @@ import {
   type Lead,
 } from "@shared/schema";
 import { maskLeadPhone, maskPhonesInRecord, maskPhonesInText } from "../lib/leadAccess";
+import { leadHasContactAs } from "../lib/leadContact";
 import {
   SOCIAL_EMAIL_KEYS,
   SOCIAL_NAME_KEYS,
@@ -170,7 +171,8 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
     case "website": {
       // A returning visitor's repeat enquiry counts from its latest enquiry (sort and date filter).
       const at = sql`COALESCE(l.last_enquiry_at, l.created_at)`;
-      const conds: SQL[] = [sql`l.business_account_id = ${accountId}`, ...dateConds(at, f)];
+      // Name-only leads (no mobile or email) are never listed.
+      const conds: SQL[] = [sql`l.business_account_id = ${accountId}`, leadHasContactAs("l"), ...dateConds(at, f)];
       if (f.status) conds.push(sql`FALSE`); // website leads have no status
       if (search) conds.push(sql`(l.name ILIKE ${search} OR l.email ILIKE ${search} OR l.phone ILIKE ${search} OR l.message ILIKE ${search})`);
       if (f.temperature) conds.push(sql`l.lead_temperature = ${f.temperature}`);

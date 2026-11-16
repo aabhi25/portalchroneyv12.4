@@ -1,4 +1,5 @@
 // Reference: javascript_database blueprint - updated for chat application
+import { leadHasContact } from "./lib/leadContact";
 import { hasMessageNudgeText, normalizeMessageNudgeItems } from "@shared/messageNudges";
 import { stripProtectedFields } from './lib/safeUpdate';
 import { channelCondition } from './services/chatContext/channelSql';
@@ -1055,7 +1056,7 @@ export class DatabaseStorage implements IStorage {
         .orderBy(desc(users.lastLoginAt));
 
       // Build date filter conditions for leads
-      const leadConditions = [eq(leads.businessAccountId, account.id)];
+      const leadConditions = [eq(leads.businessAccountId, account.id), leadHasContact];
       if (dateFrom) {
         leadConditions.push(gte(leads.createdAt, dateFrom));
       }
@@ -2206,7 +2207,7 @@ export class DatabaseStorage implements IStorage {
     return await db
       .select()
       .from(leads)
-      .where(eq(leads.businessAccountId, businessAccountId))
+      .where(and(eq(leads.businessAccountId, businessAccountId), leadHasContact))
       .orderBy(desc(leads.createdAt));
   }
 
@@ -2217,6 +2218,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(leads.businessAccountId, businessAccountId),
+          leadHasContact,
           gte(leads.createdAt, fromDate),
           lte(leads.createdAt, toDate),
           or(
@@ -2239,6 +2241,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(leads.businessAccountId, businessAccountId),
+          leadHasContact,
           gte(leads.createdAt, fromDate),
           lte(leads.createdAt, toDate),
           or(isNull(leads.salesforceSyncStatus), sql`${leads.salesforceSyncStatus} <> 'synced'`)
@@ -2253,7 +2256,7 @@ export class DatabaseStorage implements IStorage {
     limit?: number,
     offset?: number
   ): Promise<{ leads: Lead[]; total: number }> {
-    const conditions = [eq(leads.businessAccountId, businessAccountId)];
+    const conditions = [eq(leads.businessAccountId, businessAccountId), leadHasContact];
     
     // Add date filters if provided
     if (filters?.fromDate) {
@@ -2330,7 +2333,7 @@ export class DatabaseStorage implements IStorage {
 
   async countLeadsForAccount(businessAccountId: string): Promise<number> {
     const [result] = await db.select({ total: count() }).from(leads)
-      .where(eq(leads.businessAccountId, businessAccountId));
+      .where(and(eq(leads.businessAccountId, businessAccountId), leadHasContact));
     return result?.total ?? 0;
   }
 
@@ -5582,7 +5585,7 @@ export class DatabaseStorage implements IStorage {
       if (!account) continue;
       
       // Build date filter conditions for leads
-      const leadConditions = [eq(leads.businessAccountId, accountId)];
+      const leadConditions = [eq(leads.businessAccountId, accountId), leadHasContact];
       if (dateFrom) {
         leadConditions.push(gte(leads.createdAt, dateFrom));
       }
@@ -5833,7 +5836,8 @@ export class DatabaseStorage implements IStorage {
   // Shared by the group Leads list and group "delete all", so both always match
   // the same rows. createdBefore pins a delete to leads that existed at preview time.
   private groupLeadsWhere(accountIds: string[], filters?: GroupListFilters, createdBefore?: Date) {
-    const conditions: any[] = [];
+    // Name-only leads are never listed, counted or bulk-deleted.
+    const conditions: any[] = [leadHasContact];
 
     // Filter by specific account if provided, otherwise use all account IDs
     if (filters?.accountId && accountIds.includes(filters.accountId)) {

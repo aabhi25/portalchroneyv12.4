@@ -48,7 +48,7 @@ router.get("/api/home/summary", requireAuth, requireBusinessAccount, async (req,
       webCrmFailed, waCrmFailed, igCrmFailed, fbCrmFailed,
     ] = await Promise.all([
       count(sql`SELECT count(*)::int AS n FROM conversations WHERE business_account_id = ${accountId} AND created_at >= ${s} AND is_internal_test = 'false'`),
-      count(sql`SELECT count(*)::int AS n FROM leads WHERE business_account_id = ${accountId} AND created_at >= ${s}`),
+      count(sql`SELECT count(*)::int AS n FROM leads WHERE business_account_id = ${accountId} AND created_at >= ${s} AND (COALESCE(TRIM(phone), '') <> '' OR COALESCE(TRIM(email), '') <> '')`),
       count(sql`SELECT count(*)::int AS n FROM whatsapp_sessions WHERE business_account_id = ${accountId} AND last_user_message_at >= ${s}`),
       count(sql`SELECT count(*)::int AS n FROM whatsapp_leads WHERE business_account_id = ${accountId} AND created_at >= ${s}`),
       count(sql`SELECT count(DISTINCT sender_id)::int AS n FROM instagram_messages WHERE business_account_id = ${accountId} AND direction = 'incoming' AND created_at >= ${s}`),
