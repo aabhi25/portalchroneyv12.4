@@ -72,6 +72,10 @@ export function renderInsightsPdf(data: InsightsPdfData): Buffer {
     : "0";
   const showWhatsapp = (data.totals.whatsappLeads ?? 0) > 0;
   let y = 58;
+  if (showWhatsapp) {
+    doc.text(`Total Leads: ${data.totals.leads + data.totals.whatsappLeads!} (website + WhatsApp)`, 14, y);
+    y += 8;
+  }
   doc.text(`${showWhatsapp ? "Website Leads" : "Total Leads"}: ${data.totals.leads}`, 14, y);
   if (showWhatsapp) {
     y += 8;
@@ -94,14 +98,14 @@ export function renderInsightsPdf(data: InsightsPdfData): Buffer {
           ? ((account.leads / account.conversations) * 100).toFixed(1) + "%"
           : "0%";
         return showWhatsapp
-          ? [account.businessName, account.leads.toString(), String(account.whatsappLeads ?? 0), account.conversations.toString(), rate]
+          ? [account.businessName, account.leads.toString(), String(account.whatsappLeads ?? 0), String(account.leads + (account.whatsappLeads ?? 0)), account.conversations.toString(), rate]
           : [account.businessName, account.leads.toString(), account.conversations.toString(), rate];
       });
 
     autoTable(doc, {
       startY: y + 22,
       head: [showWhatsapp
-        ? ["Account", "Website Leads", "WhatsApp Leads", "Chats", "Conv. Rate"]
+        ? ["Account", "Website Leads", "WhatsApp Leads", "Total Leads", "Chats", "Conv. Rate"]
         : ["Account", "Leads", "Chats", "Conv. Rate"]],
       body: tableData,
       styles: { fontSize: 10 },

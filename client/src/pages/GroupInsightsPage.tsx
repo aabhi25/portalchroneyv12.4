@@ -33,7 +33,8 @@ import {
   Pencil,
   TrendingUp,
   FileText,
-  Loader2
+  Loader2,
+  Users
 } from "lucide-react";
 
 type DateFilterType = "today" | "yesterday" | "last7days" | "currentMonth" | "lastMonth" | "custom" | "lifetime";
@@ -528,7 +529,19 @@ export default function GroupInsightsPage() {
             </div>
           ) : groupInsights ? (
             <>
-              <div className={`grid gap-4 ${showWhatsappLeads ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-3"}`}>
+              <div className={`grid gap-4 ${showWhatsappLeads ? "grid-cols-2 lg:grid-cols-5" : "grid-cols-3"}`}>
+                {showWhatsappLeads && (
+                  <Card className="col-span-2 lg:col-span-1">
+                    <CardContent className="pt-6 text-center">
+                      <div className="flex items-center justify-center gap-1.5 text-muted-foreground mb-2">
+                        <Users className="w-5 h-5 flex-shrink-0" />
+                        <span className="text-sm font-medium">Total leads</span>
+                      </div>
+                      <div className="text-3xl font-bold">{groupInsights.totals.leads + (groupInsights.totals.whatsappLeads ?? 0)}</div>
+                      <p className="text-xs text-muted-foreground mt-1">Website + WhatsApp</p>
+                    </CardContent>
+                  </Card>
+                )}
                 <Card>
                   <CardContent className="pt-6 text-center">
                     <div className="flex items-center justify-center gap-1.5 text-muted-foreground mb-2">
@@ -589,6 +602,9 @@ export default function GroupInsightsPage() {
                             {showWhatsappLeads && (
                               <th className="text-center p-3 font-medium whitespace-nowrap">WhatsApp leads</th>
                             )}
+                            {showWhatsappLeads && (
+                              <th className="text-center p-3 font-medium whitespace-nowrap">Total leads</th>
+                            )}
                             <th className="text-center p-3 font-medium whitespace-nowrap">Chats</th>
                             <th className="text-center p-3 font-medium whitespace-nowrap">Conv. Rate</th>
                           </tr>
@@ -605,6 +621,9 @@ export default function GroupInsightsPage() {
                               <td className="text-center p-3 font-medium">{account.leads}</td>
                               {showWhatsappLeads && (
                                 <td className="text-center p-3 font-medium">{account.whatsappLeads ?? 0}</td>
+                              )}
+                              {showWhatsappLeads && (
+                                <td className="text-center p-3 font-semibold">{account.leads + (account.whatsappLeads ?? 0)}</td>
                               )}
                               <td className="text-center p-3 font-medium">{account.conversations}</td>
                               <td className="text-center p-3 font-medium">
