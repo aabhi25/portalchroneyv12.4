@@ -1000,6 +1000,17 @@ export const widgetSettings = pgTable("widget_settings", {
   leadsquaredConnectionType: text("leadsquared_connection_type").notNull().default("api"), // 'api' | 'uds'
   leadsquaredUdsWebhookUrl: text("leadsquared_uds_webhook_url"), // UDS Custom/HTTPS trigger URL
   leadsquaredUdsKey: text("leadsquared_uds_key"), // UDS ickey (encrypted)
+  // WhatsApp leads → LeadSquared: 'same' = the connection / field mappings above, 'own' = the
+  // WhatsApp ones below (mappings: leadsquared_field_mappings rows with channel 'whatsapp').
+  leadsquaredWaConnection: text("leadsquared_wa_connection").notNull().default("same"), // 'same' | 'own'
+  leadsquaredWaMappings: text("leadsquared_wa_mappings").notNull().default("same"), // 'same' | 'own'
+  leadsquaredWaConnectionType: text("leadsquared_wa_connection_type").notNull().default("uds"), // 'api' | 'uds'
+  leadsquaredWaUdsWebhookUrl: text("leadsquared_wa_uds_webhook_url"),
+  leadsquaredWaUdsKey: text("leadsquared_wa_uds_key"), // encrypted
+  leadsquaredWaAccessKey: text("leadsquared_wa_access_key"),
+  leadsquaredWaSecretKey: text("leadsquared_wa_secret_key"), // encrypted
+  leadsquaredWaRegion: text("leadsquared_wa_region"),
+  leadsquaredWaCustomHost: text("leadsquared_wa_custom_host"),
 
   // Salesforce CRM Integration
   salesforceEnabled: text("salesforce_enabled").notNull().default("false"), // 'true' | 'false'
@@ -3072,6 +3083,7 @@ export const leadsquaredFieldMappings = pgTable("leadsquared_field_mappings", {
   displayName: text("display_name").notNull(), // Friendly name shown in UI, e.g., "Full Name", "City"
   isEnabled: text("is_enabled").notNull().default("true"), // 'true' | 'false'
   sortOrder: integer("sort_order").notNull().default(0), // For ordering in UI
+  channel: text("channel").notNull().default("website"), // 'website' (also Instagram/Facebook) | 'whatsapp' (when WhatsApp has its own mappings)
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

@@ -202,10 +202,8 @@ router.post("/api/whatsapp-leads/leadsquared-sync-all", requireAuth, requireBusi
   try {
     const accountId = await leadAccount(req, res);
     if (!accountId) return;
-    const settings = await storage.getWidgetSettings(accountId);
-    const { isLeadSquaredConfigured } = await import("../services/crmLeadSync");
-    if (!isLeadSquaredConfigured(settings)) return res.status(400).json({ error: "LeadSquared is not enabled/configured" });
-    const { syncAllWhatsappLeadsToLeadSquared } = await import("../services/whatsappLeadLsqSync");
+    const { syncAllWhatsappLeadsToLeadSquared, whatsappLsqConfigured } = await import("../services/whatsappLeadLsqSync");
+    if (!(await whatsappLsqConfigured(accountId))) return res.status(400).json({ error: "LeadSquared is not enabled/configured for WhatsApp leads" });
     const s = await syncAllWhatsappLeadsToLeadSquared(accountId);
     res.json({ success: true, ...s, message: `Synced ${s.synced}, failed ${s.failed}, skipped ${s.skipped}` });
   } catch (error: any) {

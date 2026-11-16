@@ -440,7 +440,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   });
 
   // Check if LeadSquared integration is enabled
-  const { data: leadsquaredSettings } = useQuery<{ enabled: boolean; hasCredentials: boolean }>({
+  const { data: leadsquaredSettings } = useQuery<{ enabled: boolean; hasCredentials: boolean; whatsappConfigured?: boolean }>({
     queryKey: ["/api/leadsquared/settings"],
     queryFn: async () => {
       const response = await fetch("/api/leadsquared/settings", {
@@ -454,6 +454,8 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   });
 
   const isLeadsquaredConfigured = leadsquaredSettings?.enabled && leadsquaredSettings?.hasCredentials;
+  // WhatsApp leads may use their own LeadSquared connection.
+  const isWhatsappLsqConfigured = !!leadsquaredSettings?.whatsappConfigured;
 
   // Auto-delete (data retention) policy for this account, for the banner and row countdowns.
   const { data: retention } = useQuery<{ policy: AccountRetention['policy'] | null; crm: AccountRetention['crm'] }>({
@@ -543,7 +545,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         const web: any = await apiRequest("POST", "/api/leadsquared/sync-all");
         messages.push(web?.message || `Website: synced ${web?.synced ?? 0}`);
       }
-      if ((channelFilter === 'all' || channelFilter === 'whatsapp') && availableChannels.includes('whatsapp') && isLeadsquaredConfigured) {
+      if ((channelFilter === 'all' || channelFilter === 'whatsapp') && availableChannels.includes('whatsapp') && isWhatsappLsqConfigured) {
         const wa: any = await apiRequest("POST", "/api/whatsapp-leads/leadsquared-sync-all");
         messages.push(`WhatsApp: ${wa?.message || ''}`);
       }
@@ -758,7 +760,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   const crmTargetsFor = (row: UnifiedLeadRow): { crm: SocialCrm; label: string; state: UnifiedLeadRow['crm']['customCrm'] }[] => {
     if (row.channel === 'whatsapp') {
       const out: { crm: SocialCrm; label: string; state: UnifiedLeadRow['crm']['customCrm'] }[] = [];
-      if (isLeadsquaredConfigured || row.crm.leadsquared) out.push({ crm: 'leadsquared', label: 'LeadSquared', state: row.crm.leadsquared });
+      if (isWhatsappLsqConfigured || row.crm.leadsquared) out.push({ crm: 'leadsquared', label: 'LeadSquared', state: row.crm.leadsquared });
       if (crmConfig?.custom_crm.configured) out.push({ crm: 'custom_crm', label: 'Custom CRM', state: row.crm.customCrm });
       return out;
     }
@@ -794,7 +796,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
     return crmTargetsFor(row).map(t => ({
       ...t,
       canSync: row.channel === 'whatsapp' && t.crm === 'leadsquared'
-        ? !!isLeadsquaredConfigured && t.state?.status !== 'synced' && t.state?.status !== 'pending'
+        ? isWhatsappLsqConfigured && t.state?.status !== 'synced' && t.state?.status !== 'pending'
         : canResync(t.state),
     }));
   };
@@ -982,6 +984,7 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
             </div>
               <div className="flex gap-2 flex-wrap justify-end">
                 {((isLeadsquaredConfigured && (channelFilter === 'all' || channelFilter === 'website')) ||
+                  (isWhatsappLsqConfigured && availableChannels.includes('whatsapp') && (channelFilter === 'all' || channelFilter === 'whatsapp')) ||
                   (configuredSocialCrms.length > 0 && socialChannelsEnabled.some(c => channelFilter === 'all' || channelFilter === c))) && (
                   <Button
                     onClick={handleSyncAll} 

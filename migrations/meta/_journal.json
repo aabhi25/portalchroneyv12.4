@@ -449,6 +449,13 @@
       "when": 1794809384661,
       "tag": "0063_whatsapp_leads_lsq_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1794810035678,
+      "tag": "0064_lsq_whatsapp_own",
+      "breakpoints": true
     }
   ]
 }

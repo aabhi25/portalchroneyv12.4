@@ -95,6 +95,7 @@ import { contactViewMaskMiddleware } from "./lib/contactViewMask";
 import homeSummaryRoutes from "./routes/homeSummary";
 import whatsappHandoffRoutes from "./routes/whatsappHandoff";
 import whatsappSharedNumberRoutes from "./routes/whatsappSharedNumber";
+import leadsquaredWhatsappRoutes from "./routes/leadsquaredWhatsapp";
 import { resolveAuthorizedLeadAccountId, maskLeadPhone, maskPhonesInText } from "./lib/leadAccess";
 import { conversationListExtras } from "./lib/conversationListExtras";
 import { addWebsiteLeadExtras } from "./lib/leadExtras";
@@ -604,6 +605,9 @@ function lsqPhoneOptions(body: any, sourceType: string | undefined): { phoneCoun
   return { phoneCountryCode: code, phoneCodeStyle: code ? normalizePhoneCodeStyle(body?.phoneCodeStyle) : null };
 }
 
+/** Widget settings that are connected-app logins and must never leave the server unauthenticated. */
+const PRIVATE_WIDGET_SETTING = /^(leadsquared|salesforce|meritto|twilio|wooConsumer|shopify(AccessToken|ClientSecret|ClientId))/;
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // One-time data migration: convert legacy systemMode='education_k12' accounts to k12EducationEnabled=true
   try {
@@ -656,6 +660,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(homeSummaryRoutes);
   app.use(whatsappHandoffRoutes);
   app.use(whatsappSharedNumberRoutes);
+  app.use(leadsquaredWhatsappRoutes);
   app.use(dataRetentionRoutes);
   app.use(merittoRoutes);
   app.use(wooCommerceRoutes);
@@ -17681,6 +17686,10 @@ Important:
         connectionType: settings.leadsquaredConnectionType === 'uds' ? 'uds' : 'api',
         udsWebhookUrl: settings.leadsquaredUdsWebhookUrl || '',
         hasUdsKey: !!settings.leadsquaredUdsKey,
+        // WhatsApp leads can go to LeadSquared (the website connection, or WhatsApp's own).
+        whatsappConfigured: await (await import('./services/whatsappLeadLsqSync')).whatsappLsqConfigured(businessAccountId),
+        whatsappOwnConnection: settings.leadsquaredWaConnection === 'own',
+        whatsappOwnMappings: settings.leadsquaredWaMappings === 'own',
         extractionDomain: settings.lsqExtractionDomain || '',
         extractionUniversities: settings.lsqExtractionUniversities || '',
         extractionProducts: settings.lsqExtractionProducts || '',
@@ -18112,6 +18121,10 @@ Important:
       if (!businessAccountId) {
         return res.status(400).json({ error: 'Business account not found' });
       }
+      // ?channel=whatsapp: WhatsApp's own mappings (no defaults seeded; "own mappings" starts from a copy).
+      if (req.query.channel === 'whatsapp') {
+        return res.json(await storage.getLeadsquaredFieldMappings(businessAccountId, 'whatsapp'));
+      }
       const mappings = await storage.getLeadsquaredFieldMappings(businessAccountId);
       
       // Seed defaults if no mappings exist and LeadSquared is enabled
@@ -18192,6 +18205,7 @@ Important:
         displayName,
         isEnabled: isEnabled ?? 'true',
         sortOrder: sortOrder ?? 0,
+        channel: req.body?.channel === 'whatsapp' ? 'whatsapp' : 'website',
       });
       
       res.json(mapping);
@@ -27116,6 +27130,11 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       // SECURITY: never leak the encrypted CAPTCHA secret key (or its presence)
       // through this public endpoint. Strip it from the spread.
       const { captchaSecretKeyEnc: _captchaSecretKeyEnc, ...publicSettings } = settings as any;
+      // Nor any connected-app login (CRM keys, UDS links that carry the ickey, store tokens): this
+      // endpoint is open to every website visitor, and the widget uses none of them.
+      for (const key of Object.keys(publicSettings)) {
+        if (PRIVATE_WIDGET_SETTING.test(key)) delete publicSettings[key];
+      }
 
       // WhatsApp buttons: a number the business typed wins; when none is set, the connected
       // WhatsApp AI number is used (so replies are automatic and the chat carries over).

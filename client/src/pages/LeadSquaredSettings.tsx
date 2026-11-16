@@ -3,6 +3,8 @@ import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { integrationPath } from "@/pages/settings/settingsPaths";
 import { useQuery } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
+import { WhatsappLsqSection, whatsappLsqSummary, WHATSAPP_LSQ_KEY, type WhatsappLsqData } from "@/components/leadsquared/WhatsappLsqSection";
 import type { MeResponseDto } from "@shared/dto";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, CheckCircle2, XCircle, Eye, EyeOff, Plus, Trash2, Pencil, Bot, ArrowLeft, KeyRound, Zap, TableProperties, ExternalLink, Webhook, Copy, Send, FileJson } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Eye, EyeOff, Plus, Trash2, Pencil, Bot, ArrowLeft, KeyRound, Zap, TableProperties, ExternalLink, Webhook, Copy, Send, FileJson, MessageCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -80,7 +82,10 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
     ...DYNAMIC_SOURCE_OPTIONS,
     ...journeyFieldKeys.map((key) => ({ value: `journey.${key}`, label: `Journey Answer - ${key}` })),
   ], [journeyFieldKeys]);
-  const [activeSection, setActiveSection] = useState<'connection' | 'sync' | 'mappings' | 'extraction' | null>(null);
+  const [activeSection, setActiveSection] = useState<'connection' | 'sync' | 'mappings' | 'extraction' | 'whatsapp' | null>(null);
+  // The mapping editor works on the website mappings, or on WhatsApp's own (opened from "WhatsApp leads").
+  const [mappingsChannel, setMappingsChannel] = useState<'website' | 'whatsapp'>('website');
+  const { data: whatsappLsq } = useQuery<WhatsappLsqData>({ queryKey: WHATSAPP_LSQ_KEY });
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -151,14 +156,16 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
 
   useEffect(() => {
     fetchSettings();
-    fetchFieldMappings();
     fetchUrlRules();
   }, []);
+  useEffect(() => {
+    fetchFieldMappings();
+  }, [mappingsChannel]);
 
   const fetchFieldMappings = async () => {
     try {
       setLoadingMappings(true);
-      const response = await fetch("/api/leadsquared/field-mappings", {
+      const response = await fetch(`/api/leadsquared/field-mappings${mappingsChannel === 'whatsapp' ? '?channel=whatsapp' : ''}`, {
         credentials: "include",
       });
       if (response.ok) {
@@ -221,6 +228,7 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
           phoneCountryCode: newMapping.sourceType === 'dynamic' && isPhoneSource(newMapping.sourceField) && newMapping.addCountryCode ? DEFAULT_PHONE_COUNTRY_CODE : null,
           phoneCodeStyle: newMapping.phoneCodeStyle,
           displayName: newMapping.displayName,
+          channel: mappingsChannel,
         }),
       });
 
@@ -758,6 +766,16 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
     sync: 'Auto-Sync Settings',
     mappings: 'Field Mappings',
     extraction: 'AI URL Extraction',
+    whatsapp: 'WhatsApp leads',
+  };
+  const leaveSection = () => {
+    if (activeSection === 'mappings' && mappingsChannel === 'whatsapp') {
+      setMappingsChannel('website');
+      setActiveSection('whatsapp');
+      queryClient.invalidateQueries({ queryKey: WHATSAPP_LSQ_KEY });
+      return;
+    }
+    setActiveSection(null);
   };
 
   const activeMappingsCount = fieldMappings.filter(m => m.isEnabled === 'true').length;
@@ -774,12 +792,14 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
               variant="ghost"
               size="sm"
               className="mb-3 -ml-2 text-muted-foreground hover:text-foreground"
-              onClick={() => setActiveSection(null)}
+              onClick={leaveSection}
             >
               <ArrowLeft className="h-4 w-4 mr-1" />
-              Back to Dashboard
+              {activeSection === 'mappings' && mappingsChannel === 'whatsapp' ? 'Back to WhatsApp leads' : 'Back to Dashboard'}
             </Button>
-            <h1 className="text-3xl font-bold mb-2">{sectionTitles[activeSection]}</h1>
+            <h1 className="text-3xl font-bold mb-2">
+              {activeSection === 'mappings' && mappingsChannel === 'whatsapp' ? 'Field Mappings: WhatsApp leads' : sectionTitles[activeSection]}
+            </h1>
             <p className="text-muted-foreground">
               LeadSquared CRM Integration
             </p>
@@ -889,6 +909,33 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
             </CardContent>
           </Card>
 
+          <Card
+            className="cursor-pointer transition-all hover:shadow-lg hover:border-green-300 hover:-translate-y-0.5"
+            onClick={() => setActiveSection('whatsapp')}
+          >
+            <CardContent className="p-6">
+              <div className="flex items-start gap-4">
+                <div className="rounded-xl bg-green-100 p-3">
+                  <MessageCircle className="h-6 w-6 text-green-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-lg mb-1">WhatsApp leads</h3>
+                  <p className="text-sm text-muted-foreground mb-3">{whatsappLsqSummary(whatsappLsq)}</p>
+                  {whatsappLsq?.configured ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                      <CheckCircle2 className="h-3 w-3" />
+                      {whatsappLsq.autoSyncOn ? "Sending automatically" : "Ready (auto-sync off)"}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                      Not Configured
+                    </span>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           {settings.hasCredentials && (
             <Card
               className="cursor-pointer transition-all hover:shadow-lg hover:border-pink-300 hover:-translate-y-0.5"
@@ -920,6 +967,10 @@ export default function LeadSquaredSettings({ embedded = false }: { embedded?: b
             </Card>
           )}
         </div>
+      )}
+
+      {activeSection === 'whatsapp' && (
+        <WhatsappLsqSection onEditMappings={() => { setMappingsChannel('whatsapp'); setActiveSection('mappings'); }} />
       )}
 
       {activeSection === 'connection' && (

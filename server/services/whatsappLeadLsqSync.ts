@@ -11,6 +11,9 @@
  *   - failures are retried on the website schedule (leadsquaredRetryWorker delays).
  * Sync / Retry on a lead and "Sync all to CRM" send leads by hand whether or not the switch is on.
  *
+ * Connection and field mappings: the website ones, or WhatsApp's own when the LeadSquared settings
+ * say so (leadsquaredWaConnection / leadsquaredWaMappings = 'own'; see whatsappLsqConnection).
+ *
  * Mapping context: lead.name / phone / email / whatsapp, lead.channel = "WhatsApp", the page and
  * UTM of the website WhatsApp button the student came from (hand-off), and the details collected
  * on WhatsApp as journey.<field key> and journey.<default CRM field key>.
@@ -20,7 +23,7 @@ import { db } from "../db";
 import { storage } from "../storage";
 import { trackTimer } from "../lib/lifecycle";
 import { reportError } from "../lib/errorReporter";
-import { whatsappLeadFields, whatsappLeads, whatsappSettings } from "@shared/schema";
+import { whatsappLeadFields, whatsappLeads, whatsappSettings, type WidgetSettings } from "@shared/schema";
 import { stableStringify } from "@shared/settingsCopy";
 import { LSQ_MAX_RETRY_COUNT, LSQ_PENDING_TIMEOUT_MS, getNextRetryDelay } from "./leadsquaredRetryWorker";
 import type { LeadDataContext } from "./leadsquaredService";
@@ -48,6 +51,33 @@ export interface WaLsqResult {
 type WaLead = typeof whatsappLeads.$inferSelect;
 
 const ts = (d: Date) => d.toISOString();
+
+/** The LeadSquared connection WhatsApp leads use: the website one, or WhatsApp's own. */
+export function whatsappLsqConnection(settings: WidgetSettings | null | undefined): WidgetSettings | null {
+  if (!settings) return null;
+  if (settings.leadsquaredWaConnection !== "own") return settings;
+  return {
+    ...settings,
+    leadsquaredEnabled: "true",
+    leadsquaredConnectionType: settings.leadsquaredWaConnectionType === "api" ? "api" : "uds",
+    leadsquaredUdsWebhookUrl: settings.leadsquaredWaUdsWebhookUrl,
+    leadsquaredUdsKey: settings.leadsquaredWaUdsKey,
+    leadsquaredAccessKey: settings.leadsquaredWaAccessKey,
+    leadsquaredSecretKey: settings.leadsquaredWaSecretKey,
+    leadsquaredRegion: settings.leadsquaredWaRegion,
+    leadsquaredCustomHost: settings.leadsquaredWaCustomHost,
+  };
+}
+
+/** Which field mappings WhatsApp leads use. */
+export const whatsappLsqMappingsChannel = (settings: WidgetSettings | null | undefined): "website" | "whatsapp" =>
+  settings?.leadsquaredWaMappings === "own" ? "whatsapp" : "website";
+
+/** Whether WhatsApp leads of this account can be sent to LeadSquared at all. */
+export async function whatsappLsqConfigured(businessAccountId: string): Promise<boolean> {
+  const { isLeadSquaredConfigured } = await import("./crmLeadSync");
+  return isLeadSquaredConfigured(whatsappLsqConnection(await storage.getWidgetSettings(businessAccountId)) as any);
+}
 
 /** "919876543210" → "+919876543210" so the mapping's country-code formatting recognises it. */
 function phoneForCrm(raw: string | null | undefined): string | null {
@@ -163,9 +193,10 @@ export async function syncWhatsappLeadToLeadSquared(
     return { success: false, skipped: "not_eligible", status: lead.leadsquaredSyncStatus, message: "This lead is still a draft (PAN and email needed)" };
   }
 
-  const settings = await storage.getWidgetSettings(lead.businessAccountId);
+  const widget = await storage.getWidgetSettings(lead.businessAccountId);
+  const settings = whatsappLsqConnection(widget);
   const { isLeadSquaredConfigured } = await import("./crmLeadSync");
-  if (!isLeadSquaredConfigured(settings)) {
+  if (!isLeadSquaredConfigured(settings as any)) {
     if (opts.mode === "retry" && (lead.leadsquaredSyncStatus === "failed" || lead.leadsquaredSyncStatus === "pending")) {
       await db.update(whatsappLeads).set({
         leadsquaredSyncStatus: "needs_attention",
@@ -186,7 +217,7 @@ export async function syncWhatsappLeadToLeadSquared(
   const { createLeadSquaredServiceFromSettings } = await import("./leadsquaredService");
   const service = await createLeadSquaredServiceFromSettings(settings!);
   if (!service) return { success: false, skipped: "not_configured", status: lead.leadsquaredSyncStatus, message: "LeadSquared credentials not configured" };
-  const fieldMappings = await storage.getLeadsquaredFieldMappings(lead.businessAccountId);
+  const fieldMappings = await storage.getLeadsquaredFieldMappings(lead.businessAccountId, whatsappLsqMappingsChannel(widget));
   const context = await buildContext(lead);
 
   if (opts.mode === "update") {

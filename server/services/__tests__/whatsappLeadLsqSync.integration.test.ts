@@ -35,6 +35,7 @@ async function main() {
 
   // ── A fake LeadSquared UDS webhook ───────────────────────────────────────────
   const received: Record<string, string>[] = [];
+  const paths: string[] = [];
   let failNext = 0;
   const server = http.createServer((req, res) => {
     let body = "";
@@ -47,6 +48,7 @@ async function main() {
         return;
       }
       received.push(JSON.parse(body));
+      paths.push(req.url || "");
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });
@@ -138,6 +140,26 @@ async function main() {
     const all = await sync.syncAllWhatsappLeadsToLeadSquared(A);
     expect(all.synced === 2 && (await row(L4.id)).leadsquaredSyncStatus === "synced" && (await row(L2.id)).leadsquaredSyncStatus === "synced", `Sync all sends the old and the waiting leads (${JSON.stringify(all)})`);
     expect((await sync.syncAllWhatsappLeadsToLeadSquared(A)).synced === 0, "Sync all again sends nothing twice");
+
+    // ── WhatsApp's own connection and field mappings ───────────────────────
+    await storage.upsertWidgetSettings(A, {
+      leadsquaredWaConnection: "own", leadsquaredWaMappings: "own", leadsquaredWaConnectionType: "uds",
+      leadsquaredWaUdsWebhookUrl: udsUrl.replace("/uds", "/wa-uds"), leadsquaredEnabled: "false",
+    } as any);
+    await db.insert(schema.leadsquaredFieldMappings).values([
+      { businessAccountId: A, channel: "whatsapp", leadsquaredField: "Phone", sourceType: "dynamic", sourceField: "lead.whatsapp", phoneCountryCode: "91", displayName: "Phone", sortOrder: 1 },
+      { businessAccountId: A, channel: "whatsapp", leadsquaredField: "mx_Source", sourceType: "custom", customValue: "WA Campaign", displayName: "Source", sortOrder: 2 },
+    ] as any);
+    const { whatsappLsqConfigured } = sync;
+    expect(await whatsappLsqConfigured(A), "WhatsApp's own connection works even with the website LeadSquared switched off");
+    const L8 = await lead(A, { phone: "919876500008", name: "Own setup", receivedMin: 15, updatedMin: 10 });
+    const own = await sync.syncWhatsappLeadToLeadSquared(L8.id, { mode: "manual", businessAccountId: A });
+    const lastBody = received[received.length - 1];
+    expect(own.success && paths[paths.length - 1] === "/wa-uds", "it is sent to WhatsApp's own UDS link");
+    expect(lastBody.mx_Source === "WA Campaign" && lastBody.Phone === "+91-9876500008" && !("FirstName" in lastBody), "with WhatsApp's own mappings only");
+    expect((await storage.getLeadsquaredFieldMappings(A)).length === 5 && (await storage.getLeadsquaredFieldMappings(A, "whatsapp")).length === 2, "website and WhatsApp mappings are kept apart");
+    await storage.upsertWidgetSettings(A, { leadsquaredWaConnection: "same" } as any);
+    expect(!(await whatsappLsqConfigured(A)), "back to the website connection: off while website LeadSquared is off");
 
     await storage.upsertWidgetSettings(B, { leadsquaredEnabled: "false" } as any);
     const L7 = await lead(B, { phone: "919876500007", name: "No LSQ", receivedMin: 15, updatedMin: 10 });

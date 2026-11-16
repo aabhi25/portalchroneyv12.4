@@ -101,8 +101,9 @@ function sameSecret(a: unknown, b: unknown): boolean {
 /** A LeadSquared connection value for the review screen; keys are never shown. */
 function describeLsqValue(field: string, value: unknown): string {
   if (SECRET_FIELDS.includes(field)) return typeof value === "string" && value.trim() ? "Set" : "Not set";
-  if (field === "leadsquaredUdsWebhookUrl") return maskedLink(value);
-  if (field === "leadsquaredConnectionType") return value === "uds" ? "UDS" : "API";
+  if (field === "leadsquaredUdsWebhookUrl" || field === "leadsquaredWaUdsWebhookUrl") return maskedLink(value);
+  if (field === "leadsquaredConnectionType" || field === "leadsquaredWaConnectionType") return value === "uds" ? "UDS" : "API";
+  if (field === "leadsquaredWaConnection" || field === "leadsquaredWaMappings") return value === "own" ? "Their own" : "Same as website";
   return describeValue(value);
 }
 
@@ -270,7 +271,11 @@ export async function describeSource(sourceAccountId: string) {
     } else if (item.kind === "lsq-connection") {
       sections = [{ rows: lsqConnectionRows(settings) }];
     } else if (item.kind === "lsq-mappings") {
-      sections = mappings.length ? [{ rows: mappings.map((row) => ({ label: `${row.displayName} (${row.leadsquaredField})`, value: mappingValue(row) })) }] : [];
+      const rowsFor = (channel: string) => mappings.filter((row) => row.channel === channel).map((row) => ({ label: `${row.displayName} (${row.leadsquaredField})`, value: mappingValue(row) }));
+      sections = [
+        { title: "Website leads", rows: rowsFor("website") },
+        { title: `WhatsApp leads (their own${settings.leadsquaredWaMappings === "own" ? ", in use" : ", not in use"})`, rows: rowsFor("whatsapp") },
+      ].filter((section) => section.rows.length);
     }
     if (item.kind === "fields") {
       summary = fieldsSummary(item, settings);
@@ -295,7 +300,9 @@ export async function describeSource(sourceAccountId: string) {
       summary = empty ? "Not set up" : `${settings.leadsquaredConnectionType === "uds" ? "UDS" : "API"} · sync ${settings.leadsquaredEnabled === "true" ? "on" : "off"}`;
     } else if (item.kind === "lsq-mappings") {
       empty = mappings.length === 0;
-      summary = empty ? "None" : `${mappings.length} field${mappings.length === 1 ? "" : "s"}`;
+      const web = mappings.filter((row) => row.channel !== "whatsapp").length;
+      const wa = mappings.length - web;
+      summary = empty ? "None" : `${web} field${web === 1 ? "" : "s"}${wa ? ` · ${wa} for WhatsApp` : ""}`;
     }
     return { key: item.key, group: item.group, label: item.label, description: item.description, summary, empty, sections };
   });
@@ -567,19 +574,31 @@ async function planTarget(source: Source, request: CopyRequest, target: { busine
     } else if (item.kind === "lsq-mappings") {
       if (source.lsqMappings.length === 0) continue;
       const current = await loadLsqMappings(target.businessAccountId);
-      if (stableStringify(mappingsShape(source.lsqMappings)) === stableStringify(mappingsShape(current))) continue;
-      plan.lsqMappings = source.lsqMappings;
-      plan.changes.push({ key, label: item.label, details: [{ field: "Fields sent", from: `${current.length} mapping${current.length === 1 ? "" : "s"}`, to: `${source.lsqMappings.length} mapping${source.lsqMappings.length === 1 ? "" : "s"}` }] });
+      const sameRows = stableStringify(mappingsShape(source.lsqMappings)) === stableStringify(mappingsShape(current));
+      // Whether WhatsApp leads use their own mappings travels with the mappings themselves.
+      const waModeChanged = !sameValue(source.settings.leadsquaredWaMappings ?? "same", settings.leadsquaredWaMappings ?? "same");
+      if (sameRows && !waModeChanged) continue;
+      const details: CopyChange["details"] = [];
+      if (!sameRows) {
+        plan.lsqMappings = source.lsqMappings;
+        details.push({ field: "Fields sent", from: `${current.length} mapping${current.length === 1 ? "" : "s"}`, to: `${source.lsqMappings.length} mapping${source.lsqMappings.length === 1 ? "" : "s"}` });
+      }
+      if (waModeChanged) {
+        setField("leadsquaredWaMappings", source.settings.leadsquaredWaMappings ?? "same");
+        details.push({ field: fieldLabel("leadsquaredWaMappings"), from: describeLsqValue("leadsquaredWaMappings", settings.leadsquaredWaMappings), to: describeLsqValue("leadsquaredWaMappings", source.settings.leadsquaredWaMappings) });
+      }
+      plan.changes.push({ key, label: item.label, details });
       // Fixed values often name the programme or university, so changes to them are spelled out.
+      const sameField = (a: Row, b: Row) => a.leadsquaredField === b.leadsquaredField && a.channel === b.channel;
       for (const own of current.filter((row) => row.sourceType === "custom")) {
-        const next = source.lsqMappings.find((row) => row.leadsquaredField === own.leadsquaredField);
+        const next = source.lsqMappings.find((row) => sameField(row, own));
         if (!next) {
           plan.warnings.push({ key, label: item.label, message: `Stops sending "${own.displayName}" (fixed value "${own.customValue ?? ""}")` });
         } else if (next.sourceType !== "custom" || (next.customValue ?? "") !== (own.customValue ?? "")) {
           plan.warnings.push({ key, label: item.label, message: `"${own.displayName}" changes from "${own.customValue ?? ""}" to ${next.sourceType === "custom" ? `"${next.customValue ?? ""}"` : "a detail from the chat"}` });
         }
       }
-      const dropped = current.filter((row) => row.sourceType !== "custom" && !source.lsqMappings.some((s) => s.leadsquaredField === row.leadsquaredField));
+      const dropped = current.filter((row) => row.sourceType !== "custom" && !source.lsqMappings.some((s) => sameField(s, row)));
       if (dropped.length) {
         plan.warnings.push({ key, label: item.label, message: `Stops sending ${dropped.map((row) => `"${row.displayName}"`).join(", ")}` });
       }

@@ -232,14 +232,17 @@ if (process.env.SETTINGS_COPY_TEST_DB) {
     await mapping(sourceId, "FirstName", "dynamic", "lead.name", 1);
     await mapping(sourceId, "mx_Course", "custom", "Online MBA", 2);
     await mapping(targetA, "mx_Course", "custom", "Online MCA", 1);
-    const mappingsOf = async (id: string) => (await q("SELECT leadsquared_field, source_type, custom_value FROM leadsquared_field_mappings WHERE business_account_id = $1 ORDER BY sort_order", [id]));
+    const mappingsOf = async (id: string, channel = "website") => (await q("SELECT leadsquared_field, source_type, custom_value FROM leadsquared_field_mappings WHERE business_account_id = $1 AND channel = $2 ORDER BY sort_order", [id, channel]));
+    await q(`INSERT INTO leadsquared_field_mappings (business_account_id, channel, leadsquared_field, source_type, custom_value, display_name, sort_order)
+             VALUES ($1, 'whatsapp', 'mx_Source', 'custom', 'WA Campaign', 'Source', 1)`, [sourceId]);
+    await storage.upsertWidgetSettings(sourceId, { leadsquaredWaMappings: "own" } as any);
     const secrets = ["SECRETICKEY", "uds-secret-1", udsKey, "must-not-travel"];
     const noSecrets = (value: unknown) => secrets.every((secret) => !JSON.stringify(value).includes(secret));
 
     const lsqSource = await describeSource(sourceId);
     const connection = lsqSource.items.find((i) => i.key === "leadsquared-connection")!;
     assert.equal(connection.summary, "UDS · sync on");
-    assert.equal(lsqSource.items.find((i) => i.key === "leadsquared-mappings")!.summary, "2 fields");
+    assert.equal(lsqSource.items.find((i) => i.key === "leadsquared-mappings")!.summary, "2 fields · 1 for WhatsApp");
     assert.ok(noSecrets(lsqSource), "the source description shows no key or link secret");
 
     const lsqRequest = { ...request, items: ["leadsquared-connection"], targetIds: [targetA, targetB] };
@@ -265,6 +268,10 @@ if (process.env.SETTINGS_COPY_TEST_DB) {
       assert.deepEqual((await mappingsOf(id)).map((m: any) => m.custom_value ?? m.leadsquared_field), ["FirstName", "Online MBA"]);
     }
     assert.equal((await settings(targetA)).leadsquaredAccessKey, "alpha-key"); // A UDS copy leaves the API keys alone.
+    for (const id of [targetA, targetB]) {
+      assert.deepEqual((await mappingsOf(id, "whatsapp")).map((m: any) => m.custom_value), ["WA Campaign"]); // WhatsApp's own mappings travel too
+      assert.equal((await settings(id)).leadsquaredWaMappings, "own");
+    }
     // The same key encrypted again counts as the same: nothing left to copy.
     await storage.upsertWidgetSettings(targetB, { leadsquaredUdsKey: encrypt("uds-secret-1") } as any);
     const lsqAgain = await previewCopy(groupId, { ...lsqRequest, items: ["leadsquared-connection", "leadsquared-mappings"] });
@@ -276,6 +283,8 @@ if (process.env.SETTINGS_COPY_TEST_DB) {
     assert.ok(!undoneA.leadsquaredUdsKey);
     assert.deepEqual((await mappingsOf(targetA)).map((m: any) => m.custom_value), ["Online MCA"]);
     assert.equal((await mappingsOf(targetB)).length, 0);
+    assert.equal((await mappingsOf(targetB, "whatsapp")).length, 0);
+    assert.equal((await settings(targetB)).leadsquaredWaMappings, "same");
     await storage.upsertWidgetSettings(sourceId, { leadsquaredEnabled: "false" } as any);
 
     // One account failing doesn't stop the others; its reason is kept, and trying it again works.

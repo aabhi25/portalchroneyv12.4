@@ -41,14 +41,14 @@ export const COPY_ITEMS: CopyItem[] = [
   { key: "journeys", group: "Training", label: "Journeys", description: "Forms and guided conversations. Pick which ones below", kind: "journeys" },
   { key: "menu", group: "Training", label: "Chat menu & forms", description: "The menu start screen and its buttons", kind: "menu" },
 
-  { key: "leadsquared-connection", group: "CRM", label: "LeadSquared connection", description: "The UDS link and key (or API keys) and the sync switch. Keys are copied as stored and never shown", kind: "lsq-connection" },
-  { key: "leadsquared-mappings", group: "CRM", label: "LeadSquared field mappings", description: "Which details go into which LeadSquared field, including fixed values. Replaces each account's own mappings", kind: "lsq-mappings" },
+  { key: "leadsquared-connection", group: "CRM", label: "LeadSquared connection", description: "The UDS link and key (or API keys), the sync switch, and WhatsApp leads' own connection if they have one. Keys are copied as stored and never shown", kind: "lsq-connection" },
+  { key: "leadsquared-mappings", group: "CRM", label: "LeadSquared field mappings", description: "Which details go into which LeadSquared field, including fixed values and WhatsApp's own mappings. Replaces each account's own mappings", kind: "lsq-mappings" },
 ];
 
 export const COPY_ITEM_GROUPS = ["Appearance", "Welcome & behaviour", "Nudges & banners", "Training", "CRM"];
 
 /** LeadSquared connection fields whose values are never shown, only whether they are set. */
-export const SECRET_FIELDS = ["leadsquaredUdsKey", "leadsquaredAccessKey", "leadsquaredSecretKey"];
+export const SECRET_FIELDS = ["leadsquaredUdsKey", "leadsquaredAccessKey", "leadsquaredSecretKey", "leadsquaredWaUdsKey", "leadsquaredWaAccessKey", "leadsquaredWaSecretKey"];
 
 /** "https://in-uds.leadsquared.com/x/y?ickey=…" → "in-uds.leadsquared.com/…": the link may hold the key. */
 export function maskedLink(url: unknown): string {
@@ -76,14 +76,30 @@ export function lsqConnectionRows(settings: Record<string, any>): DetailRow[] {
     rows.push({ label: "Access key", value: set(settings.leadsquaredAccessKey) });
     rows.push({ label: "Secret key", value: set(settings.leadsquaredSecretKey) });
   }
+  const waOwn = settings.leadsquaredWaConnection === "own";
+  rows.push({
+    label: "WhatsApp leads",
+    value: !waOwn ? "Same connection as website leads"
+      : settings.leadsquaredWaConnectionType === "api" ? `Own API connection (${settings.leadsquaredWaCustomHost || settings.leadsquaredWaRegion || "no host"}), keys ${set(settings.leadsquaredWaSecretKey).toLowerCase()}`
+      : `Own UDS link ${maskedLink(settings.leadsquaredWaUdsWebhookUrl)}, key ${set(settings.leadsquaredWaUdsKey).toLowerCase()}`,
+  });
   return rows;
 }
 
 /** The fields copied for a connection: the switch, the method, and that method's link/keys only. */
 export function lsqConnectionFields(settings: Record<string, any>): string[] {
-  return settings.leadsquaredConnectionType === "uds"
+  const website = settings.leadsquaredConnectionType === "uds"
     ? ["leadsquaredEnabled", "leadsquaredConnectionType", "leadsquaredUdsWebhookUrl", "leadsquaredUdsKey"]
     : ["leadsquaredEnabled", "leadsquaredConnectionType", "leadsquaredRegion", "leadsquaredCustomHost", "leadsquaredAccessKey", "leadsquaredSecretKey"];
+  // WhatsApp leads: same-or-own connection, and the own connection's link/keys when it has one.
+  // (Their same-or-own field mappings travel with "LeadSquared field mappings".)
+  const whatsapp = ["leadsquaredWaConnection"];
+  if (settings.leadsquaredWaConnection === "own") {
+    whatsapp.push("leadsquaredWaConnectionType", ...(settings.leadsquaredWaConnectionType === "api"
+      ? ["leadsquaredWaRegion", "leadsquaredWaCustomHost", "leadsquaredWaAccessKey", "leadsquaredWaSecretKey"]
+      : ["leadsquaredWaUdsWebhookUrl", "leadsquaredWaUdsKey"]));
+  }
+  return [...website, ...whatsapp];
 }
 
 /** Whether the connection has what its method needs to send leads. */
@@ -145,6 +161,15 @@ const FIELD_LABELS: Record<string, string> = {
   leadsquaredCustomHost: "API host",
   leadsquaredAccessKey: "Access key",
   leadsquaredSecretKey: "Secret key",
+  leadsquaredWaConnection: "WhatsApp leads: connection",
+  leadsquaredWaMappings: "WhatsApp leads: field mappings",
+  leadsquaredWaConnectionType: "WhatsApp leads: connection method",
+  leadsquaredWaUdsWebhookUrl: "WhatsApp leads: UDS webhook link",
+  leadsquaredWaUdsKey: "WhatsApp leads: UDS key",
+  leadsquaredWaRegion: "WhatsApp leads: API region",
+  leadsquaredWaCustomHost: "WhatsApp leads: API host",
+  leadsquaredWaAccessKey: "WhatsApp leads: access key",
+  leadsquaredWaSecretKey: "WhatsApp leads: secret key",
   welcomeMessageType: "Welcome type",
   responseLength: "Reply length",
   autoOpenChat: "Opens by itself",

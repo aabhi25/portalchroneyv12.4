@@ -5199,8 +5199,9 @@ export class DatabaseStorage implements IStorage {
         }
 
         if (publishAll || module === 'leadsquared') {
+          // Website mappings only: an account's own WhatsApp mappings stay.
           await db.delete(leadsquaredFieldMappings)
-            .where(eq(leadsquaredFieldMappings.businessAccountId, member.businessAccountId));
+            .where(and(eq(leadsquaredFieldMappings.businessAccountId, member.businessAccountId), eq(leadsquaredFieldMappings.channel, 'website')));
           for (const mapping of groupLsqMappings) {
             await db.insert(leadsquaredFieldMappings).values({
               businessAccountId: member.businessAccountId,
@@ -5467,10 +5468,10 @@ export class DatabaseStorage implements IStorage {
           await this.upsertWidgetSettings(member.businessAccountId, lsqUpdate);
         }
 
-        // Delete existing field mappings for this account
+        // Delete existing (website) field mappings for this account; its own WhatsApp mappings stay
         await db
           .delete(leadsquaredFieldMappings)
-          .where(eq(leadsquaredFieldMappings.businessAccountId, member.businessAccountId));
+          .where(and(eq(leadsquaredFieldMappings.businessAccountId, member.businessAccountId), eq(leadsquaredFieldMappings.channel, 'website')));
 
         // Insert new field mappings from group
         if (groupMappings.length > 0) {
@@ -6500,11 +6501,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // LeadSquared Field Mappings
-  async getLeadsquaredFieldMappings(businessAccountId: string): Promise<LeadsquaredFieldMapping[]> {
+  /** 'website' (also Instagram / Facebook) by default; 'whatsapp' = WhatsApp's own mappings. */
+  async getLeadsquaredFieldMappings(businessAccountId: string, channel: 'website' | 'whatsapp' = 'website'): Promise<LeadsquaredFieldMapping[]> {
     return await db
       .select()
       .from(leadsquaredFieldMappings)
-      .where(eq(leadsquaredFieldMappings.businessAccountId, businessAccountId))
+      .where(and(eq(leadsquaredFieldMappings.businessAccountId, businessAccountId), eq(leadsquaredFieldMappings.channel, channel)))
       .orderBy(asc(leadsquaredFieldMappings.sortOrder), asc(leadsquaredFieldMappings.createdAt));
   }
 
