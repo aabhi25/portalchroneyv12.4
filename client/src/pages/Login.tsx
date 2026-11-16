@@ -8,14 +8,13 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useBrand } from "@/lib/brand";
 import { BrandMark } from "@/components/BrandMark";
-import { Sparkles, Mail, Lock, Shield, Zap, AlertCircle } from "lucide-react";
+import { Mail, Lock, Shield, Zap, AlertCircle } from "lucide-react";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 
 export default function Login({ onLogin }: { onLogin: (user: any) => void }) {
@@ -114,204 +113,210 @@ export default function Login({ onLogin }: { onLogin: (user: any) => void }) {
     }
   };
 
+  // Agencies get a neutral focus ring and their own button colour; ours keeps the purple accent.
+  const inputClass = `h-12 pl-11 rounded-xl bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 shadow-sm transition-all focus-visible:ring-4 focus-visible:ring-offset-0 ${
+    brand.primaryColor
+      ? "focus-visible:border-slate-400 focus-visible:ring-slate-200"
+      : "focus-visible:border-purple-400 focus-visible:ring-purple-500/15"
+  }`;
+
   return (
-    <div className="fixed inset-0 flex items-center justify-center overflow-hidden">
-      <div className="absolute inset-0 bg-gradient-to-br from-[#0B0F1A] via-[#1e3a8a] to-[#7c3aed] animate-gradient-shift">
-        <div className="absolute inset-0 opacity-30">
-          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-500 rounded-full mix-blend-multiply filter blur-3xl animate-blob"></div>
-          <div className="absolute top-1/3 right-1/4 w-96 h-96 bg-blue-500 rounded-full mix-blend-multiply filter blur-3xl animate-blob animation-delay-2000"></div>
-          <div className="absolute bottom-1/4 left-1/3 w-96 h-96 bg-pink-500 rounded-full mix-blend-multiply filter blur-3xl animate-blob animation-delay-4000"></div>
-        </div>
+    <div className="fixed inset-0 overflow-y-auto bg-[#fbfbfd] text-slate-900">
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-64 overflow-hidden">
+        <div
+          className="absolute left-1/2 -top-64 h-[520px] w-[900px] -translate-x-1/2"
+          style={{
+            background: brand.primaryColor
+              ? `radial-gradient(closest-side, color-mix(in srgb, ${brand.primaryColor} 12%, transparent), transparent)`
+              : "radial-gradient(closest-side, rgba(168,85,247,.14), rgba(236,72,153,.06), transparent)",
+          }}
+        />
       </div>
 
-      <div className="relative w-full h-full flex items-center justify-center">
-        <div className="w-full flex items-center justify-center p-4 lg:p-8">
-          <div className="w-full max-w-md">
-            <div className="relative bg-white/10 backdrop-blur-2xl rounded-3xl p-8 shadow-2xl border border-white/20">
-              <div className="flex items-center gap-3 mb-8">
-                {brand.isAgency ? (
-                  <BrandMark className="w-14 h-14" />
-                ) : (
-                  <div className="w-16 h-16 flex items-center justify-center overflow-hidden">
-                    <img src="/c_logo.png" className="w-24 h-24 object-contain scale-150" alt="AI Chroney" style={{ mixBlendMode: 'screen' }} />
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <h2 className="text-2xl font-bold text-white" data-testid="login-brand-name">
-                    {brand.name}
-                  </h2>
-                  {brand.tagline && <p className="text-sm text-white/70">{brand.tagline}</p>}
-                </div>
-              </div>
-
-              <div className="mb-8">
-                <h1 className="text-2xl font-bold text-white leading-tight text-center">Welcome back to your AI Workspace</h1>
-              </div>
-
-              <form onSubmit={handleSubmit} className="space-y-5">
-                <div>
-                  <Label htmlFor="username" className="text-sm font-medium text-white/90">
-                    Email / Username
-                  </Label>
-                  <div className="relative mt-2">
-                    <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-white/70" />
-                    <Input
-                      id="username"
-                      type="text"
-                      placeholder="Enter your email or username"
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      required
-                      autoFocus
-                      data-testid="input-username"
-                      className="pl-11 bg-white/20 border-white/30 text-white placeholder:text-white/60 focus:bg-white/25 focus:border-white/50 focus:ring-2 focus:ring-purple-400/50 transition-all h-12 shadow-lg"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <Label htmlFor="password" className="text-sm font-medium text-white/90">
-                    Password
-                  </Label>
-                  <div className="relative mt-2">
-                    <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-white/70" />
-                    <Input
-                      id="password"
-                      type="password"
-                      placeholder="Enter your password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                      data-testid="input-password"
-                      className="pl-11 bg-white/20 border-white/30 text-white placeholder:text-white/60 focus:bg-white/25 focus:border-white/50 focus:ring-2 focus:ring-purple-400/50 transition-all h-12 shadow-lg"
-                    />
-                  </div>
-                </div>
-
-                {loginError && (
-                  <div className="flex items-start gap-3 p-4 rounded-xl bg-red-500/20 border border-red-400/30 backdrop-blur-sm">
-                    <AlertCircle className="w-5 h-5 text-red-300 flex-shrink-0 mt-0.5" />
-                    <p className="text-sm text-red-100 leading-relaxed">{loginError}</p>
-                  </div>
-                )}
-
-                <Button
-                  type="submit"
-                  style={brand.primaryColor ? { background: brand.primaryColor } : undefined}
-                  className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-purple-700 hover:from-purple-700 hover:via-pink-700 hover:to-purple-800 text-white border-0 shadow-xl h-12 text-base font-semibold mt-6 transition-all duration-300 hover:shadow-2xl hover:shadow-purple-500/50 hover:scale-[1.02] active:scale-[0.98]"
-                  disabled={loginMutation.isPending}
-                  data-testid="button-login"
-                >
-                  {loginMutation.isPending ? (
-                    <span className="flex items-center gap-2">
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      Signing in...
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-2">
-                      Sign In
-                      <Sparkles className="w-4 h-4" />
-                    </span>
-                  )}
-                </Button>
-              </form>
-
-              <div className="mt-5 text-center">
-                <Dialog open={isForgotPasswordOpen} onOpenChange={setIsForgotPasswordOpen}>
-                  <DialogTrigger asChild>
-                    <button
-                      type="button"
-                      className="text-sm text-white/80 hover:text-white font-medium hover:underline transition-colors"
-                    >
-                      Forgot Password?
-                    </button>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-md bg-slate-900 border-white/10">
-                    <DialogHeader>
-                      <DialogTitle className="flex items-center gap-2 text-white">
-                        <Mail className="w-5 h-5 text-purple-400" />
-                        Reset Your Password
-                      </DialogTitle>
-                      <DialogDescription className="text-white/70">
-                        Enter your email address and we'll send you a link to reset your password.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <form onSubmit={handleForgotPassword} className="space-y-4 mt-4">
-                      <div>
-                        <Label htmlFor="forgot-email" className="text-sm font-medium text-white/90">
-                          Email Address
-                        </Label>
-                        <Input
-                          id="forgot-email"
-                          type="email"
-                          placeholder="Enter your email"
-                          value={forgotPasswordEmail}
-                          onChange={(e) => setForgotPasswordEmail(e.target.value)}
-                          required
-                          className="mt-1.5 bg-white/5 border-white/10 text-white placeholder:text-white/40"
-                        />
-                      </div>
-                      <div className="flex gap-3">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => {
-                            setIsForgotPasswordOpen(false);
-                            setForgotPasswordEmail("");
-                          }}
-                          className="flex-1 bg-white/5 border-white/10 text-white hover:bg-white/10"
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          type="submit"
-                          className="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white"
-                          disabled={forgotPasswordMutation.isPending}
-                        >
-                          {forgotPasswordMutation.isPending ? (
-                            <span className="flex items-center gap-2">
-                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                              Sending...
-                            </span>
-                          ) : (
-                            "Send Reset Link"
-                          )}
-                        </Button>
-                      </div>
-                    </form>
-                  </DialogContent>
-                </Dialog>
-              </div>
-
-              <div className="mt-8 space-y-3">
-                <div className="flex items-center gap-6 text-xs text-white/60">
-                  <div className="flex items-center gap-2">
-                    <Shield className="w-4 h-4" />
-                    <span>Data encrypted & GDPR-ready</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-white/60">
-                  <Zap className="w-4 h-4" />
-                  <span>Integrated with Shopify, WooCommerce & more</span>
-                </div>
-              </div>
-
-              {!brand.isAgency && (
-                <div className="mt-6 pt-6 border-t border-white/10 text-center">
-                  <p className="text-xs text-white/50">
-                    Powered by <span className="font-semibold text-white/70">KnightLabs AI</span>
-                  </p>
-                </div>
-              )}
-              {brand.isAgency && brand.supportEmail && (
-                <div className="mt-6 pt-6 border-t border-white/10 text-center">
-                  <p className="text-xs text-white/60">Need help? <span className="select-all font-medium text-white/80">{brand.supportEmail}</span></p>
-                </div>
-              )}
+      <div className="relative min-h-full flex flex-col items-center justify-center px-4 py-10">
+        <div className="flex items-center gap-3 mb-7">
+          {brand.isAgency ? (
+            <BrandMark className="w-11 h-11" />
+          ) : (
+            <div className="w-11 h-11 flex items-center justify-center overflow-hidden">
+              <img src="/c_logo.png" className="w-full h-full object-contain scale-[2.6]" alt="AI Chroney" />
             </div>
+          )}
+          <div className="min-w-0">
+            <h2 className="text-xl font-bold tracking-tight text-slate-900" data-testid="login-brand-name">
+              {brand.name}
+            </h2>
+            {brand.tagline && <p className="text-sm text-slate-500">{brand.tagline}</p>}
           </div>
         </div>
+
+        <div className="w-full max-w-[400px] rounded-2xl border border-slate-100 bg-white p-6 sm:p-8 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_18px_40px_-12px_rgba(15,23,42,0.12)]">
+          <div className="mb-7 text-center">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Welcome back</h1>
+            <p className="mt-1.5 text-sm text-slate-500">Sign in to your AI workspace</p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <Label htmlFor="username" className="text-sm font-semibold text-slate-700">
+                Email or username
+              </Label>
+              <div className="relative mt-1.5">
+                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-[18px] h-[18px] text-slate-400" />
+                <Input
+                  id="username"
+                  type="text"
+                  placeholder="you@company.com"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  autoFocus
+                  autoComplete="username"
+                  data-testid="input-username"
+                  className={inputClass}
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-baseline justify-between">
+                <Label htmlFor="password" className="text-sm font-semibold text-slate-700">
+                  Password
+                </Label>
+                <button
+                  type="button"
+                  onClick={() => setIsForgotPasswordOpen(true)}
+                  className="text-sm font-semibold text-purple-600 hover:text-purple-700 hover:underline"
+                  style={brand.primaryColor ? { color: brand.primaryColor } : undefined}
+                  data-testid="button-forgot-password"
+                >
+                  Forgot password?
+                </button>
+              </div>
+              <div className="relative mt-1.5">
+                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-[18px] h-[18px] text-slate-400" />
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                  data-testid="input-password"
+                  className={inputClass}
+                />
+              </div>
+            </div>
+
+            {loginError && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-red-100 bg-red-50 p-3.5" role="alert">
+                <AlertCircle className="w-[18px] h-[18px] text-red-500 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-red-700 leading-relaxed">{loginError}</p>
+              </div>
+            )}
+
+            <Button
+              type="submit"
+              style={brand.primaryColor ? { background: brand.primaryColor } : undefined}
+              className={`w-full h-12 !mt-6 rounded-xl border-0 bg-gradient-to-r from-violet-600 to-pink-600 text-base font-semibold text-white transition-all hover:brightness-110 active:scale-[0.99] ${
+                brand.primaryColor ? "shadow-md" : "shadow-[0_8px_20px_-6px_rgba(219,39,119,0.45)]"
+              }`}
+              disabled={loginMutation.isPending}
+              data-testid="button-login"
+            >
+              {loginMutation.isPending ? (
+                <span className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  Signing in...
+                </span>
+              ) : (
+                "Sign in"
+              )}
+            </Button>
+          </form>
+        </div>
+
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-slate-400">
+          <span className="flex items-center gap-1.5">
+            <Shield className="w-3.5 h-3.5" />
+            Encrypted & GDPR-ready
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Zap className="w-3.5 h-3.5" />
+            Shopify, WooCommerce & more
+          </span>
+        </div>
+
+        {!brand.isAgency && (
+          <p className="mt-3 text-xs text-slate-400">
+            Powered by <span className="font-semibold text-slate-500">KnightLabs AI</span>
+          </p>
+        )}
+        {brand.isAgency && brand.supportEmail && (
+          <p className="mt-3 text-xs text-slate-400">
+            Need help? <span className="select-all font-medium text-slate-600">{brand.supportEmail}</span>
+          </p>
+        )}
       </div>
+
+      <Dialog open={isForgotPasswordOpen} onOpenChange={setIsForgotPasswordOpen}>
+        <DialogContent className="sm:max-w-md bg-white text-slate-900 border-slate-200">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-slate-900">
+              <Mail className="w-5 h-5 text-purple-600" style={brand.primaryColor ? { color: brand.primaryColor } : undefined} />
+              Reset your password
+            </DialogTitle>
+            <DialogDescription className="text-slate-500">
+              Enter your email address and we'll send you a link to reset your password.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleForgotPassword} className="space-y-4 mt-2">
+            <div>
+              <Label htmlFor="forgot-email" className="text-sm font-semibold text-slate-700">
+                Email address
+              </Label>
+              <Input
+                id="forgot-email"
+                type="email"
+                placeholder="you@company.com"
+                value={forgotPasswordEmail}
+                onChange={(e) => setForgotPasswordEmail(e.target.value)}
+                required
+                className="mt-1.5 h-11 rounded-xl bg-white border-slate-200 text-slate-900 placeholder:text-slate-400"
+              />
+            </div>
+            <div className="flex gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsForgotPasswordOpen(false);
+                  setForgotPasswordEmail("");
+                }}
+                className="flex-1 h-11 rounded-xl bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                style={brand.primaryColor ? { background: brand.primaryColor } : undefined}
+                className="flex-1 h-11 rounded-xl border-0 bg-gradient-to-r from-violet-600 to-pink-600 text-white hover:brightness-110"
+                disabled={forgotPasswordMutation.isPending}
+              >
+                {forgotPasswordMutation.isPending ? (
+                  <span className="flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Sending...
+                  </span>
+                ) : (
+                  "Send reset link"
+                )}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
