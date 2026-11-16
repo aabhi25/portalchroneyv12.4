@@ -358,6 +358,14 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
     // WooCommerce product sync: re-reads connected websites every woo_sync_hours (default 24)
     wooCommerceSyncScheduler.start();
 
+    // Product search fingerprints made the old way (name + description only) are remade with type and tags,
+    // a few hundred every 3 hours until none are left.
+    const refreshProductFingerprints = () => import("./services/productTextEmbeddingService")
+      .then(({ productTextEmbeddingService }) => productTextEmbeddingService.refreshOutdatedEmbeddings())
+      .catch(err => console.error("[Product Embedding] Refresh run failed:", err?.message));
+    setTimeout(refreshProductFingerprints, 5 * 60 * 1000);
+    setInterval(refreshProductFingerprints, 3 * 60 * 60 * 1000);
+
     // Start Marketing Campaigns scheduler (auto-launches scheduled campaigns)
     import("./services/marketingCampaignService").then(({ startCampaignScheduler }) => {
       startCampaignScheduler();

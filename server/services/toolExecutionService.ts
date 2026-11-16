@@ -1,8 +1,8 @@
 import { storage } from '../storage';
 import { isMaskedValue } from "@shared/contactMasking";
 import { db } from '../db';
-import { k12Topics, k12Questions } from '@shared/schema';
-import { ilike, or, eq, and, sql } from 'drizzle-orm';
+import { k12Topics, k12Questions, categories, productCategories, productTags, tags } from '@shared/schema';
+import { ilike, or, eq, and, sql, inArray } from 'drizzle-orm';
 import { getK12ContentResolver } from './k12ContentResolver';
 import { addDays, startOfDay, endOfDay, format, parseISO, isAfter, isBefore } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
@@ -11,6 +11,7 @@ import { extractUtmCampaign, extractUtmSource, extractUtmMedium } from './leadsq
 import { productTextEmbeddingService } from './productTextEmbeddingService';
 import { liveProductExtras } from './productSourceSwitch';
 import { productQueryParserService } from './productQueryParserService';
+import { hybridProductSearch } from './productHybridSearch';
 import { describePhoneRule, validatePhoneNumber } from '../../shared/validation/phone';
 import {
   applyWhatsappCapture, getConversationLead, isValidEmail, isValidLeadName, phoneModeFor, planForConversation,
@@ -333,116 +334,35 @@ export class ToolExecutionService {
     };
   }
 
-  private static async runVectorSearch(
-    query: string, 
-    businessAccountId: string, 
-    startTime: number
-  ): Promise<{ products: any[], threshold: number }> {
-    const thresholds = [0.6, 0.5, 0.4];
-    
-    for (const threshold of thresholds) {
-      try {
-        const vectorResults = await productTextEmbeddingService.searchProducts(
-          query,
-          businessAccountId,
-          20,
-          threshold
-        );
-        
-        if (vectorResults.length > 0) {
-          console.log(`[Product Search] Vector: "${query}" → ${vectorResults.length} matches (threshold: ${threshold}, ${Date.now() - startTime}ms)`);
-          
-          const products = await Promise.all(
-            vectorResults.map(async (vr) => {
-              const [categories, tags] = await Promise.all([
-                storage.getProductCategories(vr.id),
-                storage.getProductTags(vr.id)
-              ]);
-              
-              return {
-                id: vr.id,
-                name: vr.name,
-                description: vr.description,
-                price: vr.price,
-                imageUrl: vr.imageUrl,
-                ...liveProductExtras(vr),
-                categories: categories.map(c => ({ id: c.id, name: c.name })),
-                tags: tags.map(t => ({ id: t.id, name: t.name, color: t.color }))
-              };
-            })
-          );
-          
-          return { products, threshold };
-        }
-      } catch (error: any) {
-        console.log(`[Product Search] Vector search failed at threshold ${threshold}: ${error.message}`);
-      }
-    }
-    
-    return { products: [], threshold: 0 };
-  }
-
-  private static async findProductsByCategoryTag(
-    productType: string, 
-    businessAccountId: string
-  ): Promise<any[]> {
-    try {
-      const typeLower = productType.toLowerCase();
-      const allProducts = await storage.getChatProducts(businessAccountId);
-      
-      // Fetch categories/tags for ALL products in PARALLEL
-      const productsWithMeta = await Promise.all(
-        allProducts.map(async (p) => {
-          const [categories, tags] = await Promise.all([
-            storage.getProductCategories(p.id),
-            storage.getProductTags(p.id)
-          ]);
-          return { product: p, categories, tags };
-        })
-      );
-      
-      // Helper function to check if search term matches target using word boundaries
-      // Uses regex \b to prevent "ring" matching inside "earring"
-      // Supports singular/plural matching (ring/rings)
-      const wordsMatch = (searchTerm: string, targetName: string): boolean => {
-        const searchLower = searchTerm.toLowerCase().trim();
-        const targetLower = targetName.toLowerCase().trim();
-        
-        // Escape regex special characters in search term
-        const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        
-        // Build pattern that matches the search term as a whole word (with optional trailing 's')
-        // \b = word boundary - prevents "ring" matching inside "earring"
-        const searchBase = searchLower.endsWith('s') ? searchLower.slice(0, -1) : searchLower;
-        const pattern = new RegExp(`\\b${escapeRegex(searchBase)}s?\\b`, 'i');
-        
-        return pattern.test(targetLower);
-      };
-      
-      // Filter in memory for category/tag matches using word boundary matching
-      const matchingProducts = productsWithMeta
-        .filter(({ categories, tags }) => {
-          const categoryMatch = categories.some(c => wordsMatch(typeLower, c.name));
-          const tagMatch = tags.some(t => wordsMatch(typeLower, t.name));
-          return categoryMatch || tagMatch;
-        })
-        .map(({ product: p, categories, tags }) => ({
-          id: p.id,
-          name: p.name,
-          description: p.description,
-          price: p.price,
-          imageUrl: p.imageUrl,
-          ...liveProductExtras(p),
-          categories: categories.map(c => ({ id: c.id, name: c.name })),
-          tags: tags.map(t => ({ id: t.id, name: t.name, color: t.color }))
-        }));
-      
-      console.log(`[Product Search] Category/Tag match for "${productType}" → ${matchingProducts.length} products`);
-      return matchingProducts;
-    } catch (error: any) {
-      console.log(`[Product Search] Category/tag search failed: ${error.message}`);
-      return [];
-    }
+  /**
+   * Categories and tags of many products in two queries (not two per product), in the shape the chat
+   * gets: { ...product, ...live extras, categories: [{id, name}], tags: [{id, name, color}] }.
+   */
+  private static async withCategoriesAndTags(list: any[]): Promise<Array<Record<string, any> & { categories: { id: string; name: string }[]; tags: { id: string; name: string; color: string | null }[] }>> {
+    if (list.length === 0) return [];
+    const ids = list.map(p => p.id);
+    const [catRows, tagRows] = await Promise.all([
+      db.select({ productId: productCategories.productId, id: categories.id, name: categories.name })
+        .from(productCategories).innerJoin(categories, eq(categories.id, productCategories.categoryId))
+        .where(inArray(productCategories.productId, ids)),
+      db.select({ productId: productTags.productId, id: tags.id, name: tags.name, color: tags.color })
+        .from(productTags).innerJoin(tags, eq(tags.id, productTags.tagId))
+        .where(inArray(productTags.productId, ids)),
+    ]);
+    const catsOf = new Map<string, { id: string; name: string }[]>();
+    for (const r of catRows) (catsOf.get(r.productId) ?? catsOf.set(r.productId, []).get(r.productId)!).push({ id: r.id, name: r.name });
+    const tagsOf = new Map<string, { id: string; name: string; color: string | null }[]>();
+    for (const r of tagRows) (tagsOf.get(r.productId) ?? tagsOf.set(r.productId, []).get(r.productId)!).push({ id: r.id, name: r.name, color: r.color });
+    return list.map(p => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      price: p.price,
+      imageUrl: p.imageUrl,
+      ...liveProductExtras(p),
+      categories: catsOf.get(p.id) ?? [],
+      tags: tagsOf.get(p.id) ?? [],
+    }));
   }
 
   private static async handleGetProducts(params: any, context: ToolExecutionContext): Promise<ToolResponse> {
@@ -484,25 +404,8 @@ export class ToolExecutionService {
         const hasMore = (offset + limit) < totalCount;
         const nextOffset = hasMore ? offset + limit : null;
         
-        // Fetch categories and tags for the paginated products
-        let productsWithMeta = await Promise.all(
-          paginatedProducts.map(async (p) => {
-            const [categories, tags] = await Promise.all([
-              storage.getProductCategories(p.id),
-              storage.getProductTags(p.id)
-            ]);
-            return {
-              id: p.id,
-              name: p.name,
-              description: p.description,
-              price: p.price,
-              imageUrl: p.imageUrl,
-              ...liveProductExtras(p),
-              categories: categories.map(c => ({ id: c.id, name: c.name })),
-              tags: tags.map(t => ({ id: t.id, name: t.name, color: t.color }))
-            };
-          })
-        );
+        // Categories and tags for the products shown
+        let productsWithMeta = await this.withCategoriesAndTags(paginatedProducts);
         
         // Translate product fields if user message is in non-English language
         if (context.userMessage && productsWithMeta.length > 0) {
@@ -538,81 +441,45 @@ export class ToolExecutionService {
       parsedQuery = await productQueryParserService.parseQuery(params.search, context.businessAccountId);
     }
     
-    // Try vector search first if search query provided
+    // One ranked search: keyword + meaning + product type, price filters inside (productHybridSearch.ts).
     let filteredProducts: any[] = [];
     let usedVectorSearch = false;
-    
+
     if (params.search) {
-      // Run vector search AND category/tag match in PARALLEL
-      const vectorSearchPromise = this.runVectorSearch(params.search, context.businessAccountId, startTime);
-      const categoryTagSearchTerm = parsedQuery?.productType || params.search;
-      const categoryTagPromise = categoryTagSearchTerm
-        ? this.findProductsByCategoryTag(categoryTagSearchTerm, context.businessAccountId)
-        : Promise.resolve([]);
-      
-      const [vectorResults, categoryTagResults] = await Promise.all([vectorSearchPromise, categoryTagPromise]);
-      
-      if (vectorResults.products.length > 0 || categoryTagResults.length > 0) {
-        usedVectorSearch = true;
-        
-        // Merge and deduplicate results (vector results first, then category/tag matches)
-        const seenIds = new Set<string>();
-        const mergedProducts: any[] = [];
-        
-        // Add vector results first (higher priority)
-        for (const p of vectorResults.products) {
-          if (!seenIds.has(p.id)) {
-            seenIds.add(p.id);
-            mergedProducts.push(p);
+      try {
+        const minPrice = params.min_price ?? parsedQuery?.minPrice ?? null;
+        const maxPrice = params.max_price ?? parsedQuery?.maxPrice ?? null;
+        const hits = await hybridProductSearch(context.businessAccountId, {
+          query: params.search,
+          productType: parsedQuery?.productType ?? null,
+          minPrice: typeof minPrice === "number" ? minPrice : null,
+          maxPrice: typeof maxPrice === "number" ? maxPrice : null,
+        });
+        if (hits.length > 0) {
+          usedVectorSearch = true;
+          filteredProducts = await this.withCategoriesAndTags(hits);
+          // Colour words still checked on the product name (price is already applied in the search).
+          if (parsedQuery?.colors?.length) {
+            const beforeFilter = filteredProducts.length;
+            const coloured = productQueryParserService.filterProductsByParsedQuery(filteredProducts, { searchTerms: parsedQuery.searchTerms, colors: parsedQuery.colors });
+            // A colour the names don't mention isn't a reason to show nothing: keep the ranked list then.
+            if (coloured.length > 0) filteredProducts = coloured;
+            console.log(`[Product Search] Colour filter: ${beforeFilter} → ${filteredProducts.length} products`);
           }
+          console.log(`[Product Search] Query: "${params.search}" → ${filteredProducts.length} ranked matches (${Date.now() - startTime}ms)`);
         }
-        
-        // Add category/tag matches (if not already included)
-        for (const p of categoryTagResults) {
-          if (!seenIds.has(p.id)) {
-            seenIds.add(p.id);
-            mergedProducts.push(p);
-          }
-        }
-        
-        console.log(`[Product Search] Query: "${params.search}" → vector: ${vectorResults.products.length}, category/tag: ${categoryTagResults.length}, merged: ${mergedProducts.length} (${Date.now() - startTime}ms)`);
-        
-        filteredProducts = mergedProducts;
-        
-        // ENTERPRISE: Apply structured filters based on parsed query
-        if (parsedQuery) {
-          const beforeFilter = filteredProducts.length;
-          filteredProducts = productQueryParserService.filterProductsByParsedQuery(filteredProducts, parsedQuery);
-          console.log(`[Product Search] Structured filter: ${beforeFilter} → ${filteredProducts.length} products`);
-        }
+      } catch (error: any) {
+        console.error(`[Product Search] Ranked search failed, using the fallback: ${error.message}`);
       }
     }
-    
+
     // Fall back to AI-based semantic search if vector search didn't work or no search query
     if (!usedVectorSearch) {
       // Get products filtered by business account at database level
       const businessProducts = await storage.getChatProducts(context.businessAccountId);
 
-      // Fetch categories and tags for ALL products first (needed for search)
-      const productsWithMeta = await Promise.all(
-        businessProducts.map(async (p) => {
-          const [categories, tags] = await Promise.all([
-            storage.getProductCategories(p.id),
-            storage.getProductTags(p.id)
-          ]);
-
-          return {
-            id: p.id,
-            name: p.name,
-            description: p.description,
-            price: p.price,
-            imageUrl: p.imageUrl,
-            ...liveProductExtras(p),
-            categories: categories.map(c => ({ id: c.id, name: c.name })),
-            tags: tags.map(t => ({ id: t.id, name: t.name, color: t.color }))
-          };
-        })
-      );
+      // Categories and tags for all products (needed for the fallback search)
+      const productsWithMeta = await this.withCategoriesAndTags(businessProducts);
 
       // Apply search if provided - use AI-based semantic matching
       filteredProducts = productsWithMeta;

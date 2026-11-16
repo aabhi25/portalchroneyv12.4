@@ -470,6 +470,13 @@
       "when": 1794829682148,
       "tag": "0066_dedupe_analyzed_pages",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1794836586051,
+      "tag": "0067_product_keyword_search",
+      "breakpoints": true
     }
   ]
 }

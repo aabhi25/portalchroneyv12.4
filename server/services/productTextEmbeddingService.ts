@@ -2,7 +2,15 @@ import { storage } from "../storage";
 import { embeddingService } from "./embeddingService";
 import { db } from "../db";
 import { products } from "../../shared/schema";
-import { eq, isNull, and, sql } from "drizzle-orm";
+import { eq, isNull, and, or, lt, isNotNull, inArray, sql } from "drizzle-orm";
+
+/**
+ * Fingerprints made before this moment used only name + description; newer ones also carry the product's
+ * type (categories) and tags, which the chat's meaning search matches much better. Older ones are remade
+ * a few hundred at a time in the background (refreshOutdatedEmbeddings).
+ */
+export const EMBEDDING_TEXT_SINCE = new Date("2026-11-16T13:00:00Z");
+const outdated = or(isNull(products.textEmbeddingGeneratedAt), lt(products.textEmbeddingGeneratedAt, EMBEDDING_TEXT_SINCE));
 
 /**
  * Service for generating and managing text embeddings for products
@@ -22,8 +30,19 @@ export class ProductTextEmbeddingService {
       return;
     }
     
-    // Combine title and description for richer semantic representation
-    const textToEmbed = `${product.name}. ${product.description || ''}`.trim();
+    // Name, type (categories), tags and description: what a shopper's question is matched against.
+    const [cats, tagRows] = await Promise.all([
+      storage.getProductCategories(productId).catch(() => []),
+      storage.getProductTags(productId).catch(() => []),
+    ]);
+    const typeText = cats.map(c => c.name).filter(Boolean).join(", ");
+    const tagText = tagRows.map(t => t.name).filter(Boolean).join(", ");
+    const textToEmbed = [
+      `${product.name}.`,
+      typeText ? `Type: ${typeText}.` : "",
+      tagText ? `Tags: ${tagText}.` : "",
+      (product.description || "").slice(0, 3000),
+    ].filter(Boolean).join(" ").trim();
     
     if (!textToEmbed || textToEmbed.length < 3) {
       console.log(`[Product Embedding] Skipping product ${productId} - insufficient text`);
@@ -53,17 +72,18 @@ export class ProductTextEmbeddingService {
    * @param businessAccountId - Business account ID
    * @param batchSize - Number of products to process in parallel
    */
-  async backfillEmbeddingsForBusiness(businessAccountId: string, batchSize: number = 10): Promise<{processed: number, failed: number}> {
-    // Get products without text embedding
-    const productsWithoutEmbedding = await db.select({
+  async backfillEmbeddingsForBusiness(businessAccountId: string, batchSize: number = 10, limit?: number): Promise<{processed: number, failed: number}> {
+    // Products without a fingerprint, or with one made the old way (name + description only).
+    const query = db.select({
       id: products.id,
       name: products.name,
     })
     .from(products)
     .where(and(
       eq(products.businessAccountId, businessAccountId),
-      isNull(products.textEmbedding)
+      or(isNull(products.textEmbedding), outdated)
     ));
+    const productsWithoutEmbedding = limit ? await query.limit(limit) : await query;
     
     console.log(`[Product Embedding] Found ${productsWithoutEmbedding.length} products without embeddings for business ${businessAccountId}`);
     
@@ -87,12 +107,41 @@ export class ProductTextEmbeddingService {
       }
       
       console.log(`[Product Embedding] Progress: ${processed + failed}/${productsWithoutEmbedding.length}`);
+      // A whole first batch failing means no working AI key: stop instead of failing every product.
+      if (processed === 0 && failed === batch.length) {
+        console.log(`[Product Embedding] Stopping for ${businessAccountId}: the first ${failed} failed`);
+        break;
+      }
     }
     
     console.log(`[Product Embedding] Backfill complete: ${processed} processed, ${failed} failed`);
     return { processed, failed };
   }
   
+  /**
+   * Remakes fingerprints made the old way, a few hundred per run across accounts (the server runs it every
+   * few hours until none are left). Products without any fingerprint are left to the normal backfill.
+   */
+  async refreshOutdatedEmbeddings(maxProducts: number = 300, onlyAccountIds?: string[]): Promise<number> {
+    const accounts = await db
+      .selectDistinct({ id: products.businessAccountId })
+      .from(products)
+      .where(and(isNotNull(products.textEmbedding), outdated, onlyAccountIds?.length ? inArray(products.businessAccountId, onlyAccountIds) : undefined))
+      .limit(20);
+    let done = 0;
+    for (const { id } of accounts) {
+      if (done >= maxProducts) break;
+      try {
+        const r = await this.backfillEmbeddingsForBusiness(id, 5, maxProducts - done);
+        done += r.processed + r.failed;
+      } catch (e: any) {
+        console.error(`[Product Embedding] Refresh failed for ${id}:`, e?.message);
+      }
+    }
+    if (done) console.log(`[Product Embedding] Refreshed ${done} older product fingerprints`);
+    return done;
+  }
+
   /**
    * Search products using vector similarity
    * @param query - User's search query
