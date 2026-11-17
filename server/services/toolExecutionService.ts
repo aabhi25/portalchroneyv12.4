@@ -221,7 +221,7 @@ interface ToolResponse {
 }
 
 /** The last journey product filter per conversation, so "show more" keeps the gift finder's answers (30 minutes). */
-interface JourneyFilter { search: string; tagGroups: string[][]; productType: string | null; minPrice: number | null; maxPrice: number | null; at: number }
+interface JourneyFilter { search: string; tagGroups: string[][]; typeGroups: string[][]; productType: string | null; minPrice: number | null; maxPrice: number | null; at: number }
 const journeyFilters = new Map<string, JourneyFilter>();
 const JOURNEY_FILTER_MS = 30 * 60_000;
 
@@ -463,18 +463,21 @@ export class ToolExecutionService {
     let filteredProducts: any[] = [];
     let usedVectorSearch = false;
 
-    // A journey's "Show products" step passes the answers' tag filter; "show more" after it keeps that filter.
-    let tagGroups: string[][] = Array.isArray(params.tag_groups)
-      ? params.tag_groups.filter((g: unknown) => Array.isArray(g)).map((g: unknown[]) => g.filter((t): t is string => typeof t === "string"))
+    // A journey's "Show products" step passes the answers' tag and type filters; "show more" after it keeps them.
+    const groupsOf = (raw: unknown): string[][] => Array.isArray(raw)
+      ? raw.filter((g: unknown) => Array.isArray(g)).map((g: unknown[]) => g.filter((t): t is string => typeof t === "string")).filter(g => g.length > 0)
       : [];
+    let tagGroups = groupsOf(params.tag_groups);
+    let typeGroups = groupsOf(params.type_groups);
     let productType: string | null = typeof params.product_type === "string" && params.product_type.trim() ? params.product_type.trim() : null;
     if (context.conversationId) {
-      if (tagGroups.length || productType) {
-        rememberJourneyFilter(context.conversationId, { search: params.search ?? "", tagGroups, productType, minPrice: params.min_price ?? null, maxPrice: params.max_price ?? null });
+      if (tagGroups.length || typeGroups.length || productType) {
+        rememberJourneyFilter(context.conversationId, { search: params.search ?? "", tagGroups, typeGroups, productType, minPrice: params.min_price ?? null, maxPrice: params.max_price ?? null });
       } else if ((params.offset ?? 0) > 0) {
         const saved = recallJourneyFilter(context.conversationId);
         if (saved) {
           tagGroups = saved.tagGroups;
+          typeGroups = saved.typeGroups;
           productType = saved.productType;
           params.search = params.search || saved.search;
           params.min_price ??= saved.minPrice ?? undefined;
@@ -487,18 +490,25 @@ export class ToolExecutionService {
       try {
         const minPrice = params.min_price ?? parsedQuery?.minPrice ?? null;
         const maxPrice = params.max_price ?? parsedQuery?.maxPrice ?? null;
-        const searchWith = (groups: string[][]) => hybridProductSearch(context.businessAccountId, {
+        const searchWith = (groups: string[][], types: string[][]) => hybridProductSearch(context.businessAccountId, {
           query: params.search,
-          productType: productType ?? parsedQuery?.productType ?? null,
+          // The journey's types decide the kind of product; a type read from its words would only narrow it wrongly.
+          productType: productType ?? (typeGroups.length ? null : parsedQuery?.productType ?? null),
           minPrice: typeof minPrice === "number" ? minPrice : null,
           maxPrice: typeof maxPrice === "number" ? maxPrice : null,
           tagGroups: groups,
+          typeGroups: types,
         });
-        let hits = await searchWith(tagGroups);
+        let hits = await searchWith(tagGroups, typeGroups);
         // Nothing has every answer's tag: drop the last answers' tags one at a time rather than show nothing.
         for (let keep = tagGroups.length - 1; hits.length === 0 && keep >= 0; keep--) {
           console.log(`[Product Search] No product has all ${keep + 1} answer tags — relaxing to ${keep}`);
-          hits = await searchWith(tagGroups.slice(0, keep));
+          hits = await searchWith(tagGroups.slice(0, keep), typeGroups);
+        }
+        // Still nothing (e.g. no gold pieces of that kind): keep the first answer's type, drop the later ones.
+        for (let keep = typeGroups.length - 1; hits.length === 0 && keep >= 1; keep--) {
+          console.log(`[Product Search] No product has all ${keep + 1} answer types — relaxing to ${keep}`);
+          hits = await searchWith([], typeGroups.slice(0, keep));
         }
         if (hits.length > 0) {
           usedVectorSearch = true;

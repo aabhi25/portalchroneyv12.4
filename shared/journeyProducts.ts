@@ -4,9 +4,11 @@
  * journey builder, so both read the same settings.
  *
  * Stored on the existing journey steps (journey_steps.tool_parameters, JSON) — nothing new in the database:
- *  - a "Pick one" question: { "optionFilters": { "<option>": { tags, minPrice, maxPrice, type, search } } }
+ *  - a "Pick one" question: { "optionFilters": { "<option>": { tags, minPrice, maxPrice, types, search } } }
  *    — what each option means for the products ("Wife" → tags Gift: Wife / Gift: For her;
- *    "Under ₹1,000" → maxPrice 1000; "Rings" → type Rings);
+ *    "Under ₹1,000" → maxPrice 1000; "Rings" → types Rings / Gold Ring / Demi Fine Rings; "Gold" → types
+ *    Gold Ring / Gold Pendant…). Each answer's tags and types are one group: a product needs one tag and one
+ *    type from every answer, so "Rings" + "Gold" = gold rings. (Older settings have a single `type`.)
  *  - the "Show products" step (toolTrigger 'get_products'): { "search": "gift" } — words always searched;
  *    its question text is the line shown above the products.
  *
@@ -19,7 +21,9 @@ export interface OptionFilter {
   tags?: string[];
   minPrice?: number | null;
   maxPrice?: number | null;
-  /** Product type / category ("Rings"). */
+  /** Product types / categories, any one ("Rings", "Gold Ring"). */
+  types?: string[];
+  /** Older single product type; read as `types`. */
   type?: string | null;
   /** Extra search words. */
   search?: string | null;
@@ -29,16 +33,17 @@ export interface OptionFilter {
 
 /** Does the filter say anything about which products (a picture alone doesn't)? */
 export function filtersProducts(f: OptionFilter | null | undefined): boolean {
-  return !!f && (!!f.tags?.length || f.minPrice != null || f.maxPrice != null || !!f.type || !!f.search);
+  return !!f && (!!f.tags?.length || f.minPrice != null || f.maxPrice != null || !!f.types?.length || !!f.type || !!f.search);
 }
 
 export interface JourneyProductSearch {
   search: string;
   /** Each group is one answer: the product needs one tag from every group. */
   tagGroups: string[][];
+  /** Each group is one answer: the product's type (category) is one from every group. */
+  typeGroups: string[][];
   minPrice: number | null;
   maxPrice: number | null;
-  productType: string | null;
 }
 
 export interface ProductStepLike {
@@ -92,7 +97,8 @@ export function cleanFilter(f: OptionFilter | null | undefined): OptionFilter | 
   const min = num(f.minPrice), max = num(f.maxPrice);
   if (min !== null) out.minPrice = min;
   if (max !== null) out.maxPrice = max;
-  if (f.type && String(f.type).trim()) out.type = String(f.type).trim();
+  const types = Array.from(new Set([...(f.types ?? []), ...(f.type ? [f.type] : [])].map(t => String(t).trim()).filter(Boolean)));
+  if (types.length) out.types = types;
   if (f.search && String(f.search).trim()) out.search = String(f.search).trim();
   if (f.pictureProductId && String(f.pictureProductId).trim()) out.pictureProductId = String(f.pictureProductId).trim();
   return Object.keys(out).length ? out : null;
@@ -124,9 +130,9 @@ export function buildJourneyProductSearch(steps: ProductStepLike[], answers: Map
   const base = productStep ? readToolParameters(productStep.toolParameters).search : null;
   if (typeof base === "string" && base.trim()) words.push(base.trim());
   const tagGroups: string[][] = [];
+  const typeGroups: string[][] = [];
   let minPrice: number | null = null;
   let maxPrice: number | null = null;
-  let productType: string | null = null;
 
   for (const step of steps) {
     if (isToolStep(step)) continue; // endings, "Show products", lead / booking steps
@@ -143,12 +149,14 @@ export function buildJourneyProductSearch(steps: ProductStepLike[], answers: Map
     if (f.tags?.length) tagGroups.push(f.tags);
     if (f.minPrice != null) minPrice = minPrice === null ? f.minPrice : Math.max(minPrice, f.minPrice);
     if (f.maxPrice != null) maxPrice = maxPrice === null ? f.maxPrice : Math.min(maxPrice, f.maxPrice);
-    if (f.type) productType = f.type;
+    if (f.types?.length) {
+      typeGroups.push(f.types);
+      words.push(label!);
+    }
     if (f.search) words.push(f.search);
   }
-  if (productType) words.push(productType);
   const search = Array.from(new Set(words.map(w => w.trim()).filter(Boolean))).join(" ").slice(0, 200) || "gift";
-  return { search, tagGroups, minPrice, maxPrice, productType };
+  return { search, tagGroups, typeGroups, minPrice, maxPrice };
 }
 
 /** "Products" step: the line shown above the products. */

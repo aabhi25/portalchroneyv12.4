@@ -16174,9 +16174,13 @@ Format your response as JSON with this structure:
       const businessAccountId = req.user!.businessAccountId!;
       const { pictureCandidates } = await import("./services/journeyOptionImages");
       const tags = Array.isArray(req.body?.tags) ? req.body.tags.filter((t: unknown) => typeof t === "string").slice(0, 20) : [];
-      const type = typeof req.body?.type === "string" && req.body.type.trim() ? req.body.type.trim() : null;
+      const types = [
+        ...(Array.isArray(req.body?.types) ? req.body.types : []),
+        ...(typeof req.body?.type === "string" ? [req.body.type] : []),
+      ].filter((t: unknown): t is string => typeof t === "string" && t.trim() !== "").slice(0, 20);
       const picked = typeof req.body?.pictureProductId === "string" ? req.body.pictureProductId : null;
-      const candidates = tags.length || type ? await pictureCandidates(businessAccountId, { tags, type }, [], 8) : [];
+      const search = typeof req.body?.search === "string" && req.body.search.trim() ? req.body.search.trim().slice(0, 60) : null;
+      const candidates = tags.length || types.length || search ? await pictureCandidates(businessAccountId, { tags, types, search }, undefined, 8) : [];
       let current = picked ? candidates.find(c => c.id === picked) ?? null : candidates[0] ?? null;
       if (picked && !current) {
         const product = await storage.getProduct(picked, businessAccountId);
@@ -16212,13 +16216,14 @@ Format your response as JSON with this structure:
       let raw: any = {};
       try { raw = JSON.parse(completion.choices[0]?.message?.content || "{}"); } catch { raw = {}; }
       const draft = await gift.keepOptionsWithProducts(businessAccountId, gift.cleanDraft(raw, summary));
-      const budget = gift.budgetQuestion(summary.prices);
-      if (draft.questions.length === 0 && !budget) {
+      const budgets = await gift.budgetQuestions(businessAccountId, draft, summary);
+      if (draft.questions.length === 0 && budgets.length === 0) {
         return res.status(422).json({ error: "Couldn't find enough product details (tags or types) to build gift questions. Add tags like \"Gift for her\" to your products and try again." });
       }
-      const journeyId = await gift.saveGiftFinder(businessAccountId, draft, budget);
+      const journeyId = await gift.saveGiftFinder(businessAccountId, draft, budgets);
       journeyService.invalidateJourneyCache(businessAccountId);
-      res.json({ journeyId, questions: draft.questions.length + (budget ? 1 : 0) });
+      // Questions a visitor answers on one path (follow-ups and per-material budgets count once).
+      res.json({ journeyId, questions: draft.questions.length + (draft.material ? 1 : 0) + (budgets.length ? 1 : 0) });
     } catch (error: any) {
       console.error("[Gift finder] Build error:", error);
       res.status(500).json({ error: error?.message || "Couldn't build the gift finder" });

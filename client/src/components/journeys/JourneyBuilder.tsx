@@ -568,16 +568,17 @@ function OptionProductFilter({ filter, index, onChange }: { filter: OptionFilter
   const [open, setOpen] = useState(false);
   const tags = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/tags"], enabled: open, staleTime: 60_000 });
   const categories = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/categories"], enabled: open, staleTime: 60_000 });
-  const f = filter ?? {};
+  // Older settings have one `type`; shown and saved as `types`.
+  const f: OptionFilter = filter ? { ...filter, types: Array.from(new Set([...(filter.types ?? []), ...(filter.type ? [filter.type] : [])])), type: undefined } : {};
   const update = (patch: Partial<OptionFilter>) => {
     const next = { ...f, ...patch };
-    const empty = !next.tags?.length && next.minPrice == null && next.maxPrice == null && !next.type && !next.search && !next.pictureProductId;
+    const empty = !next.tags?.length && next.minPrice == null && next.maxPrice == null && !next.types?.length && !next.search && !next.pictureProductId;
     onChange(empty ? null : next);
   };
   const price = (v: string) => (v.trim() === "" || !Number.isFinite(Number(v)) ? null : Number(v));
   const summary = [
     f.tags?.length ? f.tags.join(" or ") : "",
-    f.type ? f.type : "",
+    f.types?.length ? f.types.join(" / ") : "",
     f.minPrice != null && f.maxPrice != null ? `₹${f.minPrice}–₹${f.maxPrice}` : f.maxPrice != null ? `up to ₹${f.maxPrice}` : f.minPrice != null ? `from ₹${f.minPrice}` : "",
     f.search ? `“${f.search}”` : "",
   ].filter(Boolean).join(" · ");
@@ -611,15 +612,15 @@ function OptionProductFilter({ filter, index, onChange }: { filter: OptionFilter
             <Input type="number" min={0} defaultValue={f.maxPrice ?? ""} onBlur={(e) => update({ maxPrice: price(e.target.value) })} className="h-8 bg-white" data-testid={`input-option-max-${index}`} />
           </label>
           <label>
-            <span className="mb-0.5 block text-gray-600">Product type</span>
-            <Input defaultValue={f.type ?? ""} onBlur={(e) => update({ type: e.target.value.trim() || null })} list="journey-product-types" placeholder="e.g. Rings" className="h-8 bg-white" data-testid={`input-option-type-${index}`} />
+            <span className="mb-0.5 block text-gray-600">Product types <span className="text-gray-400">(any one, comma between)</span></span>
+            <Input defaultValue={(f.types ?? []).join(", ")} onBlur={(e) => update({ types: e.target.value.split(",").map(t => t.trim()).filter(Boolean) })} list="journey-product-types" placeholder="e.g. Rings, Gold Ring" className="h-8 bg-white" data-testid={`input-option-type-${index}`} />
             <datalist id="journey-product-types">{(categories.data ?? []).map(c => <option key={c.id} value={c.name} />)}</datalist>
           </label>
           <label>
             <span className="mb-0.5 block text-gray-600">Search words</span>
             <Input defaultValue={f.search ?? ""} onBlur={(e) => update({ search: e.target.value.trim() || null })} placeholder="e.g. minimal" className="h-8 bg-white" data-testid={`input-option-search-${index}`} />
           </label>
-          {(!!f.tags?.length || !!f.type) && (
+          {(!!f.tags?.length || !!f.types?.length || !!f.search) && (
             <OptionPicture filter={f} index={index} onPick={(id) => update({ pictureProductId: id })} />
           )}
         </div>
@@ -634,8 +635,8 @@ function OptionProductFilter({ filter, index, onChange }: { filter: OptionFilter
  */
 function OptionPicture({ filter, index, onPick }: { filter: OptionFilter; index: number; onPick: (productId: string | null) => void }) {
   const pictures = useQuery<{ current: { id: string; name: string; imageUrl: string } | null; candidates: { id: string; name: string; imageUrl: string }[]; picked: boolean }>({
-    queryKey: ["/api/journeys/option-pictures", filter.tags?.join("|") ?? "", filter.type ?? "", filter.pictureProductId ?? ""],
-    queryFn: () => apiRequest("POST", "/api/journeys/option-pictures", { tags: filter.tags ?? [], type: filter.type ?? null, pictureProductId: filter.pictureProductId ?? null }),
+    queryKey: ["/api/journeys/option-pictures", filter.tags?.join("|") ?? "", filter.types?.join("|") ?? "", filter.search ?? "", filter.pictureProductId ?? ""],
+    queryFn: () => apiRequest("POST", "/api/journeys/option-pictures", { tags: filter.tags ?? [], types: filter.types ?? [], search: filter.search ?? null, pictureProductId: filter.pictureProductId ?? null }),
     staleTime: 60_000,
   });
   const data = pictures.data;

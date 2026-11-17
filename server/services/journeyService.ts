@@ -901,6 +901,27 @@ class JourneyService {
   /**
    * ENGINE-DRIVEN MODE: Advance to next step in journey
    */
+  /**
+   * After an answer the engine has already saved: the next step the journey's rules give — an option's
+   * "go to" route, else the next step that isn't "only when an earlier answer leads here". (Plain
+   * advanceToNextStep would ask those conditional steps in order and ignore the routes.)
+   */
+  async advanceAfterAnswer(conversationId: string, answer: string): Promise<void> {
+    const state = this.activeJourneys.get(conversationId);
+    if (!state || state.completed) return;
+    const steps = (await storage.getJourneySteps(state.journeyId)).sort((a, b) => Number(a.stepOrder) - Number(b.stepOrder));
+    const current = steps[state.currentStepIndex];
+    if (!current) return this.advanceToNextStep(conversationId);
+    state.currentStepIndex = await this.determineNextStep(current, answer, steps, state.currentStepIndex);
+    console.log('[Journey] Advanced (rules applied) to step index:', state.currentStepIndex);
+    try {
+      const dbSession = await storage.getJourneySessionByConversationId(conversationId);
+      if (dbSession) await storage.updateJourneySession(dbSession.id, { currentStepIndex: state.currentStepIndex });
+    } catch (error) {
+      console.error('[Journey] Error updating step index in database:', error);
+    }
+  }
+
   async advanceToNextStep(conversationId: string): Promise<void> {
     const state = this.activeJourneys.get(conversationId);
     if (!state || state.completed) {

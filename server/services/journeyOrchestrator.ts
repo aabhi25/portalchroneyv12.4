@@ -264,7 +264,10 @@ export function optionNamedIn(message: string, options: string[]): string | null
   const text = ` ${message.toLowerCase().replace(/[^a-z0-9\u0080-\uffff]+/g, ' ')} `;
   const hits = options.filter(o => {
     const words = o.toLowerCase().replace(/[^a-z0-9\u0080-\uffff]+/g, ' ').trim();
-    return words.length >= 3 && text.includes(` ${words} `);
+    if (words.length < 3) return false;
+    // "a ring for my wife" names the option "Rings": a plural option also matches its singular.
+    const singular = words.endsWith('s') && words.length > 3 ? words.slice(0, -1) : null;
+    return text.includes(` ${words} `) || (!!singular && text.includes(` ${singular} `));
   });
   return hits.length === 1 ? hits[0] : null;
 }
@@ -585,8 +588,8 @@ export class JourneyOrchestrator {
       // A contact answer goes to this chat's lead right away (same lead, checks and CRM rules as chat).
       const contact = await this.saveJourneyContact(conversationId, businessAccountId, currentStep, answer, journeyState, opts.channel, opts.origin);
 
-      // Advance to next step
-      await journeyService.advanceToNextStep(conversationId);
+      // Advance: an option's "go to" route, else the next step that isn't only reached through a route.
+      await journeyService.advanceAfterAnswer(conversationId, answer);
       return this.continueJourney(conversationId, journeyState, businessAccountId, userMessage, {
         situation: 'acknowledgment',
         answeredQuestion: currentStep.questionText || '',
@@ -688,7 +691,7 @@ export class JourneyOrchestrator {
   ): Promise<EngineJourneyResponse> {
     console.log('[Engine] Moving on from an unanswered step:', step.id);
     journeyState.responses.set(step.id, '[SKIPPED: not answered]');
-    await journeyService.advanceToNextStep(conversationId);
+    await journeyService.advanceAfterAnswer(conversationId, '');
     return this.continueJourney(conversationId, journeyState, businessAccountId, userMessage, { situation: 'skip' }, opts);
   }
 

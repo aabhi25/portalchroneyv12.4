@@ -1,12 +1,15 @@
 /**
- * "Build a gift finder from my products" (server/services/giftFinderBuilder.ts), against a local Postgres/PGlite:
+ * "Build a gift finder from my products" (server/services/giftFinderBuilder.ts), against a local Postgres/PGlite,
+ * with a Giva-style catalogue (silver "Rings", "Gold Ring", "Demi Fine Rings", pendants; ring names with styles):
  *
- *  - the catalogue summary (types, tags, price spread) counts only the products the chat uses;
- *  - the AI's draft is made safe: tag/type names spelled as the catalogue spells them, unknown ones dropped,
- *    budget / contact questions refused, at most 3 questions of 2–6 options, "gift" always a trigger word;
- *  - options that lead to no products are dropped; the budget question comes from the real prices;
- *  - the saved journey is switched off, conversational, ends with "Show products", and runs: "a gift for my
- *    wife" → next question, answers → a product search with the right tags and price range.
+ *  - the catalogue summary: types with typical prices, tags, and the words used in the biggest types' names;
+ *  - the AI's draft made safe: names spelled as the catalogue spells them, unknown ones dropped, budget / contact
+ *    questions refused, one style follow-up at most, a material question only with types;
+ *  - options that lead to no products are dropped; each material gets a budget from its own prices;
+ *  - the saved journey: switched off, kind → (Rings only) ring style → material → that material's budget →
+ *    Show products, with the right steps asked only when led to;
+ *  - it runs: "a ring for my wife" → Wife and Rings taken from the message → ring style asked → Solid gold →
+ *    the gold budget (gold prices) → a product search: Wife's tag, ring types AND gold types, the band's prices.
  *
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55583/postgres?sslmode=disable \
  *   GIFT_FINDER_TEST_DB=1 npx tsx server/services/__tests__/giftFinderBuilder.integration.test.ts
@@ -65,88 +68,132 @@ async function main() {
   const { optionFiltersOf } = await import("@shared/journeyProducts");
 
   // ── pure parts ──
-  expect(gift.roundPrice(1180) === 1000 && gift.roundPrice(2640) === 2500 && gift.roundPrice(430) === 400 && gift.roundPrice(12400) === 12000, "prices rounded to friendly numbers");
+  expect(gift.roundPrice(1180) === 1000 && gift.roundPrice(2640) === 2500 && gift.roundPrice(430) === 400 && gift.roundPrice(24800) === 25000, "prices rounded to friendly numbers");
   const b3 = gift.budgetQuestion({ min: 499, p33: 1180, p66: 2640, max: 15999 });
-  expect(b3?.options.map(o => o.label).join(" | ") === "Under ₹1,000 | ₹1,000 – ₹2,500 | Above ₹2,500" && b3.options[1].minPrice === 1000 && b3.options[1].maxPrice === 2500, "budget: three bands from the price spread", b3?.options);
+  expect(b3?.options.map(o => o.label).join(" | ") === "Under ₹1,000 | ₹1,000 – ₹2,500 | Above ₹2,500", "budget: three bands from the price spread", b3?.options);
   expect(gift.budgetQuestion({ min: 900, p33: 950, p66: 980, max: 1100 })?.options.length === 2, "close prices: two bands");
-  expect(gift.budgetQuestion(null) === null, "no prices: no budget question");
+  expect(gift.topNameWords(["Silver Solitaire Ring", "Gold Solitaire Ring", "Rose Gold Solitaire Ring", "Couple Band Ring", "Silver Couple Rings", "Couple heart ring"]).map(w => w.word).join() === "couple,solitaire", "name words: styles counted, metals and 'ring' left out");
 
-  const summaryStub = { total: 10, inStock: 10, prices: null, types: [{ name: "Rings", count: 4 }], tags: [{ name: "Gift: Wife", count: 3 }, { name: "Gift: Mother", count: 2 }] };
+  const stub = { total: 10, inStock: 10, prices: null, nameWords: [],
+    types: [{ name: "Rings", count: 4, median: 2500 }, { name: "Gold Ring", count: 3, median: 25000 }],
+    tags: [{ name: "Gift: Wife", count: 3 }, { name: "Gift: Mother", count: 2 }] };
   const cleaned = gift.cleanDraft({
-    name: "Gift finder", triggerWords: ["Present", "anniversary", "Present"],
+    triggerWords: ["Present"],
     questions: [
-      { text: "Who is the gift for?", savedAs: "Recipient!", options: [
-        { label: "Wife", tags: ["gift: wife", "Gift: Girlfriend"] }, { label: "Mother", tags: ["Gift: Mother"] }, { label: "Wife", tags: [] }, { label: "Surprise me" },
-      ] },
+      { text: "Who is it for?", savedAs: "Recipient!", options: [{ label: "Wife", tags: ["gift: wife", "Gift: Girlfriend"] }, { label: "Sister", tags: ["Gift: Sister"] }, { label: "Mother", tags: ["Gift: Mother"] }] },
       { text: "What's your budget?", options: [{ label: "Low" }, { label: "High" }] },
-      { text: "Your mobile number?", options: [{ label: "a" }, { label: "b" }] },
-      { text: "Which kind?", options: [{ label: "Rings", type: "rings" }] },
+      { text: "What would they like?", options: [
+        { label: "Rings", types: ["rings", "gold ring", "Toe Rings"], followUp: { text: "Which style?", options: [{ label: "Solitaire", search: "solitaire" }, { label: "Couple", search: "couple" }] } },
+        { label: "Bangles", types: ["Bangles"] },
+        { label: "Surprise me", followUp: { text: "x", options: [{ label: "a" }, { label: "b" }] } },
+      ] },
     ],
-  }, summaryStub);
-  expect(cleaned.questions.length === 1 && cleaned.questions[0].savedAs === "recipient_", "budget, contact and one-option questions dropped", cleaned.questions.map(q => q.text));
-  expect(JSON.stringify(cleaned.questions[0].options) === JSON.stringify([{ label: "Wife", tags: ["Gift: Wife"] }, { label: "Mother", tags: ["Gift: Mother"] }, { label: "Surprise me" }]), "tag names spelled as the catalogue spells them, unknown tags and repeat labels dropped", cleaned.questions[0].options);
-  expect(cleaned.triggerWords.join() === "gift,present,anniversary", "trigger words: 'gift' always, lowercase, no repeats", cleaned.triggerWords);
-  const { system, user } = gift.draftPrompt("Giva", { ...summaryStub, prices: { min: 499, p33: 1000, p66: 2500, max: 9999 } });
-  expect(/Do NOT ask about budget/.test(system) && /Gift: Wife — 3/.test(user) && /Rings — 4/.test(user) && /₹499 to ₹9,999/.test(user), "the AI gets rules plus types, tags and prices with counts", user);
+    material: { text: "Silver or gold?", options: [{ label: "Silver", types: ["Rings"] }, { label: "Gold", types: ["Gold Ring"] }, { label: "Platinum", types: ["Platinum Ring"] }] },
+  }, stub);
+  expect(cleaned.questions.length === 2 && cleaned.questions[0].savedAs === "recipient_", "budget question dropped", cleaned.questions.map(q => q.text));
+  expect(JSON.stringify(cleaned.questions[0].options.map(o => [o.label, o.tags])) === JSON.stringify([["Wife", ["Gift: Wife"]], ["Mother", ["Gift: Mother"]]]), "tags spelled as the catalogue spells them; Sister (unknown tag) dropped", cleaned.questions[0].options);
+  const kind = cleaned.questions[1];
+  expect(kind.options.map(o => o.label).join() === "Rings,Surprise me" && JSON.stringify(kind.options[0].types) === JSON.stringify(["Rings", "Gold Ring"]), "several types per option; unknown types and Bangles dropped", kind.options);
+  expect(kind.options[0].followUp?.options.length === 2 && !kind.options[1].followUp, "only one style follow-up", kind.options);
+  expect(cleaned.material?.options.map(o => o.label).join() === "Silver,Gold" && cleaned.material?.savedAs === "material", "material: options without known types dropped", cleaned.material);
+  const { system, user } = gift.draftPrompt("Giva", { ...stub, prices: { min: 499, p33: 1000, p66: 2500, max: 90000 }, nameWords: [{ type: "Rings", words: [{ word: "solitaire", count: 44 }] }] });
+  expect(/"material"/.test(system) && /followUp/.test(system) && /Gold Ring — 3 — ₹25,000/.test(user) && /solitaire ×44/.test(user), "the AI gets types with typical prices and the words in names", user);
 
-  // ── database ──
+  // ── database: a Giva-style catalogue ──
   const [biz] = await db.insert(schema.businessAccounts).values({ name: `Gift build ${crypto.randomBytes(3).toString("hex")}`, website: "https://g.example", openaiApiKey: "sk-test-fake" } as any).returning();
   const B = biz.id as string;
   await db.insert(schema.widgetSettings).values({ businessAccountId: B } as any);
-  const rings = await storage.createCategory({ businessAccountId: B, name: "Rings" });
-  const pendants = await storage.createCategory({ businessAccountId: B, name: "Pendant" });
-  const wife = await storage.createTag({ businessAccountId: B, name: "Gift: Wife" });
-  const mother = await storage.createTag({ businessAccountId: B, name: "Gift: Mother" });
-  const bday = await storage.createTag({ businessAccountId: B, name: "Gift: Birthday" });
-  const rows: [string, string, string, string[]][] = [
-    ["Rose Ring", "799", rings.id, [wife.id]], ["Heart Pendant", "1499", pendants.id, [wife.id, bday.id]],
-    ["Halo Ring", "2199", rings.id, [wife.id]], ["Pearl Pendant", "1299", pendants.id, [mother.id]],
-    ["Classic Band", "3499", rings.id, [mother.id, bday.id]], ["Star Pendant", "999", pendants.id, []],
+  const cat: Record<string, string> = {};
+  for (const name of ["Rings", "Gold Ring", "Demi Fine Rings", "Pendant", "Gold Pendant"]) cat[name] = (await storage.createCategory({ businessAccountId: B, name })).id;
+  const wife = (await storage.createTag({ businessAccountId: B, name: "Gift: Wife" })).id;
+  const mother = (await storage.createTag({ businessAccountId: B, name: "Gift: Mother" })).id;
+  const rows: [string, number, string, string[]][] = [
+    ["Silver Solitaire Ring", 2499, "Rings", [wife]], ["Silver Couple Ring", 2999, "Rings", [wife]], ["Silver Heart Ring", 1999, "Rings", [mother]],
+    ["Silver Solitaire Halo Ring", 3499, "Rings", [wife]],
+    ["Gold Solitaire Ring", 24999, "Gold Ring", [wife]], ["Gold Couple Band", 18999, "Gold Ring", [wife]], ["Gold Solitaire Diamond Ring", 44999, "Gold Ring", [wife]],
+    ["Gold Leaf Ring", 15999, "Gold Ring", [mother]],
+    ["Plated Solitaire Ring", 1299, "Demi Fine Rings", [wife]], ["Plated Couple Ring", 999, "Demi Fine Rings", []], ["Plated Leaf Ring", 1499, "Demi Fine Rings", []],
+    ["Silver Heart Pendant", 2799, "Pendant", [wife]], ["Silver Moon Pendant", 3299, "Pendant", [mother]],
+    ["Gold Heart Pendant", 19999, "Gold Pendant", [wife]], ["Gold Star Pendant", 22999, "Gold Pendant", []],
   ];
-  for (const [name, price, cat, tagIds] of rows) {
-    const [p] = await db.insert(schema.products).values({ businessAccountId: B, name, description: name, price, source: "manual", stockStatus: "in_stock" } as any).returning({ id: schema.products.id });
-    await db.insert(schema.productCategories).values({ productId: p.id, categoryId: cat });
+  for (const [name, price, c, tagIds] of rows) {
+    const [p] = await db.insert(schema.products).values({ businessAccountId: B, name, description: name, price: String(price), imageUrl: `https://cdn.example/${encodeURIComponent(name)}.jpg`, source: "manual", stockStatus: "in_stock" } as any).returning({ id: schema.products.id });
+    await db.insert(schema.productCategories).values({ productId: p.id, categoryId: cat[c] });
     for (const t of tagIds) await db.insert(schema.productTags).values({ productId: p.id, tagId: t });
   }
-  // A website product the chat doesn't use (the shop keeps its own catalogue): not counted.
-  await db.insert(schema.products).values({ businessAccountId: B, name: "Website Ring", description: "x", price: "100", source: "woocommerce", externalId: "w1" } as any);
 
   const summary = await gift.catalogSummary(B);
-  expect(summary.total === 6 && summary.types.find(t => t.name === "Rings")?.count === 3 && summary.tags.find(t => t.name === "Gift: Wife")?.count === 3, "summary: the chat's 6 products, type and tag counts", summary);
-  expect(summary.prices && summary.prices.min === 799 && summary.prices.max === 3499, "summary: price spread", summary.prices);
+  expect(summary.total === 15 && summary.types.find(t => t.name === "Gold Ring")?.median === 21999, "summary: types with typical prices", summary.types);
+  const ringWords = summary.nameWords.find(n => n.type === "Rings")?.words.map(w => w.word) ?? [];
+  expect(summary.nameWords.length > 0 && !ringWords.includes("silver"), "summary: name words per big type (no metal words)", summary.nameWords);
 
-  expect(await gift.productsForOption(B, { tags: ["gift: wife"], type: "Rings" }) === 2 && await gift.productsForOption(B, { tags: ["Gift: Wife"], maxPrice: 1000 }) === 1, "products per option (tags + type, tags + price)");
-
+  // What the AI would draft for this catalogue.
   const aiDraft = {
     name: "Gift finder", triggerWords: ["present", "anniversary"], intro: "Here are a few lovely picks", ending: "Happy gifting!",
     questions: [
-      { text: "Who is the gift for?", savedAs: "recipient", options: [{ label: "Wife", tags: ["Gift: Wife"] }, { label: "Mother", tags: ["Gift: Mother"] }, { label: "Sister", tags: ["Gift: Sister"] }] },
-      { text: "What would they like?", savedAs: "kind", options: [{ label: "A ring", type: "Rings" }, { label: "A pendant", type: "Pendant" }, { label: "Bangles", type: "Bangles" }, { label: "Surprise me" }] },
+      { text: "Who is the gift for?", savedAs: "recipient", options: [{ label: "Wife", tags: ["Gift: Wife"] }, { label: "Mother", tags: ["Gift: Mother"] }, { label: "Myself" }] },
+      { text: "What would they like?", savedAs: "kind", options: [
+        { label: "Rings", types: ["Rings", "Gold Ring", "Demi Fine Rings"], followUp: { text: "Which style of ring?", savedAs: "ring_style", options: [
+          { label: "Solitaire", search: "solitaire" }, { label: "Couple", search: "couple" }, { label: "Surprise me" },
+        ] } },
+        { label: "Pendants", types: ["Pendant", "Gold Pendant"] },
+      ] },
     ],
+    material: { text: "Silver, gold-plated or solid gold?", options: [
+      { label: "Silver 925", types: ["Rings", "Pendant"] }, { label: "Gold-plated", types: ["Demi Fine Rings"] }, { label: "Solid gold", types: ["Gold Ring", "Gold Pendant"] },
+    ] },
   };
   const draft = await gift.keepOptionsWithProducts(B, gift.cleanDraft(aiDraft, summary));
-  expect(draft.questions[0].options.map(o => o.label).join() === "Wife,Mother" && draft.questions[1].options.map(o => o.label).join() === "A ring,A pendant,Surprise me", "options with no products (Sister, Bangles) dropped", draft.questions.map(q => q.options.map(o => o.label)));
+  const budgets = await gift.budgetQuestions(B, draft, summary);
+  const gold = budgets.find(b => b.label === "Solid gold")?.question;
+  const silver = budgets.find(b => b.label === "Silver 925")?.question;
+  expect(budgets.length === 3 && gold && silver && gold.options[0].maxPrice! >= 15000 && silver.options[0].maxPrice! <= 3000, "a budget per material, from that material's prices", budgets.map(b => [b.label, b.question.options.map(o => o.label)]));
 
-  const budget = gift.budgetQuestion(summary.prices);
-  const journeyId = await gift.saveGiftFinder(B, draft, budget);
+  const journeyId = await gift.saveGiftFinder(B, draft, budgets);
   const [j] = await db.select().from(schema.conversationJourneys).where(eq(schema.conversationJourneys.id, journeyId));
-  const steps = await storage.getJourneySteps(journeyId);
-  expect(j.status === "inactive" && j.journeyType === "conversational" && JSON.parse(j.triggerKeywords!).includes("gift"), "saved switched off, conversational, triggered by 'gift'", { status: j.status, type: j.journeyType });
-  expect(steps.map((s: any) => s.toolTrigger === "get_products" ? "PRODUCTS" : s.toolTrigger === "journey_complete" ? "END" : s.questionText).join(" | ") === "Who is the gift for? | What would they like? | What's your budget? | PRODUCTS | END", "steps: AI questions, budget, Show products, ending", steps.map((s: any) => s.questionText));
-  expect(optionFiltersOf(steps[0] as any).Wife?.tags?.[0] === "Gift: Wife" && steps[3].questionText === "Here are a few lovely picks", "option filters and the line above the products saved");
+  const steps = (await storage.getJourneySteps(journeyId)) as any[];
+  const shape = steps.map(s => s.toolTrigger === "get_products" ? "PRODUCTS" : s.toolTrigger === "journey_complete" ? "END" : `${s.isConditional === "true" ? "?" : ""}${s.crmFieldKey}`);
+  expect(j.status === "inactive" && j.journeyType === "conversational", "saved switched off, conversational", j.status);
+  expect(shape.join(" | ") === "recipient | kind | ?ring_style | material | ?budget | ?budget | ?budget | PRODUCTS | END", "steps: kind → ring style (only after Rings) → material → a budget per material", shape);
+  const kindStep = steps.find(s => s.crmFieldKey === "kind");
+  const route = JSON.parse(kindStep.branchingCondition).routes[0];
+  expect(route.matchValue === "Rings" && route.targetStepId === steps.find(s => s.crmFieldKey === "ring_style").id, "Rings leads to the ring style question", route);
+  expect(JSON.stringify(optionFiltersOf(kindStep).Rings.types) === JSON.stringify(["Rings", "Gold Ring", "Demi Fine Rings"]), "Rings means every ring type");
 
   // Switch it on and run it.
   await db.update(schema.conversationJourneys).set({ status: "active" } as any).where(eq(schema.conversationJourneys.id, journeyId));
   journeyService.invalidateJourneyCache(B);
-  const [conv] = await db.insert(schema.conversations).values({ businessAccountId: B, title: "Chat" } as any).returning();
+  const newChat = async () => (await db.insert(schema.conversations).values({ businessAccountId: B, title: "Chat" } as any).returning())[0];
+  let conv = await newChat();
   const send = (msg: string) => journeyOrchestrator.processUserMessageEngineDriven(conv.id, `w_${conv.id}`, B, msg, { channel: "widget" });
-  let r = await send("I'm looking for a gift for my wife");
-  expect(r.shouldBypassAI && /^ASK: What would they like/.test(r.response || ""), "built journey runs: Wife taken from the message, next question asked", r.response);
-  r = await send("A ring");
-  const low = budget!.options[0].label;
-  expect(/^ASK: What's your budget/.test(r.response || "") && (r.options ?? []).includes(low), "budget asked with the real price bands as buttons", r.options);
-  r = await send(budget!.options[1].label);
-  expect(r.isComplete && r.productSearch?.tagGroups[0]?.[0] === "Gift: Wife" && r.productSearch?.productType === "Rings" && r.productSearch?.minPrice === budget!.options[1].minPrice, "answers → product search: Wife's tag, rings, the chosen price band", r.productSearch);
+  let r = await send("I want a ring as a gift for my wife");
+  expect(r.shouldBypassAI && /^ASK: Which style of ring/.test(r.response || ""), '"a ring for my wife": Wife and Rings taken from the message → ring style asked', r.response);
+
+  const { currentQuestionPictures } = await import("../journeyOptionImages");
+  const pics = await currentQuestionPictures(conv.id, B);
+  expect(/Solitaire/.test(decodeURIComponent(pics.Solitaire ?? "")) && /Couple/.test(decodeURIComponent(pics.Couple ?? "")) && !pics["Surprise me"], "style tiles: a solitaire ring and a couple ring", pics);
+
+  r = await send("Solitaire");
+  expect(/^ASK: Silver, gold-plated or solid gold/.test(r.response || ""), "style answered → material", r.response);
+  const matPics = await currentQuestionPictures(conv.id, B);
+  expect(/^Gold (Solitaire|Couple|Leaf)/.test(decodeURIComponent((matPics["Solid gold"] ?? "").split("/").pop() ?? "")) && /Silver.*Ring/.test(decodeURIComponent(matPics["Silver 925"] ?? "")), "material tiles show rings of that material (rings were chosen)", matPics);
+  r = await send("Solid gold");
+  const goldLabels = gold!.options.map(o => o.label);
+  expect(/^ASK: What's your budget/.test(r.response || "") && JSON.stringify(r.options) === JSON.stringify(goldLabels), "solid gold → the gold budget bands", r.options);
+  r = await send(goldLabels[1]);
+  const ps = r.productSearch;
+  expect(r.isComplete && ps?.tagGroups[0]?.[0] === "Gift: Wife" && JSON.stringify(ps?.typeGroups) === JSON.stringify([["Rings", "Gold Ring", "Demi Fine Rings"], ["Gold Ring", "Gold Pendant"]]) && ps?.minPrice === gold!.options[1].minPrice && /solitaire/.test(ps?.search || ""), "product search: Wife, rings AND gold, the band's prices, 'solitaire' words", ps);
+
+  const { ToolExecutionService } = await import("../toolExecutionService");
+  const found = await ToolExecutionService.executeTool("get_products", { search: ps!.search, tag_groups: ps!.tagGroups, type_groups: ps!.typeGroups, min_price: ps!.minPrice, max_price: ps!.maxPrice }, { businessAccountId: B, userId: "t", userMessage: "x", conversationId: conv.id } as any);
+  const foundNames = ((found as any).data as any[]).map(p => p.name);
+  expect(foundNames.length > 0 && foundNames.every(n => /^Gold/.test(n) && /Ring|Band/.test(n)) && foundNames[0] === "Gold Solitaire Ring", "the products: gold rings for a wife in that band, solitaire first", foundNames);
+
+  // Pendants skip the ring style question.
+  conv = await newChat();
+  await send("gift for my mother");
+  r = await send("Pendants");
+  expect(/^ASK: Silver, gold-plated or solid gold/.test(r.response || ""), "Pendants → straight to material (no ring style)", r.response);
 
   fake.close();
   await pool.end().catch(() => {});

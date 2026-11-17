@@ -4447,7 +4447,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
               ...(ps.minPrice !== null ? { min_price: ps.minPrice } : {}),
               ...(ps.maxPrice !== null ? { max_price: ps.maxPrice } : {}),
               ...(ps.tagGroups.length ? { tag_groups: ps.tagGroups } : {}),
-              ...(ps.productType ? { product_type: ps.productType } : {}),
+              ...(ps.typeGroups.length ? { type_groups: ps.typeGroups } : {}),
             }),
           },
         });

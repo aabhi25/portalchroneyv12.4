@@ -29,7 +29,8 @@ const budget: ProductStepLike = {
 const kind: ProductStepLike = {
   id: "kind", questionText: "What kind of jewellery?", questionType: "radio",
   multipleChoiceOptions: JSON.stringify(["Rings", "Earrings", "Surprise me"]),
-  toolParameters: withOptionFilters(null, { Rings: { type: "Rings" }, Earrings: { type: "Earrings" } }),
+  // "Rings" saved the older way (one type); "Earrings" with several types.
+  toolParameters: withOptionFilters(null, { Rings: { type: "Rings" }, Earrings: { types: ["Earrings", "Gold Earrings"] } }),
 };
 const style: ProductStepLike = { id: "style", questionText: "Anything she likes?", questionType: "text" };
 const phone: ProductStepLike = { id: "phone", questionText: "Your mobile number?", questionType: "phone" };
@@ -39,12 +40,15 @@ const steps = [who, budget, kind, style, phone, show];
 const s1 = buildJourneyProductSearch(steps, { who: "wife", budget: "₹1,000–2,500", kind: "Rings", style: "minimal, rose gold", phone: "9876543210" }, show);
 expect(s1.tagGroups.length === 1 && s1.tagGroups[0].join() === "Gift: Wife,Gift: For her", "recipient → its tags (answer matched ignoring case)", s1);
 expect(s1.minPrice === 1000 && s1.maxPrice === 2500, "budget → price range", s1);
-expect(s1.productType === "Rings", "type option → product type", s1);
+expect(JSON.stringify(s1.typeGroups) === JSON.stringify([["Rings"]]), "older single type → one type group", s1);
 expect(s1.search.includes("gift") && s1.search.includes("minimal, rose gold") && s1.search.includes("Rings"), "search words: the step's words, typed answers and the type", s1.search);
 expect(!s1.search.includes("9876543210"), "contact answers never go into the search", s1.search);
 
 const s2 = buildJourneyProductSearch(steps, { who: "[SKIPPED: not answered]", budget: "Under ₹1,000", kind: "Surprise me" }, show);
-expect(s2.tagGroups.length === 0 && s2.maxPrice === 1000 && s2.productType === null, "skipped and unmapped answers add no filter", s2);
+expect(s2.tagGroups.length === 0 && s2.maxPrice === 1000 && s2.typeGroups.length === 0, "skipped and unmapped answers add no filter", s2);
+const material: ProductStepLike = { id: "metal", questionText: "Silver or gold?", questionType: "radio", toolParameters: withOptionFilters(null, { Gold: { types: ["Gold Earrings", "Gold Ring"] } }) };
+const s5 = buildJourneyProductSearch([kind, material], { kind: "Earrings", metal: "Gold" });
+expect(JSON.stringify(s5.typeGroups) === JSON.stringify([["Earrings", "Gold Earrings"], ["Gold Earrings", "Gold Ring"]]), "each answer's types are one group (Earrings + Gold → gold earrings)", s5.typeGroups);
 expect(s2.search.includes("Surprise me"), "an option with no filter is searched by its words", s2.search);
 
 const s3 = buildJourneyProductSearch([who], new Map([["who", "Mother"]]));

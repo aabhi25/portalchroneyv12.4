@@ -30,6 +30,8 @@ export interface HybridSearchOptions {
    * group, by exact name ignoring case. Products that pass are all candidates, best matches first.
    */
   tagGroups?: string[][];
+  /** Type filter, the same way: the product's type (category) is one from every group ("Rings…" + "Gold Ring…"). */
+  typeGroups?: string[][];
   /** Candidates returned (pagination happens after). */
   limit?: number;
 }
@@ -87,6 +89,12 @@ export async function hybridProductSearch(businessAccountId: string, opts: Hybri
   const maxPrice = opts.maxPrice ?? null;
   const priceFilter = sql`${minPrice === null ? sql`TRUE` : sql`p.price >= ${minPrice}`} AND ${maxPrice === null ? sql`TRUE` : sql`p.price <= ${maxPrice}`}`;
   const groups = (opts.tagGroups ?? []).map(g => g.map(t => t.trim().toLowerCase()).filter(Boolean)).filter(g => g.length > 0);
+  const typeGroups = (opts.typeGroups ?? []).map(g => g.map(t => t.trim().toLowerCase()).filter(Boolean)).filter(g => g.length > 0);
+  const typeFilter = typeGroups.length
+    ? sql.join(typeGroups.map(g => sql`EXISTS (SELECT 1 FROM product_categories pc2 JOIN categories c2 ON c2.id = pc2.category_id
+                                               WHERE pc2.product_id = p.id AND lower(c2.name) IN (${sql.join(g.map(t => sql`${t}`), sql`, `)}))`), sql` AND `)
+    : sql`TRUE`;
+  const filtered = groups.length > 0 || typeGroups.length > 0;
   const tagFilter = groups.length
     ? sql.join(groups.map(g => sql`EXISTS (SELECT 1 FROM product_tags pt JOIN tags t ON t.id = pt.tag_id
                                            WHERE pt.product_id = p.id AND lower(t.name) IN (${sql.join(g.map(t => sql`${t}`), sql`, `)}))`), sql` AND `)
@@ -120,7 +128,7 @@ export async function hybridProductSearch(businessAccountId: string, opts: Hybri
       SELECT p.id, p.name, p.description, p.price, p.image_url, p.product_url, p.stock_status, p.regular_price,
              p.messaging_image_url, p.search_tsv, p.text_embedding
         FROM products p
-       WHERE p.business_account_id = ${businessAccountId} AND ${liveOnly} AND ${priceFilter} AND ${tagFilter}
+       WHERE p.business_account_id = ${businessAccountId} AND ${liveOnly} AND ${priceFilter} AND ${tagFilter} AND ${typeFilter}
     ),
     kw AS (${kwCte}),
     cat AS (${catCte}),
@@ -133,9 +141,9 @@ export async function hybridProductSearch(businessAccountId: string, opts: Hybri
       UNION ALL
       SELECT id, 1.0 / (${sql.raw(String(RRF_K + 1))}), 'category' FROM cat
       UNION ALL
-      -- With a tag filter every remaining product fits the answers: all are candidates (weakest score).
+      -- With a tag / type filter every remaining product fits the answers: all are candidates (weakest score).
       SELECT id, 1.0 / (${sql.raw(String(RRF_K + CANDIDATES))} + row_number() OVER (ORDER BY id)), 'tag'
-        FROM (SELECT id FROM base WHERE ${groups.length ? sql`TRUE` : sql`FALSE`} LIMIT ${sql.raw(String(CANDIDATES))}) tagged
+        FROM (SELECT id FROM base WHERE ${filtered ? sql`TRUE` : sql`FALSE`} LIMIT ${sql.raw(String(CANDIDATES))}) tagged
     ),
     fused AS (
       SELECT id, sum(s) AS s, array_agg(DISTINCT via) AS via FROM hits GROUP BY id
@@ -167,6 +175,6 @@ export async function hybridProductSearch(businessAccountId: string, opts: Hybri
     via: Array.isArray(r.via) ? r.via : String(r.via ?? "").replace(/[{}]/g, "").split(",").filter(Boolean),
   }));
   const count = (k: string) => hits.filter(h => h.via.includes(k)).length;
-  console.log(`[Hybrid Search] "${opts.query.slice(0, 60)}"${opts.productType ? ` type=${opts.productType}` : ""}${groups.length ? ` tags=${groups.map(g => g.join("/")).join(" + ")}` : ""} → ${hits.length} (keyword ${count("keyword")}, meaning ${count("meaning")}, category ${count("category")}, tag ${count("tag")}) in ${Date.now() - started}ms`);
+  console.log(`[Hybrid Search] "${opts.query.slice(0, 60)}"${opts.productType ? ` type=${opts.productType}` : ""}${groups.length ? ` tags=${groups.map(g => g.join("/")).join(" + ")}` : ""}${typeGroups.length ? ` types=${typeGroups.map(g => g.join("/")).join(" + ")}` : ""} → ${hits.length} (keyword ${count("keyword")}, meaning ${count("meaning")}, category ${count("category")}, tag ${count("tag")}) in ${Date.now() - started}ms`);
   return hits;
 }
