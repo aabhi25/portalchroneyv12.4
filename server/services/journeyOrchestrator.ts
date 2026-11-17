@@ -8,7 +8,7 @@ import { phoneModeFor } from './leadCapture/fields';
 import { upsertConversationLead } from './leadCapture/leadStore';
 import { syncConversationLeadIfReady } from './leadCapture/crmGate';
 import { applyMidChatPhoneGate } from './leadCapture/phoneGate';
-import { buildJourneyProductSearch, productStepIntro, type JourneyProductSearch } from '../../shared/journeyProducts';
+import { buildJourneyProductSearch, isToolStep, productStepIntro, type JourneyProductSearch } from '../../shared/journeyProducts';
 
 /**
  * Journey Orchestrator - Unified middleware for conversation journey handling
@@ -704,7 +704,7 @@ export class JourneyOrchestrator {
     if (!steps.some((st: any) => st.toolTrigger === 'get_products')) return;
     for (let i = 0; i < 10; i++) {
       const step = await journeyService.getCurrentStep(conversationId);
-      if (!step || step.toolTrigger) return;
+      if (!step || isToolStep(step)) return;
       const named = optionNamedIn(message, parseStepChoiceOptions(step) ?? []);
       if (!named || !(await journeyService.recordResponse(conversationId, named))) return;
       console.log(`[Engine] First message already answers "${(step.questionText || '').slice(0, 50)}" → ${named}`);

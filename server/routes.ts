@@ -16168,6 +16168,43 @@ Format your response as JSON with this structure:
     }
   });
 
+  // Build a gift finder journey from the account's products (server/services/giftFinderBuilder.ts).
+  // Saved switched off for review in the journey builder.
+  app.post("/api/journeys/build-gift-finder", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      const businessAccountId = req.user!.businessAccountId!;
+      const gift = await import("./services/giftFinderBuilder");
+      const summary = await gift.catalogSummary(businessAccountId);
+      if (summary.total < 5) {
+        return res.status(400).json({ error: "Add products first: the gift finder is built from your catalogue." });
+      }
+      const openaiApiKey = await storage.getBusinessAccountOpenAIKey(businessAccountId);
+      if (!openaiApiKey) return res.status(400).json({ error: "OpenAI API key not configured" });
+      const account = await storage.getBusinessAccount(businessAccountId);
+      const { system, user } = gift.draftPrompt(account?.name ?? "the shop", summary);
+      const openai = createOpenAI({ businessAccountId, timeout: OPENAI_TIMEOUTS.chat, apiKey: openaiApiKey });
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        response_format: { type: "json_object" },
+        temperature: 0.3,
+      });
+      let raw: any = {};
+      try { raw = JSON.parse(completion.choices[0]?.message?.content || "{}"); } catch { raw = {}; }
+      const draft = await gift.keepOptionsWithProducts(businessAccountId, gift.cleanDraft(raw, summary));
+      const budget = gift.budgetQuestion(summary.prices);
+      if (draft.questions.length === 0 && !budget) {
+        return res.status(422).json({ error: "Couldn't find enough product details (tags or types) to build gift questions. Add tags like \"Gift for her\" to your products and try again." });
+      }
+      const journeyId = await gift.saveGiftFinder(businessAccountId, draft, budget);
+      journeyService.invalidateJourneyCache(businessAccountId);
+      res.json({ journeyId, questions: draft.questions.length + (budget ? 1 : 0) });
+    } catch (error: any) {
+      console.error("[Gift finder] Build error:", error);
+      res.status(500).json({ error: error?.message || "Couldn't build the gift finder" });
+    }
+  });
+
   // Parse conversation script with AI
   app.post("/api/journeys/parse-script", requireAuth, requireBusinessAccount, async (req, res) => {
     try {

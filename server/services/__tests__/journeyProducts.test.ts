@@ -50,6 +50,10 @@ expect(s2.search.includes("Surprise me"), "an option with no filter is searched 
 const s3 = buildJourneyProductSearch([who], new Map([["who", "Mother"]]));
 expect(s3.search === "gift" && s3.tagGroups[0][0] === "Gift: Mother", "no product step: a default search word, filters still applied", s3);
 
+const builderMade = steps.map(st => (st.toolTrigger ? st : { ...st, toolTrigger: "none" }));
+const s4 = buildJourneyProductSearch(builderMade, { who: "Wife", budget: "Under ₹1,000" }, show);
+expect(s4.tagGroups.length === 1 && s4.maxPrice === 1000, "questions saved by the journey builder (step type 'none') still count", s4);
+
 expect(matchOption("my WIFE", ["Wife", "Mother"]) === "Wife" && matchOption("x", ["Wife"]) === null, "matchOption: contains / none");
 expect(Object.keys(optionFiltersOf({ toolParameters: withOptionFilters(JSON.stringify({ other: 1, optionFilters: { A: { tags: [] } } }), { A: {} }) })).length === 0, "empty filters are not saved, other settings kept");
 expect(JSON.parse(withOptionFilters(JSON.stringify({ other: 1 }), {})!).other === 1, "other step settings survive saving filters");

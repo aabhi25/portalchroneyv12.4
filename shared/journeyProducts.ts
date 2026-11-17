@@ -92,6 +92,11 @@ export function cleanFilter(f: OptionFilter | null | undefined): OptionFilter | 
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
+/** A step that runs something (ending, "Show products", lead / booking) rather than asking; the builder saves plain questions as 'none'. */
+export function isToolStep(step: Pick<ProductStepLike, "toolTrigger">): boolean {
+  return !!step.toolTrigger && step.toolTrigger !== "none";
+}
+
 /** The option an answer picked: exact (ignoring case), else the option the answer contains or that contains it. */
 export function matchOption(answer: string, options: string[]): string | null {
   const a = norm(answer);
@@ -116,7 +121,7 @@ export function buildJourneyProductSearch(steps: ProductStepLike[], answers: Map
   let productType: string | null = null;
 
   for (const step of steps) {
-    if (step.toolTrigger) continue; // endings, "Show products", lead / booking steps
+    if (isToolStep(step)) continue; // endings, "Show products", lead / booking steps
     const answer = get(step.id);
     if (!answer || answer.startsWith("[SKIPPED")) continue;
     if (CONTACT_TYPES.has(String(step.questionType)) || CONTACT_KEYS.test(String(step.crmFieldKey ?? ""))) continue;

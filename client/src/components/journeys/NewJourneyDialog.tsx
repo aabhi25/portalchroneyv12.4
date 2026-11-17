@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { LucideIcon } from "lucide-react";
-import { CalendarCheck, FilePlus2, GraduationCap, Landmark, Loader2, Sparkles, Target } from "lucide-react";
+import { CalendarCheck, FilePlus2, Gift, GraduationCap, Landmark, Loader2, Sparkles, Target } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -164,6 +164,21 @@ export function NewJourneyDialog({ open, onOpenChange, onCreated, onDescribe }: 
     }
   };
 
+  // The AI drafts a gift finder from the catalogue (server/services/giftFinderBuilder.ts), saved switched off.
+  const buildGiftFinder = async () => {
+    setCreating("gift_finder");
+    try {
+      const r = await apiRequest<{ journeyId: string; questions: number }>("POST", "/api/journeys/build-gift-finder");
+      onCreated(r.journeyId);
+      onOpenChange(false);
+      toast({ title: "Gift finder built from your products", description: `${r.questions} questions, then matching products. It's switched off: review it, try it on the right, then switch it on.` });
+    } catch (e: any) {
+      toast({ title: "Couldn't build the gift finder", description: e?.message, variant: "destructive" });
+    } finally {
+      setCreating(null);
+    }
+  };
+
   const card = (key: string, Icon: LucideIcon, title: string, text: string, onClick: () => void, accent = false) => (
     <button
       key={key}
@@ -192,6 +207,7 @@ export function NewJourneyDialog({ open, onOpenChange, onCreated, onDescribe }: 
         </DialogHeader>
         <div className="mt-2 grid gap-3">
           {card("describe", Sparkles, "Describe it in your own words", "Write or paste what you'd like to ask; the AI turns it into questions.", () => { onOpenChange(false); onDescribe(); }, true)}
+          {card("gift_finder", Gift, "Gift finder from your products", "The AI reads your catalogue and builds gift questions (who it's for, occasion, budget…) that end with matching products. Takes about 20 seconds.", buildGiftFinder, true)}
         </div>
         <p className="mb-1 mt-4 text-[13px] font-medium text-gray-700">Or start from a template</p>
         <div className="grid gap-3 sm:grid-cols-2">
