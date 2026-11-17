@@ -9,7 +9,9 @@
  *  - meaning: a description's wording finds a product the name doesn't mention; an unrelated question
  *    returns nothing (no "closest" jewellery);
  *  - the chat tool end to end (question reader → ranked list → categories/tags attached, 5 per page);
- *  - fingerprints carry type and tags; older ones are remade by the refresh.
+ *  - fingerprints carry type and tags; older ones are remade by the refresh;
+ *  - tag filter (a journey's "Show products" step): one tag from every group, case ignored; when nothing
+ *    has every answer's tag the chat tool relaxes the last group; "show more" keeps the filter.
  *
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55581/postgres?sslmode=disable \
  *   PRODUCT_SEARCH_TEST_DB=1 npx tsx server/services/__tests__/productHybridSearch.integration.test.ts
@@ -151,6 +153,26 @@ async function main() {
   expect(tool.success && data.length === 4 && data.every(p => p.categories?.[0]?.name === 'Earrings' && Number(p.price) <= 1300) && data[3]?.name === 'Silver Twin Earrings', 'chat tool: earrings under 1300 → 4 (out of stock last), each with its category', data?.map(p => [p.name, p.price, p.categories]));
   const roseHit = (await ToolExecutionService.executeTool('get_products', { search: 'office earrings' }, { businessAccountId: A, userId: 'test', userMessage: 'office earrings' } as any) as any).data?.find((p: any) => p.name === 'Rose Hoop Earrings');
   expect(roseHit?.tags?.[0]?.name === 'Office wear', 'chat tool: tags attached', roseHit?.tags);
+
+  // ── Tag filter (journeys that show products) ──
+  const giftWife = await storage.createTag({ businessAccountId: A, name: 'Gift: Wife' });
+  const giftMother = await storage.createTag({ businessAccountId: A, name: 'Gift: Mother' });
+  await db.insert(productTags).values([
+    { productId: ids['Silver Posy Earrings'], tagId: giftWife.id },
+    { productId: ids['Silver Bow Ring'], tagId: giftWife.id },
+    { productId: ids['Golden Relic Earrings'], tagId: giftMother.id },
+  ]);
+  const wife = await hybridProductSearch(A, { query: 'gift', tagGroups: [['gift: WIFE', 'Gift: For her']] });
+  expect(wife.length === 2 && names(wife).sort().join() === 'Silver Bow Ring,Silver Posy Earrings', 'tag filter: only products with one of the tags (case ignored), even when the words match nothing', names(wife));
+  const wifeEar = await hybridProductSearch(A, { query: 'gift earrings', productType: 'earrings', tagGroups: [['Gift: Wife']] });
+  expect(names(wifeEar).join() === 'Silver Posy Earrings', 'tag filter + type', names(wifeEar));
+  const both = await hybridProductSearch(A, { query: 'gift', tagGroups: [['Gift: Wife'], ['Office wear']] });
+  expect(both.length === 0, 'two groups: needs a tag from each (none has both)', names(both));
+  const relaxed = await ToolExecutionService.executeTool('get_products', { search: 'gift', tag_groups: [['Gift: Wife'], ['Office wear']] }, { businessAccountId: A, userId: 'test', userMessage: 'gift', conversationId: 'conv-gift' } as any);
+  const relaxedNames = ((relaxed as any).data as any[]).map(p => p.name).sort();
+  expect(relaxedNames.join() === 'Silver Bow Ring,Silver Posy Earrings', 'chat tool: nothing has every tag → the last answer\'s tags are dropped', relaxedNames);
+  const more = await ToolExecutionService.executeTool('get_products', { search: 'jewellery', offset: 5 }, { businessAccountId: A, userId: 'test', userMessage: 'show more', conversationId: 'conv-gift' } as any);
+  expect((more as any).success && ((more as any).pagination?.total ?? 99) <= 2, '"show more" in the same chat keeps the journey\'s tag filter', (more as any).pagination);
 
   // ── Refresh of older fingerprints ──
   await db.update(products).set({ textEmbeddingGeneratedAt: new Date('2026-01-01') }).where(eq(products.id, ids['Golden Band Ring']));

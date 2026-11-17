@@ -176,7 +176,7 @@ export async function autoFillKnownSteps(conversationId: string, businessAccount
   for (let i = 0; i < 25; i++) {
     const step = await journeyService.getCurrentStep(conversationId);
     if (!step) return { filled, completed: true };
-    if (step.toolTrigger === 'journey_complete') break;
+    if (step.toolTrigger === 'journey_complete' || step.toolTrigger === 'get_products') break;
     known ??= await loadKnownAnswers(conversationId, businessAccountId);
     const hit = knownAnswerFor(step, known);
     if (!hit) break;

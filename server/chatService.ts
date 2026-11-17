@@ -11,6 +11,7 @@ import { autoEscalationService } from './services/autoEscalationService';
 import { feedbackMonitoringService } from './services/feedbackMonitoringService';
 import { journeyService } from './services/journeyService';
 import { journeyOrchestrator } from './services/journeyOrchestrator';
+import type { JourneyProductSearch } from '../shared/journeyProducts';
 import { vectorSearchService } from './services/vectorSearchService';
 import { checkDiscountEligibility } from './services/nudgeOrchestrationService';
 import { isGibberishAI, spamCheckReason } from './services/spamDetectionService';
@@ -3908,6 +3909,8 @@ Response:`;
 
       // Only process journeys if business has active journeys configured
       let journeyHandoffNote = '';
+      // A journey just reached its "Show products" step: the products to search for (shared/journeyProducts.ts).
+      let journeyProductSearch: JourneyProductSearch | null = null;
       if (hasActiveJourneys) {
         // ENGINE-DRIVEN MODE: Try processing through journey engine first
         const engineResult = await journeyOrchestrator.processUserMessageEngineDriven(
@@ -3936,6 +3939,7 @@ Response:`;
         if (engineResult.isComplete && !engineResult.shouldBypassAI && engineResult.handoffNote) {
           journeyHandoffNote = engineResult.handoffNote;
           if (engineResult.handoffQuestion) userMessage = engineResult.handoffQuestion;
+          journeyProductSearch = engineResult.productSearch ?? null;
         }
 
         // If engine handled the message, stream engine's response
@@ -4422,6 +4426,26 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           function: { name: 'fetch_k12_topic', arguments: JSON.stringify({ query: contextualK12Query }) },
         });
         console.log('[K12 Fast Path] Skipping forced first LLM call — direct fetch_k12_topic query:', contextualK12Query.substring(0, 80));
+      } else if (journeyProductSearch && hasProducts && !otpState.locked && !otpState.awaiting_otp) {
+        // A journey's "Show products" step: search with the answers' filters straight away; the reply
+        // call after the search writes the line above the product cards.
+        const ps = journeyProductSearch;
+        hasToolCalls = true;
+        toolCalls.push({
+          id: 'journey_products_' + Date.now(),
+          type: 'function',
+          function: {
+            name: 'get_products',
+            arguments: JSON.stringify({
+              search: ps.search,
+              ...(ps.minPrice !== null ? { min_price: ps.minPrice } : {}),
+              ...(ps.maxPrice !== null ? { max_price: ps.maxPrice } : {}),
+              ...(ps.tagGroups.length ? { tag_groups: ps.tagGroups } : {}),
+              ...(ps.productType ? { product_type: ps.productType } : {}),
+            }),
+          },
+        });
+        console.log('[Journey Products] Skipping the first LLM call — direct get_products:', JSON.stringify(ps));
       } else {
       // Stream AI response (pass existing lead to avoid re-asking for captured contact info)
       // Pass raw customInstructions directly to avoid truncation during extraction

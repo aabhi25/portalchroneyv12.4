@@ -8,6 +8,7 @@ import { phoneModeFor } from './leadCapture/fields';
 import { upsertConversationLead } from './leadCapture/leadStore';
 import { syncConversationLeadIfReady } from './leadCapture/crmGate';
 import { applyMidChatPhoneGate } from './leadCapture/phoneGate';
+import { buildJourneyProductSearch, productStepIntro, type JourneyProductSearch } from '../../shared/journeyProducts';
 
 /**
  * Journey Orchestrator - Unified middleware for conversation journey handling
@@ -222,6 +223,8 @@ interface EngineJourneyResponse {
   formStep?: FormStepData; // For form journeys, include form step data for visual UI
   // For conversational journeys, surface dropdown/radio choices as quick-reply buttons
   options?: string[];
+  /** The journey reached its "Show products" step: the chat shows products found with this search. */
+  productSearch?: JourneyProductSearch;
 }
 
 /**
@@ -254,6 +257,17 @@ const NOT_A_NAME_ANSWER = new Set([
   'when', 'where', 'who', 'which', 'can', 'could', 'please', 'tell', 'show', 'give', 'send', 'fees', 'fee', 'price', 'cost', 'course',
   'details', 'info', 'haan', 'nahi', 'kya', 'kyu', 'kyun', 'hmm', 'skip', 'later',
 ]);
+
+/** The one option a message names as whole words ("gift for my wife" → "Wife"), or null when none or several. */
+export function optionNamedIn(message: string, options: string[]): string | null {
+  // Letters and digits (any script) count as words; everything else is a gap.
+  const text = ` ${message.toLowerCase().replace(/[^a-z0-9\u0080-\uffff]+/g, ' ')} `;
+  const hits = options.filter(o => {
+    const words = o.toLowerCase().replace(/[^a-z0-9\u0080-\uffff]+/g, ' ').trim();
+    return words.length >= 3 && text.includes(` ${words} `);
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
 
 /** A name typed as the answer to "what's your name?" ("Rahul", "rahul sharma", "My name is Priya", "राहुल"). */
 export function nameAnswer(message: string): string | null {
@@ -350,6 +364,7 @@ export class JourneyOrchestrator {
       if (isFirstInteraction) {
         await journeyService.markJourneyPrompted(conversationId);
         if (!(opts.firstQuestionHidden && isPlainYes(userMessage))) journeyState.triggerMessage ??= userMessage;
+        await this.answerChoicesFromTrigger(conversationId, journeyState);
       }
       const prefill = await autoFillKnownSteps(conversationId, businessAccountId);
       const currentStep = await journeyService.getCurrentStep(conversationId);
@@ -357,6 +372,9 @@ export class JourneyOrchestrator {
       if (!currentStep) {
         // Nothing left to ask (everything was already known, or the journey had ended).
         return this.finishJourney(conversationId, journeyState, businessAccountId, opts);
+      }
+      if (currentStep.toolTrigger === 'get_products' && journeyState.journeyType !== 'form') {
+        return this.showProducts(conversationId, journeyState, businessAccountId, currentStep, opts);
       }
 
       // First interaction - ask the first question
@@ -600,6 +618,10 @@ export class JourneyOrchestrator {
       const done = await this.finishJourney(conversationId, journeyState, businessAccountId, opts);
       return { ...done, captchaRequired: turn.captchaRequired || done.captchaRequired };
     }
+    if (nextStep.toolTrigger === 'get_products' && journeyState.journeyType !== 'form') {
+      const shown = await this.showProducts(conversationId, journeyState, businessAccountId, nextStep, opts);
+      return { ...shown, captchaRequired: turn.captchaRequired || shown.captchaRequired };
+    }
 
     // For FORM journeys, return next step's form_step data for visual UI
     if (journeyState.journeyType === 'form') {
@@ -668,6 +690,63 @@ export class JourneyOrchestrator {
     journeyState.responses.set(step.id, '[SKIPPED: not answered]');
     await journeyService.advanceToNextStep(conversationId);
     return this.continueJourney(conversationId, journeyState, businessAccountId, userMessage, { situation: 'skip' }, opts);
+  }
+
+  /**
+   * Journeys that show products: options the visitor's first message already names ("a gift for my wife"
+   * → Wife) are recorded instead of asked. Only whole words, and only when exactly one option is named.
+   */
+  private async answerChoicesFromTrigger(conversationId: string, journeyState: JourneyState): Promise<void> {
+    const message = journeyState.triggerMessage?.toLowerCase();
+    if (!message) return;
+    const { storage } = await import('../storage');
+    const steps = await storage.getJourneySteps(journeyState.journeyId).catch(() => []);
+    if (!steps.some((st: any) => st.toolTrigger === 'get_products')) return;
+    for (let i = 0; i < 10; i++) {
+      const step = await journeyService.getCurrentStep(conversationId);
+      if (!step || step.toolTrigger) return;
+      const named = optionNamedIn(message, parseStepChoiceOptions(step) ?? []);
+      if (!named || !(await journeyService.recordResponse(conversationId, named))) return;
+      console.log(`[Engine] First message already answers "${(step.questionText || '').slice(0, 50)}" → ${named}`);
+    }
+  }
+
+  /**
+   * A "Show products" step (a gift finder's last step): the journey ends here and the chat shows products
+   * picked from the answers (shared/journeyProducts.ts), with the step's text as the line above them.
+   */
+  private async showProducts(
+    conversationId: string,
+    journeyState: JourneyState,
+    businessAccountId: string,
+    step: any,
+    opts: JourneyRunOpts
+  ): Promise<EngineJourneyResponse> {
+    const { storage } = await import('../storage');
+    const steps = await storage.getJourneySteps(journeyState.journeyId).catch(() => []);
+    const productSearch = buildJourneyProductSearch(steps, journeyState.responses, step);
+    console.log('[Engine] Journey reached "Show products":', JSON.stringify(productSearch));
+    await journeyService.completeJourney(conversationId);
+    await this.captureLeadFromJourney(conversationId, journeyState, businessAccountId, opts.channel, opts.origin);
+
+    const { previousAnswers } = await this.buildResponseContext(conversationId, journeyState, businessAccountId);
+    const intro = productStepIntro(step);
+    const handoffNote = [
+      '=== QUESTIONS JUST FINISHED: SHOWING PRODUCTS ===',
+      previousAnswers ? `The visitor has just answered these questions:\n${previousAnswers}` : '',
+      'Products picked from these answers are shown to the visitor as cards with your reply.',
+      intro
+        ? `Reply with this line, in the visitor's language: "${intro}"`
+        : 'Reply with one short, warm line introducing these suggestions.',
+      'One or two sentences only. Do not list the products in text and do not ask the questions again.',
+    ].filter(Boolean).join('\n');
+    return {
+      shouldBypassAI: false,
+      isComplete: true,
+      handoffQuestion: journeyState.triggerMessage?.trim() || undefined,
+      handoffNote,
+      productSearch,
+    };
   }
 
   /** The journey has no question left: save the lead details and hand back. */

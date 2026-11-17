@@ -12,9 +12,16 @@
  *  - "Only asked when an earlier answer leads here" = isConditional 'true'
  *  - "Saved as"             = crmFieldKey (used for CRM mapping and "don't ask again")
  *  - the ending             = the last journey_complete step that isn't conditional
+ *  - option → which products   = toolParameters.optionFilters (journeys with a "Show products" step,
+ *                             e.g. a gift finder; see shared/journeyProducts.ts)
+ *  - "Show products" step     = toolTrigger 'get_products'; its text is the line above the products,
+ *                             toolParameters.search the words always searched
  * Older settings (Exit on answer, Skip to step) are shown as option choices and saved as routes;
  * rules the builder doesn't show (contains / regex / default route) are kept untouched.
  */
+import { cleanFilter, optionFiltersOf, readToolParameters, withOptionFilters, type OptionFilter } from "@shared/journeyProducts";
+
+export type { OptionFilter };
 
 export interface StepRow {
   id: string;
@@ -33,6 +40,7 @@ export interface StepRow {
   completionButtonText?: string | null;
   crmFieldKey?: string | null;
   fieldName?: string | null;
+  toolParameters?: string | null;
 }
 
 export interface Route {
@@ -74,6 +82,8 @@ export type Then =
 export interface ChoiceOption {
   label: string;
   then: Then;
+  /** Which products this answer points to (journeys that show products). */
+  filter?: OptionFilter | null;
 }
 
 export interface Question {
@@ -90,6 +100,8 @@ export interface Question {
   defaultNextStepId: string | null;
   keepExit: boolean;
   keepSkip: boolean;
+  /** "Show products": words always searched (besides the answers). */
+  productSearch: string;
   raw?: StepRow;
 }
 
@@ -177,26 +189,34 @@ export function readModel(steps: StepRow[]): JourneyModel {
     const used = new Set<Route>();
     let exitUsed = false;
     let skipUsed = false;
+    const filters = optionFiltersOf(step);
+    const filterFor = (label: string) => {
+      const key = Object.keys(filters).find(k => same(k, label));
+      return key ? cleanFilter(filters[key]) : null;
+    };
     const options: ChoiceOption[] = kind === "choice" ? parseOptions(step.multipleChoiceOptions).map(label => {
+      const filter = filterFor(label);
+      const opt = (then: Then): ChoiceOption => (filter ? { label, then, filter } : { label, then });
       const route = routes.find(r => r.matchType === "exact" && same(r.matchValue, label) && byId.has(r.targetStepId));
       if (route) {
         used.add(route);
         const then = toThen(byId.get(route.targetStepId));
-        if (then) return { label, then };
+        if (then) return opt(then);
       }
       if (step.exitOnValue && same(step.exitOnValue, label)) {
         exitUsed = true;
-        return { label, then: { kind: "end", message: step.exitMessage || "Thank you for your time!" } };
+        return opt({ kind: "end", message: step.exitMessage || "Thank you for your time!" });
       }
       if (step.skipOnValue && same(step.skipOnValue, label) && step.skipToStepIndex != null) {
         const then = toThen(sorted[step.skipToStepIndex]);
         if (then) {
           skipUsed = true;
-          return { label, then };
+          return opt(then);
         }
       }
-      return { label, then: { kind: "next" } };
+      return opt({ kind: "next" });
     }) : [];
+    const search = readToolParameters(step.toolParameters).search;
     return {
       id: step.id,
       text: step.questionText,
@@ -209,6 +229,7 @@ export function readModel(steps: StepRow[]): JourneyModel {
       defaultNextStepId,
       keepExit: !!step.exitOnValue && !exitUsed,
       keepSkip: !!step.skipOnValue && !skipUsed,
+      productSearch: kind === "products" && typeof search === "string" ? search : "",
       raw: step,
     };
   });
@@ -254,6 +275,18 @@ export function questionPayload(q: Question, endingIds: Map<number, string>): Re
     ? JSON.stringify({ routes, defaultNextStepId: q.defaultNextStepId })
     : null;
   const savedAs = q.kind === "name" && !q.savedAs.trim() ? "name" : q.savedAs.trim();
+  // Product settings: each option's products (choice), or the words always searched ("Show products").
+  let toolParameters: string | null | undefined;
+  if (choice) {
+    toolParameters = withOptionFilters(q.raw?.toolParameters, Object.fromEntries(
+      q.options.filter(o => o.label.trim() && o.filter).map(o => [o.label.trim(), o.filter!]),
+    ));
+  } else if (q.kind === "products") {
+    const params = readToolParameters(q.raw?.toolParameters);
+    if (q.productSearch.trim()) params.search = q.productSearch.trim();
+    else delete params.search;
+    toolParameters = Object.keys(params).length ? JSON.stringify(params) : null;
+  }
   return {
     questionText: q.text.trim(),
     ...fields,
@@ -264,6 +297,7 @@ export function questionPayload(q: Question, endingIds: Map<number, string>): Re
     crmFieldKey: savedAs || null,
     ...(q.keepExit ? {} : { exitOnValue: null, exitMessage: null }),
     ...(q.keepSkip ? {} : { skipOnValue: null, skipToStepIndex: null }),
+    ...(toolParameters !== undefined ? { toolParameters } : {}),
   };
 }
 
@@ -316,7 +350,7 @@ export function orphanEndings(model: JourneyModel): string[] {
 export function newQuestion(): Question {
   return {
     id: null, text: "", kind: "short", required: true, options: [], savedAs: "", onlyWhenLed: false,
-    keptRoutes: [], defaultNextStepId: null, keepExit: false, keepSkip: false,
+    keptRoutes: [], defaultNextStepId: null, keepExit: false, keepSkip: false, productSearch: "",
   };
 }
 

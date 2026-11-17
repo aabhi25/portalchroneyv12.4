@@ -220,6 +220,23 @@ interface ToolResponse {
   [key: string]: any; // Allow additional properties like pagination
 }
 
+/** The last journey product filter per conversation, so "show more" keeps the gift finder's answers (30 minutes). */
+interface JourneyFilter { search: string; tagGroups: string[][]; productType: string | null; minPrice: number | null; maxPrice: number | null; at: number }
+const journeyFilters = new Map<string, JourneyFilter>();
+const JOURNEY_FILTER_MS = 30 * 60_000;
+
+function rememberJourneyFilter(conversationId: string, f: Omit<JourneyFilter, "at">) {
+  journeyFilters.set(conversationId, { ...f, at: Date.now() });
+  if (journeyFilters.size > 5000) {
+    for (const [k, v] of Array.from(journeyFilters)) if (Date.now() - v.at > JOURNEY_FILTER_MS) journeyFilters.delete(k);
+  }
+}
+
+function recallJourneyFilter(conversationId: string): JourneyFilter | null {
+  const f = journeyFilters.get(conversationId);
+  return f && Date.now() - f.at < JOURNEY_FILTER_MS ? f : null;
+}
+
 export class ToolExecutionService {
   static async executeTool(
     toolName: string,
@@ -366,6 +383,7 @@ export class ToolExecutionService {
   }
 
   private static async handleGetProducts(params: any, context: ToolExecutionContext): Promise<ToolResponse> {
+    params = { ...params };
     const startTime = Date.now();
     
     // BROWSE INTENT DETECTION: Check if query is generic browsing request
@@ -445,16 +463,43 @@ export class ToolExecutionService {
     let filteredProducts: any[] = [];
     let usedVectorSearch = false;
 
+    // A journey's "Show products" step passes the answers' tag filter; "show more" after it keeps that filter.
+    let tagGroups: string[][] = Array.isArray(params.tag_groups)
+      ? params.tag_groups.filter((g: unknown) => Array.isArray(g)).map((g: unknown[]) => g.filter((t): t is string => typeof t === "string"))
+      : [];
+    let productType: string | null = typeof params.product_type === "string" && params.product_type.trim() ? params.product_type.trim() : null;
+    if (context.conversationId) {
+      if (tagGroups.length || productType) {
+        rememberJourneyFilter(context.conversationId, { search: params.search ?? "", tagGroups, productType, minPrice: params.min_price ?? null, maxPrice: params.max_price ?? null });
+      } else if ((params.offset ?? 0) > 0) {
+        const saved = recallJourneyFilter(context.conversationId);
+        if (saved) {
+          tagGroups = saved.tagGroups;
+          productType = saved.productType;
+          params.search = params.search || saved.search;
+          params.min_price ??= saved.minPrice ?? undefined;
+          params.max_price ??= saved.maxPrice ?? undefined;
+        }
+      }
+    }
+
     if (params.search) {
       try {
         const minPrice = params.min_price ?? parsedQuery?.minPrice ?? null;
         const maxPrice = params.max_price ?? parsedQuery?.maxPrice ?? null;
-        const hits = await hybridProductSearch(context.businessAccountId, {
+        const searchWith = (groups: string[][]) => hybridProductSearch(context.businessAccountId, {
           query: params.search,
-          productType: parsedQuery?.productType ?? null,
+          productType: productType ?? parsedQuery?.productType ?? null,
           minPrice: typeof minPrice === "number" ? minPrice : null,
           maxPrice: typeof maxPrice === "number" ? maxPrice : null,
+          tagGroups: groups,
         });
+        let hits = await searchWith(tagGroups);
+        // Nothing has every answer's tag: drop the last answers' tags one at a time rather than show nothing.
+        for (let keep = tagGroups.length - 1; hits.length === 0 && keep >= 0; keep--) {
+          console.log(`[Product Search] No product has all ${keep + 1} answer tags — relaxing to ${keep}`);
+          hits = await searchWith(tagGroups.slice(0, keep));
+        }
         if (hits.length > 0) {
           usedVectorSearch = true;
           filteredProducts = await this.withCategoriesAndTags(hits);

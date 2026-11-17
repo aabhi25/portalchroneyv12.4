@@ -9,7 +9,9 @@
  * rule, a step left behind after two unusable answers, off-topic twice → the AI takes over,
  * the journey's end hands the original question back to the AI with the answers); contact
  * answers saved on THIS conversation's lead only (no "Unknown" placeholder, another visitor's
- * lead with the same number untouched); the CAPTCHA lock when a journey saves a mobile number.
+ * lead with the same number untouched); the CAPTCHA lock when a journey saves a mobile number; a gift
+ * finder (an option named in the first message is not asked; the "Show products" step ends the journey
+ * with a product search built from the answers).
  *
  * No network, no real OpenAI. DESTRUCTIVE: creates rows — refuses to run unless
  * AI_CALLING_TEST_DB=1 (shared local-test flag) and DATABASE_URL points at localhost.
@@ -209,6 +211,33 @@ async function main() {
     const r2 = await send(conv2, "9811100064", "whatsapp");
     const [row2] = await db.select().from(schema.conversations).where(eq(schema.conversations.id, conv2.id));
     expect(!r2.captchaRequired && (row2 as any).awaitingVerification !== true, "not the website widget → no CAPTCHA", { c: r2.captchaRequired });
+  }
+
+  // ═══ 7. a gift finder: the first message answers "who", the journey ends with products ═══
+  {
+    const { withOptionFilters } = await import("@shared/journeyProducts");
+    const [j] = await db.insert(schema.conversationJourneys).values({ businessAccountId: B, name: "Gift finder", journeyType: "conversational", status: "active", triggerMode: "manual", triggerKeywords: JSON.stringify(["gift"]) } as any).returning();
+    const step = (order: number, v: Record<string, unknown>) => db.insert(schema.journeySteps).values({ journeyId: j.id, stepOrder: String(order), isRequired: "true", questionType: "text", ...v } as any);
+    await step(1, { questionText: "Who is the gift for?", questionType: "radio", multipleChoiceOptions: JSON.stringify(["Wife", "Mother", "Friend"]),
+      toolParameters: withOptionFilters(null, { Wife: { tags: ["Gift: Wife", "Gift: For her"] }, Mother: { tags: ["Gift: Mother"] } }) });
+    await step(2, { questionText: "What is your budget?", questionType: "radio", multipleChoiceOptions: JSON.stringify(["Under 1000", "1000 to 2500"]),
+      toolParameters: withOptionFilters(null, { "Under 1000": { maxPrice: 1000 }, "1000 to 2500": { minPrice: 1000, maxPrice: 2500 } }) });
+    await step(3, { questionText: "Here are a few gifts she'll love", toolTrigger: "get_products", toolParameters: JSON.stringify({ search: "gift" }) });
+    await step(4, { questionText: "Thank you!", toolTrigger: "journey_complete", isRequired: "false" });
+    journeyService.invalidateJourneyCache(B);
+
+    const conv = await mkConv();
+    let r = await send(conv, "I want a gift for my wife");
+    expect(r.shouldBypassAI && /^ASK: What is your budget/.test(r.response || ""), "gift finder: \"gift for my wife\" answers Who, so it asks the budget first", r.response);
+    r = await send(conv, "1000 to 2500");
+    expect(!r.shouldBypassAI && r.isComplete && !!r.productSearch, "budget answered → the journey ends with a product search (the AI writes one line)", r);
+    expect(JSON.stringify(r.productSearch?.tagGroups) === JSON.stringify([["Gift: Wife", "Gift: For her"]]) && r.productSearch?.minPrice === 1000 && r.productSearch?.maxPrice === 2500 && /gift/.test(r.productSearch?.search || ""), "product search: Wife's tags and the budget's price range", r.productSearch);
+    expect(r.handoffQuestion === "I want a gift for my wife" && /Here are a few gifts she'll love/.test(r.handoffNote || "") && /cards/.test(r.handoffNote || ""), "hand-off: the step's line above the product cards, the visitor's original message", r.handoffNote);
+    expect(!(await journeyService.getCurrentStep(conv.id)), "nothing left to ask after the products");
+
+    const conv2 = await mkConv();
+    r = await send(conv2, "gift ideas please");
+    expect(r.shouldBypassAI && /^ASK: Who is the gift for/.test(r.response || ""), "no recipient in the message → Who is asked", r.response);
   }
 
   fake.close();

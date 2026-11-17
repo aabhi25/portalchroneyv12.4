@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CornerDownRight, Flag, Hash, ListChecks,
@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   ANSWER_KINDS, DEFAULT_ENDING_TEXT, SAVED_AS_SUGGESTIONS, incomingLinks, kindLabel, newQuestion, orderedStepIds,
   orphanEndings, questionPayload, questionProblems, readModel,
-  type AnswerKind, type Ending, type JourneyModel, type Question, type StepRow, type Then,
+  type AnswerKind, type Ending, type JourneyModel, type OptionFilter, type Question, type StepRow, type Then,
 } from "./journeyModel";
 import { JourneyPreview } from "./JourneyPreview";
 
@@ -38,6 +38,8 @@ export function JourneyBuilder({ journeyId, steps, aiWords }: { journeyId: strin
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const model = useMemo(() => readModel(steps), [steps]);
+  // A journey with a "Show products" step: each option can say which products it points to.
+  const productJourney = model.questions.some(q => q.kind === "products");
   const links = useMemo(() => incomingLinks(model), [model]);
   const [editing, setEditing] = useState<{ key: string; draft: Question } | null>(null);
   const [endingDraft, setEndingDraft] = useState<Ending | null>(null);
@@ -198,6 +200,7 @@ export function JourneyBuilder({ journeyId, steps, aiWords }: { journeyId: strin
                 index={index}
                 draft={editing.draft}
                 later={model.questions.slice(index + 1)}
+                productJourney={productJourney || editing.draft.kind === "products"}
                 incoming={(links.get(key) ?? []).map(l => ({ ...l, fromText: model.questions[l.fromIndex]?.text ?? "" }))}
                 problems={problems}
                 busy={busy}
@@ -232,6 +235,7 @@ export function JourneyBuilder({ journeyId, steps, aiWords }: { journeyId: strin
             index={model.questions.length}
             draft={editing.draft}
             later={[]}
+            productJourney={productJourney || editing.draft.kind === "products"}
             incoming={[]}
             problems={problems}
             busy={busy}
@@ -366,9 +370,9 @@ function QuestionCard({
 }
 
 function QuestionEditor({
-  index, draft, later, incoming, problems, busy, onChange, onSave, onCancel,
+  index, draft, later, productJourney, incoming, problems, busy, onChange, onSave, onCancel,
 }: {
-  index: number; draft: Question; later: Question[];
+  index: number; draft: Question; later: Question[]; productJourney: boolean;
   incoming: { fromIndex: number; option: string; fromText: string }[];
   problems: string[]; busy: boolean;
   onChange: (q: Question) => void; onSave: () => void; onCancel: () => void;
@@ -380,7 +384,7 @@ function QuestionEditor({
     if (NO_ANSWER.includes(kind)) patch.required = true;
     set(patch);
   };
-  const setOption = (i: number, patch: Partial<{ label: string; then: Then }>) =>
+  const setOption = (i: number, patch: Partial<{ label: string; then: Then; filter: OptionFilter | null }>) =>
     set({ options: draft.options.map((o, j) => (j === i ? { ...o, ...patch } : o)) });
 
   return (
@@ -466,6 +470,9 @@ function QuestionEditor({
                     </Select>
                     <IconButton label="Remove option" onClick={() => set({ options: draft.options.filter((_, j) => j !== i) })}><X className="h-4 w-4" /></IconButton>
                   </div>
+                  {productJourney && o.then.kind !== "end" && (
+                    <OptionProductFilter filter={o.filter ?? null} index={i} onChange={(filter) => setOption(i, { filter })} />
+                  )}
                   {o.then.kind === "end" && (
                     <Input
                       value={o.then.message}
@@ -483,6 +490,21 @@ function QuestionEditor({
             <Plus className="h-4 w-4" /> Add an option
           </button>
           {later.length === 0 && <p className="mt-1 text-[12px] text-gray-500">To send an option to a later question, add that question first; it then shows in the list.</p>}
+        </div>
+      )}
+
+      {draft.kind === "products" && (
+        <div className="mt-4 rounded-xl bg-purple-50/60 px-3 py-2.5 text-[13px] text-purple-900">
+          <p>Shows products picked from the answers before this step; the text above is the line shown with them. The journey ends here.</p>
+          <p className="mt-1 text-[12px] text-purple-700">Set which products each option points to on the “Pick one” questions (“Which products?”).</p>
+          <label className="mb-1 mt-3 block text-[13px] text-gray-700">Always search for <span className="text-gray-500">(optional)</span></label>
+          <Input
+            value={draft.productSearch}
+            onChange={(e) => set({ productSearch: e.target.value })}
+            placeholder="e.g. gift jewellery"
+            className="h-9 max-w-xs bg-white"
+            data-testid="input-product-search"
+          />
         </div>
       )}
 
@@ -537,6 +559,68 @@ function QuestionEditor({
           {draft.id ? "Save question" : "Add question"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** Which products an option points to: tags (any one), price range, product type. */
+function OptionProductFilter({ filter, index, onChange }: { filter: OptionFilter | null; index: number; onChange: (f: OptionFilter | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const tags = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/tags"], enabled: open, staleTime: 60_000 });
+  const categories = useQuery<{ id: string; name: string }[]>({ queryKey: ["/api/categories"], enabled: open, staleTime: 60_000 });
+  const f = filter ?? {};
+  const update = (patch: Partial<OptionFilter>) => {
+    const next = { ...f, ...patch };
+    const empty = !next.tags?.length && next.minPrice == null && next.maxPrice == null && !next.type && !next.search;
+    onChange(empty ? null : next);
+  };
+  const price = (v: string) => (v.trim() === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+  const summary = [
+    f.tags?.length ? f.tags.join(" or ") : "",
+    f.type ? f.type : "",
+    f.minPrice != null && f.maxPrice != null ? `₹${f.minPrice}–₹${f.maxPrice}` : f.maxPrice != null ? `up to ₹${f.maxPrice}` : f.minPrice != null ? `from ₹${f.minPrice}` : "",
+    f.search ? `“${f.search}”` : "",
+  ].filter(Boolean).join(" · ");
+  return (
+    <div className="mt-2 rounded-lg bg-gray-50 px-2.5 py-1.5 text-[12.5px]">
+      <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-1.5 text-left text-gray-600 hover:text-gray-900" data-testid={`button-option-products-${index}`}>
+        <ShoppingBag className="h-3.5 w-3.5 shrink-0 text-purple-600" />
+        <span className="font-medium text-gray-700">Which products?</span>
+        <span className="truncate">{summary || "Not set: the answer is searched by its words"}</span>
+      </button>
+      {open && (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <label className="sm:col-span-2">
+            <span className="mb-0.5 block text-gray-600">Product tags <span className="text-gray-400">(any one, comma between)</span></span>
+            <Input
+              defaultValue={(f.tags ?? []).join(", ")}
+              onBlur={(e) => update({ tags: e.target.value.split(",").map(t => t.trim()).filter(Boolean) })}
+              list="journey-product-tags"
+              placeholder="e.g. Gift: Wife, Gift: For her"
+              className="h-8 bg-white"
+              data-testid={`input-option-tags-${index}`}
+            />
+            <datalist id="journey-product-tags">{(tags.data ?? []).map(t => <option key={t.id} value={t.name} />)}</datalist>
+          </label>
+          <label>
+            <span className="mb-0.5 block text-gray-600">Price from (₹)</span>
+            <Input type="number" min={0} defaultValue={f.minPrice ?? ""} onBlur={(e) => update({ minPrice: price(e.target.value) })} className="h-8 bg-white" data-testid={`input-option-min-${index}`} />
+          </label>
+          <label>
+            <span className="mb-0.5 block text-gray-600">Price up to (₹)</span>
+            <Input type="number" min={0} defaultValue={f.maxPrice ?? ""} onBlur={(e) => update({ maxPrice: price(e.target.value) })} className="h-8 bg-white" data-testid={`input-option-max-${index}`} />
+          </label>
+          <label>
+            <span className="mb-0.5 block text-gray-600">Product type</span>
+            <Input defaultValue={f.type ?? ""} onBlur={(e) => update({ type: e.target.value.trim() || null })} list="journey-product-types" placeholder="e.g. Rings" className="h-8 bg-white" data-testid={`input-option-type-${index}`} />
+            <datalist id="journey-product-types">{(categories.data ?? []).map(c => <option key={c.id} value={c.name} />)}</datalist>
+          </label>
+          <label>
+            <span className="mb-0.5 block text-gray-600">Search words</span>
+            <Input defaultValue={f.search ?? ""} onBlur={(e) => update({ search: e.target.value.trim() || null })} placeholder="e.g. minimal" className="h-8 bg-white" data-testid={`input-option-search-${index}`} />
+          </label>
+        </div>
+      )}
     </div>
   );
 }
