@@ -571,7 +571,7 @@ function OptionProductFilter({ filter, index, onChange }: { filter: OptionFilter
   const f = filter ?? {};
   const update = (patch: Partial<OptionFilter>) => {
     const next = { ...f, ...patch };
-    const empty = !next.tags?.length && next.minPrice == null && next.maxPrice == null && !next.type && !next.search;
+    const empty = !next.tags?.length && next.minPrice == null && next.maxPrice == null && !next.type && !next.search && !next.pictureProductId;
     onChange(empty ? null : next);
   };
   const price = (v: string) => (v.trim() === "" || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -619,6 +619,56 @@ function OptionProductFilter({ filter, index, onChange }: { filter: OptionFilter
             <span className="mb-0.5 block text-gray-600">Search words</span>
             <Input defaultValue={f.search ?? ""} onBlur={(e) => update({ search: e.target.value.trim() || null })} placeholder="e.g. minimal" className="h-8 bg-white" data-testid={`input-option-search-${index}`} />
           </label>
+          {(!!f.tags?.length || !!f.type) && (
+            <OptionPicture filter={f} index={index} onPick={(id) => update({ pictureProductId: id })} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The photo on this option's tile in the chat: picked automatically from the matching products, or one chosen
+ * here. (In the chat the automatic photo also fits the earlier answers, so it can differ from this one.)
+ */
+function OptionPicture({ filter, index, onPick }: { filter: OptionFilter; index: number; onPick: (productId: string | null) => void }) {
+  const pictures = useQuery<{ current: { id: string; name: string; imageUrl: string } | null; candidates: { id: string; name: string; imageUrl: string }[]; picked: boolean }>({
+    queryKey: ["/api/journeys/option-pictures", filter.tags?.join("|") ?? "", filter.type ?? "", filter.pictureProductId ?? ""],
+    queryFn: () => apiRequest("POST", "/api/journeys/option-pictures", { tags: filter.tags ?? [], type: filter.type ?? null, pictureProductId: filter.pictureProductId ?? null }),
+    staleTime: 60_000,
+  });
+  const data = pictures.data;
+  return (
+    <div className="sm:col-span-2">
+      <span className="mb-1 block text-gray-600">Picture on the chat tile</span>
+      {pictures.isLoading ? (
+        <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+      ) : !data?.current ? (
+        <p className="text-gray-500">No matching product has a photo, so this option shows as a plain button.</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          {data.candidates.map(c => {
+            const chosen = data.current?.id === c.id;
+            return (
+              <button
+                key={c.id}
+                type="button"
+                title={c.name}
+                onClick={() => onPick(c.id === data.candidates[0]?.id && !data.picked ? null : c.id)}
+                className={`h-12 w-12 overflow-hidden rounded-lg border-2 bg-white ${chosen ? "border-purple-600" : "border-transparent hover:border-gray-300"}`}
+                data-testid={`option-picture-${index}-${c.id}`}
+              >
+                <img src={c.imageUrl} alt={c.name} className="h-full w-full object-cover" loading="lazy" />
+              </button>
+            );
+          })}
+          {data.picked && (
+            <button type="button" onClick={() => onPick(null)} className="text-[12px] font-medium text-purple-700 hover:text-purple-900" data-testid={`option-picture-auto-${index}`}>
+              Pick automatically
+            </button>
+          )}
+          <span className="w-full text-[11.5px] text-gray-500">{data.picked ? `Chosen: ${data.current.name}` : "Picked automatically. Tap another photo to use it instead."}</span>
         </div>
       )}
     </div>

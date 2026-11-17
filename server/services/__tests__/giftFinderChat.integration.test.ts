@@ -2,7 +2,9 @@
  * A gift finder in the website chat, end to end through the real chatService against a local Postgres/PGlite
  * and a fake OpenAI that records every request:
  *
- *  - "I want a gift for my wife" starts the journey; Wife is taken from that message, so the budget is asked;
+ *  - "I want a gift for my wife" starts the journey; Wife is taken from that message, so "What kind?" is asked,
+ *    its options as picture tiles: each photo a product of that kind that suits a wife (not the mother's pendant),
+ *    no product twice, no photo on "Surprise me"; a picture chosen in the builder wins;
  *  - answering the budget ends the journey at its "Show products" step: the product search runs straight
  *    away (no first AI call) with Wife's tags and the budget's price range, the product cards come back,
  *    and the reply is written with the step's line in its instructions;
@@ -108,15 +110,24 @@ async function main() {
   // Products: two tagged "Gift: Wife" inside the budget, one outside it, one for mothers.
   const wifeTag = await storage.createTag({ businessAccountId: B, name: 'Gift: Wife' });
   const motherTag = await storage.createTag({ businessAccountId: B, name: 'Gift: Mother' });
+  const pendant = await storage.createCategory({ businessAccountId: B, name: 'Pendant' });
+  const bracelet = await storage.createCategory({ businessAccountId: B, name: 'Bracelet' });
+  const ring = await storage.createCategory({ businessAccountId: B, name: 'Ring' });
+  const earrings = await storage.createCategory({ businessAccountId: B, name: 'Earrings' });
   const items = [
-    { name: 'Rose Gold Heart Pendant', price: '1799', tag: wifeTag.id },
-    { name: 'Silver Infinity Bracelet', price: '2199', tag: wifeTag.id },
-    { name: 'Diamond Solitaire Ring', price: '8999', tag: wifeTag.id },
-    { name: 'Pearl Drop Earrings', price: '1499', tag: motherTag.id },
+    { name: 'Rose Gold Heart Pendant', price: '1799', tag: wifeTag.id, cat: pendant.id },
+    { name: 'Silver Infinity Bracelet', price: '2199', tag: wifeTag.id, cat: bracelet.id },
+    { name: 'Diamond Solitaire Ring', price: '8999', tag: wifeTag.id, cat: ring.id },
+    { name: 'Pearl Drop Earrings', price: '1499', tag: motherTag.id, cat: earrings.id },
+    { name: 'Mother Pearl Pendant', price: '2999', tag: motherTag.id, cat: pendant.id },
   ];
+  const idOf: Record<string, string> = {};
+  const img = (name: string) => `https://cdn.example/${name.toLowerCase().replace(/\s+/g, '-')}.jpg`;
   for (const it of items) {
-    const [row] = await db.insert(schema.products).values({ businessAccountId: B, name: it.name, description: `${it.name}, a lovely gift.`, price: it.price, source: 'manual', stockStatus: 'in_stock' } as any).returning({ id: schema.products.id });
+    const [row] = await db.insert(schema.products).values({ businessAccountId: B, name: it.name, description: `${it.name}, a lovely gift.`, price: it.price, imageUrl: img(it.name), source: 'manual', stockStatus: 'in_stock' } as any).returning({ id: schema.products.id });
+    idOf[it.name] = row.id;
     await db.insert(schema.productTags).values({ productId: row.id, tagId: it.tag });
+    await db.insert(schema.productCategories).values({ productId: row.id, categoryId: it.cat });
   }
   await productTextEmbeddingService.backfillEmbeddingsForBusiness(B);
 
@@ -124,9 +135,10 @@ async function main() {
   const [j] = await db.insert(schema.conversationJourneys).values({ businessAccountId: B, name: 'Gift finder', journeyType: 'conversational', status: 'active', triggerMode: 'manual', triggerKeywords: JSON.stringify(['gift']) } as any).returning();
   const step = (order: number, v: Record<string, unknown>) => db.insert(schema.journeySteps).values({ journeyId: j.id, stepOrder: String(order), isRequired: 'true', questionType: 'text', ...v } as any);
   await step(1, { questionText: 'Who is the gift for?', questionType: 'radio', multipleChoiceOptions: JSON.stringify(['Wife', 'Mother']), toolParameters: withOptionFilters(null, { Wife: { tags: ['Gift: Wife'] }, Mother: { tags: ['Gift: Mother'] } }) });
-  await step(2, { questionText: 'What is your budget?', questionType: 'radio', multipleChoiceOptions: JSON.stringify(['Under 1000', '1000 to 2500']), toolParameters: withOptionFilters(null, { 'Under 1000': { maxPrice: 1000 }, '1000 to 2500': { minPrice: 1000, maxPrice: 2500 } }) });
-  await step(3, { questionText: "Here are a few gifts she'll love", toolTrigger: 'get_products', toolParameters: JSON.stringify({ search: 'gift' }) });
-  await step(4, { questionText: 'Thank you!', toolTrigger: 'journey_complete', isRequired: 'false' });
+  await step(2, { questionText: 'What kind of jewellery?', questionType: 'radio', toolTrigger: 'none', multipleChoiceOptions: JSON.stringify(['Pendant', 'Bracelet', 'Ring', 'Surprise me']), toolParameters: withOptionFilters(null, { Pendant: { type: 'Pendant' }, Bracelet: { type: 'Bracelet' }, Ring: { type: 'Ring' } }) });
+  await step(3, { questionText: 'What is your budget?', questionType: 'radio', multipleChoiceOptions: JSON.stringify(['Under 1000', '1000 to 2500']), toolParameters: withOptionFilters(null, { 'Under 1000': { maxPrice: 1000 }, '1000 to 2500': { minPrice: 1000, maxPrice: 2500 } }) });
+  await step(4, { questionText: "Here are a few gifts she'll love", toolTrigger: 'get_products', toolParameters: JSON.stringify({ search: 'gift' }) });
+  await step(5, { questionText: 'Thank you!', toolTrigger: 'journey_complete', isRequired: 'false' });
   journeyService.invalidateJourneyCache(B);
 
   const userId = `widget_${tag}`;
@@ -143,9 +155,26 @@ async function main() {
     return { events, calls, products, text, error: events.find(e => e.type === 'error') };
   }
 
-  // 1. The first message names the recipient → the budget is asked.
+  // 1. The first message names the recipient → "What kind?" with picture tiles.
   const t1 = await turn('I want a gift for my wife');
-  expect(!t1.error && /What is your budget/.test(t1.text) && t1.products.length === 0, 'first message: Wife taken from it, the budget is asked', t1.text);
+  expect(!t1.error && /What kind of jewellery/.test(t1.text) && t1.products.length === 0, 'first message: Wife taken from it, "What kind?" is asked', t1.text);
+  const opts1 = JSON.parse(t1.events.find(e => e.type === 'journey_options')?.data ?? '{}');
+  expect(opts1.options?.join() === 'Pendant,Bracelet,Ring,Surprise me', 'options sent as before', opts1.options);
+  expect(opts1.images?.Pendant === img('Rose Gold Heart Pendant') && opts1.images?.Bracelet === img('Silver Infinity Bracelet') && opts1.images?.Ring === img('Diamond Solitaire Ring'), "each option's photo: a product of that kind that suits a wife (not the mother's pendant)", opts1.images);
+  expect(!opts1.images?.['Surprise me'] && new Set(Object.values(opts1.images ?? {})).size === 3, 'no photo on the catch-all, no product twice', opts1.images);
+
+  const { optionPictures } = await import('../journeyOptionImages');
+  const steps = await storage.getJourneySteps(j.id);
+  const kindStep = steps.find((st: any) => st.questionText === 'What kind of jewellery?')!;
+  const noAnswers = await optionPictures(B, kindStep as any, steps as any, {});
+  expect(noAnswers.Pendant && [img('Rose Gold Heart Pendant'), img('Mother Pearl Pendant')].includes(noAnswers.Pendant), 'without earlier answers: any pendant', noAnswers);
+  const chosen = await optionPictures(B, { ...kindStep, toolParameters: withOptionFilters(kindStep.toolParameters, { Pendant: { type: 'Pendant', pictureProductId: idOf['Mother Pearl Pendant'] }, Bracelet: { type: 'Bracelet' }, Ring: { type: 'Ring' } }) } as any, steps as any, {});
+  expect(chosen.Pendant === img('Mother Pearl Pendant'), 'a picture chosen in the builder wins', chosen);
+
+  const t1b = await turn('Surprise me');
+  expect(!t1b.error && /What is your budget/.test(t1b.text), '"Surprise me" → the budget is asked', t1b.text);
+  const opts1b = JSON.parse(t1b.events.find(e => e.type === 'journey_options')?.data ?? '{}');
+  expect(opts1b.options?.length === 2 && Object.keys(opts1b.images ?? {}).length === 0, 'budget options: no photos (plain buttons)', opts1b);
 
   // 2. Budget → products straight away.
   const t2 = await turn('1000 to 2500');

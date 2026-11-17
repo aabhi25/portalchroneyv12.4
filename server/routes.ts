@@ -16168,6 +16168,26 @@ Format your response as JSON with this structure:
     }
   });
 
+  // Journey builder: the photo an option's tile shows, and other products to pick from (journeyOptionImages.ts).
+  app.post("/api/journeys/option-pictures", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      const businessAccountId = req.user!.businessAccountId!;
+      const { pictureCandidates } = await import("./services/journeyOptionImages");
+      const tags = Array.isArray(req.body?.tags) ? req.body.tags.filter((t: unknown) => typeof t === "string").slice(0, 20) : [];
+      const type = typeof req.body?.type === "string" && req.body.type.trim() ? req.body.type.trim() : null;
+      const picked = typeof req.body?.pictureProductId === "string" ? req.body.pictureProductId : null;
+      const candidates = tags.length || type ? await pictureCandidates(businessAccountId, { tags, type }, [], 8) : [];
+      let current = picked ? candidates.find(c => c.id === picked) ?? null : candidates[0] ?? null;
+      if (picked && !current) {
+        const product = await storage.getProduct(picked, businessAccountId);
+        if (product?.imageUrl) current = { id: product.id, name: product.name, imageUrl: product.imageUrl };
+      }
+      res.json({ current, candidates, picked: !!picked && !!current });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Couldn't load pictures" });
+    }
+  });
+
   // Build a gift finder journey from the account's products (server/services/giftFinderBuilder.ts).
   // Saved switched off for review in the journey builder.
   app.post("/api/journeys/build-gift-finder", requireAuth, requireBusinessAccount, async (req, res) => {

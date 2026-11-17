@@ -3967,7 +3967,13 @@ Response:`;
           // quick-reply buttons so the visitor can tap an answer instead of typing.
           if (engineResult.options && engineResult.options.length > 0) {
             console.log('[Chat Stream] Engine returned conversational journey options - emitting journey_options:', engineResult.options.length);
-            yield { type: 'journey_options' as const, data: JSON.stringify({ options: engineResult.options }) };
+            // Product journeys (gift finder): a product photo per option, shown as picture tiles.
+            const { currentQuestionPictures } = await import('./services/journeyOptionImages');
+            const images = await currentQuestionPictures(conversationId, context.businessAccountId).catch((err) => {
+              console.warn('[Chat Stream] Option pictures failed (buttons shown without photos):', err?.message);
+              return {} as Record<string, string>;
+            });
+            yield { type: 'journey_options' as const, data: JSON.stringify({ options: engineResult.options, images }) };
           }
           
           // Store engine's response (a form question is stored as itself, so the transcript and

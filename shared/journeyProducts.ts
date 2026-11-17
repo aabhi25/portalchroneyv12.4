@@ -23,6 +23,13 @@ export interface OptionFilter {
   type?: string | null;
   /** Extra search words. */
   search?: string | null;
+  /** The product whose photo shows on this option's tile (picked in the builder); unset = picked automatically. */
+  pictureProductId?: string | null;
+}
+
+/** Does the filter say anything about which products (a picture alone doesn't)? */
+export function filtersProducts(f: OptionFilter | null | undefined): boolean {
+  return !!f && (!!f.tags?.length || f.minPrice != null || f.maxPrice != null || !!f.type || !!f.search);
 }
 
 export interface JourneyProductSearch {
@@ -87,6 +94,7 @@ export function cleanFilter(f: OptionFilter | null | undefined): OptionFilter | 
   if (max !== null) out.maxPrice = max;
   if (f.type && String(f.type).trim()) out.type = String(f.type).trim();
   if (f.search && String(f.search).trim()) out.search = String(f.search).trim();
+  if (f.pictureProductId && String(f.pictureProductId).trim()) out.pictureProductId = String(f.pictureProductId).trim();
   return Object.keys(out).length ? out : null;
 }
 
@@ -128,7 +136,7 @@ export function buildJourneyProductSearch(steps: ProductStepLike[], answers: Map
     const filters = optionFiltersOf(step);
     const label = matchOption(answer, Object.keys(filters));
     const f = label ? cleanFilter(filters[label]) : null;
-    if (!f) {
+    if (!f || !filtersProducts(f)) {
       words.push(answer.trim().slice(0, 80));
       continue;
     }

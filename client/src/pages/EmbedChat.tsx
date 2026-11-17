@@ -19,6 +19,7 @@ import { ChatImageCropOverlay } from "@/components/ChatImageCropOverlay";
 import { TryOnOverlay } from "@/components/TryOnOverlay";
 import { useUrgencyOffer } from "@/hooks/useUrgencyOffer";
 import { QuickBrowseButtons } from "@/components/QuickBrowseButtons";
+import { ChoicePictureTiles, showPictureTiles } from "@/components/ChoicePictureTiles";
 import { ResumeUploadProgress } from "@/components/ResumeUploadProgress";
 import { ImageUploadProgress } from "@/components/ImageUploadProgress";
 import { isPhotoMessage, photoMessage, splitPhotoMessage, whenIdle } from "@/lib/k12PhotoSend";
@@ -193,6 +194,8 @@ interface ChatMessage {
   lookupOptions?: boolean;
   lookupMode?: 'track' | 'return_exchange';
   quickReplies?: string[];
+  /** Product journeys: a photo per quick reply (option → image URL), shown as picture tiles. */
+  quickReplyImages?: Record<string, string>;
   /** Set on a journey form question asked in the chat; its quickReplies answer that step. */
   formStepId?: string;
 }
@@ -3788,9 +3791,11 @@ export default function EmbedChat() {
                 try {
                   const parsed = typeof data.data === 'string' ? JSON.parse(data.data) : data.data;
                   const opts: string[] = Array.isArray(parsed?.options) ? parsed.options : [];
+                  const images: Record<string, string> | undefined =
+                    parsed?.images && typeof parsed.images === 'object' && Object.keys(parsed.images).length > 0 ? parsed.images : undefined;
                   if (opts.length > 0) {
                     setMessages(prev => prev.map(msg =>
-                      msg.id === aiMessageId ? { ...msg, quickReplies: opts } : msg
+                      msg.id === aiMessageId ? { ...msg, quickReplies: opts, quickReplyImages: images } : msg
                     ));
                   }
                 } catch (e) {
@@ -6762,6 +6767,13 @@ export default function EmbedChat() {
                         />
                       )
                     )
+                  ) : showPictureTiles(msg.quickReplies, msg.quickReplyImages) ? (
+                    <ChoicePictureTiles
+                      options={msg.quickReplies}
+                      images={msg.quickReplyImages!}
+                      onSelect={handleQuickBrowse}
+                      chatColor={chatColor}
+                    />
                   ) : (
                   <QuickBrowseButtons
                     buttons={msg.quickReplies.map((opt) => ({ label: opt, action: opt }))}
