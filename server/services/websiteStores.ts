@@ -92,7 +92,52 @@ const clip = (s: string) => (s.length > MAX_DESCRIPTION ? `${s.slice(0, MAX_DESC
 
 // ───────────────────────────── Shopify ─────────────────────────────
 
-/** One /products.json product → our fields. Shopify tags are left out (shops use them for internal labels). Exported for tests. */
+/**
+ * Shopify tags that tell a shopper something — who it's for, the occasion, style, metal, colour — cleaned up
+ * ("gifts_wife" → "Gift: Wife"); the rest are left out, since shops mostly use tags for internal labels
+ * (sale codes, SKUs, measurements, warehouse notes). They become the product's tags, which the chat's
+ * product search reads (and a gift finder can filter on). Exported for tests.
+ */
+const TAG_KEYS: Record<string, string> = {
+  gift: "Gift", gifts: "Gift", giftsfor: "Gift", giftfor: "Gift",
+  for: "For", recipient: "For", gender: "For", suitedfor: "For",
+  occasion: "Occasion", style: "Style", metal: "Metal", material: "Material",
+  color: "Colour", colour: "Colour", stone: "Stone", gemstone: "Stone",
+  motif: "Motif", motifs: "Motif", collection: "Collection", collectionname: "Collection",
+};
+const PLAIN_TAG = /\b(gifts?|for (her|him|men|women|kids|boys|girls|wife|husband|mom|mother|dad|father|sister|brother|friend|couples?)|suited for|anniversary|birthday|wedding|bridal|engagement|valentine'?s?|festive|diwali|rakhi|daily wear|office wear|party wear)\b/i;
+/** Values that say nothing ("Stone: None") or are shop-internal ("Collection: Less AOV"). */
+const EMPTY_VALUE = /^(none|nil|na|n\/a|no|yes|null|other|others|-|0)$/i;
+const INTERNAL_WORD = /\b(aov|sale|sales|npd|test|internal|sku|hidden|clearance|discount|offer|bestseller|new arrivals?)\b/i;
+const MAX_TAGS = 20;
+
+export function shopperTags(raw: unknown): string[] {
+  const list: string[] = Array.isArray(raw) ? raw.filter((t): t is string => typeof t === "string")
+    : typeof raw === "string" ? raw.split(",") : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const rawTag of list) {
+    const tag = decodeEntities(rawTag).replace(/\s+/g, " ").trim();
+    if (!tag || tag.length > 60) continue;
+    let label: string | null = null;
+    const split = tag.match(/^([^_:]+)[_:]\s*(.+)$/);
+    if (split) {
+      const key = TAG_KEYS[split[1].toLowerCase().replace(/[\s-]/g, "")];
+      const value = split[2].replace(/_/g, " ").trim();
+      // Keep known keys with a worded value ("gifts_999" is a price band, not a recipient).
+      if (key && /[a-z]/i.test(value) && !EMPTY_VALUE.test(value) && !INTERNAL_WORD.test(value)) label = `${key}: ${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+    } else if (PLAIN_TAG.test(tag)) {
+      label = tag.charAt(0).toUpperCase() + tag.slice(1);
+    }
+    if (!label || seen.has(label.toLowerCase())) continue;
+    seen.add(label.toLowerCase());
+    out.push(label);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out;
+}
+
+/** One /products.json product → our fields; only shopper-facing tags are kept (shopperTags). Exported for tests. */
 export function mapShopifyProduct(p: any, origin: string): WooProduct | null {
   if (!p || typeof p !== "object" || p.id == null || typeof p.title !== "string") return null;
   const variants: any[] = Array.isArray(p.variants) ? p.variants : [];
@@ -129,7 +174,7 @@ export function mapShopifyProduct(p: any, origin: string): WooProduct | null {
     sku,
     stockStatus: anyAvailable ? "in_stock" : "out_of_stock",
     categories: type ? [type] : [],
-    tags: [],
+    tags: shopperTags(p.tags),
   };
 }
 

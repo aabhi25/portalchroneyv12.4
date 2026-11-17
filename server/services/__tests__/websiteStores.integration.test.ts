@@ -81,7 +81,7 @@ function shopifyJson(p: ShopItem) {
     compare_at_price: p.compare ? p.compare.toFixed(2) : null, available: !p.soldOut, sku: `SK${p.id}${i}`,
   }));
   return {
-    id: p.id, title: p.title, handle: `item-${p.id}`, product_type: p.type ?? 'Rings', vendor: 'Shop', tags: ['internal_tag_1', 'sale_2025'],
+    id: p.id, title: p.title, handle: `item-${p.id}`, product_type: p.type ?? 'Rings', vendor: 'Shop', tags: ['internal_tag_1', 'sale_2025', 'gifts_wife'],
     body_html: `<p>${p.title} in <b>925 silver</b>.</p>`,
     options: p.sizes ? [{ name: 'Size', values: p.sizes.map(String) }] : [{ name: 'Title', values: ['Default Title'] }],
     variants, images: [{ src: `https://cdn.example.test/${p.id}.jpg` }],
@@ -175,7 +175,7 @@ async function main() {
   const s1 = mapShopifyProduct(shopifyJson({ id: 5, title: 'Silver &amp; Gold Ring', price: 1999, compare: 7099 }), 'https://shop.test');
   expect(s1?.name === 'Silver & Gold Ring' && s1.price === '1999.00' && s1.regularPrice === '7099.00', 'Shopify: name decoded, price + crossed-out price', s1);
   expect(s1?.description === 'Silver & Gold Ring in 925 silver.' && s1.productUrl === 'https://shop.test/products/item-5', 'Shopify: description text and product link', s1);
-  expect(s1?.categories[0] === 'Rings' && s1.tags.length === 0 && s1.sku === 'SK50' && s1.stockStatus === 'in_stock', 'Shopify: type as category, internal tags left out, SKU, in stock', s1);
+  expect(s1?.categories[0] === 'Rings' && s1.tags.join() === 'Gift: Wife' && s1.sku === 'SK50' && s1.stockStatus === 'in_stock', 'Shopify: type as category, gift tag kept, internal tags left out, SKU, in stock', s1);
   const s2 = mapShopifyProduct(shopifyJson({ id: 6, title: 'Band', price: 1000, compare: 3000, sizes: [6, 7, 8], soldOut: true }), 'https://shop.test');
   expect(s2?.price === '1000.00' && s2.regularPrice === null && /Size: 6, 7, 8/.test(s2.description) && /lowest/.test(s2.description), 'Shopify with sizes: lowest price, sizes listed, no single crossed-out price', s2);
   expect(s2?.stockStatus === 'out_of_stock', 'Shopify: every option sold out → out of stock');

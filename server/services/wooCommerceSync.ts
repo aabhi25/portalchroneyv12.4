@@ -226,8 +226,8 @@ export async function syncWooCommerce(
                 ...fields,
                 externalSyncedAt: now,
                 updatedAt: now,
-                // A new name/description needs a new search fingerprint (made in one batch below).
-                ...(textChanged ? { textEmbedding: null, textEmbeddingGeneratedAt: null } : {}),
+                // A new name/description, type or tags needs a new search fingerprint (made in one batch below).
+                ...(textChanged || labelsChanged ? { textEmbedding: null, textEmbeddingGeneratedAt: null } : {}),
                 // A new photo needs new photo fingerprints (only used by photo search) and a new check for WhatsApp.
                 ...(!same(current.imageUrl, fields.imageUrl) ? { imageEmbedding: null, fullImageEmbedding: null, imageHash: null, visualDescription: null, messagingImageUrl: null, messagingImageFor: null } : {}),
               })
@@ -235,6 +235,8 @@ export async function syncWooCommerce(
             if (!same(current.imageUrl, fields.imageUrl)) staleCopies.push(current);
             updated++;
           } else if (labelsChanged) {
+            // The search fingerprint includes type and tags, so it is remade too.
+            await db.update(products).set({ textEmbedding: null, textEmbeddingGeneratedAt: null }).where(eq(products.id, current.id));
             updated++;
           } else {
             unchanged++;
