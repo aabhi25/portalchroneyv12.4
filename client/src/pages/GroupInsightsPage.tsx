@@ -34,7 +34,8 @@ import {
   TrendingUp,
   FileText,
   Loader2,
-  Users
+  Users,
+  CheckCircle2
 } from "lucide-react";
 
 type DateFilterType = "today" | "yesterday" | "last7days" | "currentMonth" | "lastMonth" | "custom" | "lifetime";
@@ -52,6 +53,9 @@ interface GroupInsights {
   totals: {
     leads: number;
     whatsappLeads?: number;
+    /** Of those, how many are in LeadSquared. */
+    leadsSynced?: number;
+    whatsappLeadsSynced?: number;
     conversations: number;
     visitors: number;
     products: number;
@@ -62,11 +66,17 @@ interface GroupInsights {
     businessName: string;
     leads: number;
     whatsappLeads?: number;
+    /** Of those, how many are in LeadSquared. */
+    leadsSynced?: number;
+    whatsappLeadsSynced?: number;
     conversations: number;
     visitors: number;
     products: number;
     faqs: number;
+    leadsquaredEnabled?: boolean;
   }[];
+  /** Accounts in the group with LeadSquared switched on (0 = no LeadSquared figures). */
+  leadsquaredAccounts?: number;
 }
 
 interface AccountGroup {
@@ -240,6 +250,13 @@ export default function GroupInsightsPage() {
 
   // WhatsApp leads are shown only when the group has some in this period.
   const showWhatsappLeads = (groupInsights?.totals.whatsappLeads ?? 0) > 0;
+  // "Synced to LeadSquared" only for groups where some account uses LeadSquared.
+  const showSynced = (groupInsights?.leadsquaredAccounts ?? 0) > 0;
+  const syncedOf = (x: { leads: number; whatsappLeads?: number; leadsSynced?: number; whatsappLeadsSynced?: number }) => ({
+    total: x.leads + (x.whatsappLeads ?? 0),
+    synced: (x.leadsSynced ?? 0) + (x.whatsappLeadsSynced ?? 0),
+  });
+  const pctOf = (part: number, whole: number) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—");
 
   const downloadPDF = async () => {
     if (!groupInsights || !group) return;
@@ -529,7 +546,7 @@ export default function GroupInsightsPage() {
             </div>
           ) : groupInsights ? (
             <>
-              <div className={`grid gap-4 ${showWhatsappLeads ? "grid-cols-2 lg:grid-cols-5" : "grid-cols-3"}`}>
+              <div className={`grid gap-4 ${showWhatsappLeads ? (showSynced ? "grid-cols-2 lg:grid-cols-3" : "grid-cols-2 lg:grid-cols-5") : showSynced ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-3"}`}>
                 {showWhatsappLeads && (
                   <Card className="col-span-2 lg:col-span-1">
                     <CardContent className="pt-6 text-center">
@@ -542,6 +559,21 @@ export default function GroupInsightsPage() {
                     </CardContent>
                   </Card>
                 )}
+                {showSynced && (() => {
+                  const t = syncedOf(groupInsights.totals);
+                  return (
+                    <Card className={showWhatsappLeads ? "" : "col-span-2 lg:col-span-1"} data-testid="group-insights-synced">
+                      <CardContent className="pt-6 text-center">
+                        <div className="flex items-center justify-center gap-1.5 text-muted-foreground mb-2">
+                          <CheckCircle2 className="w-5 h-5 flex-shrink-0 text-emerald-600" />
+                          <span className="text-sm font-medium">Synced to LeadSquared</span>
+                        </div>
+                        <div className="text-3xl font-bold text-emerald-700">{t.synced}</div>
+                        <p className="text-xs text-muted-foreground mt-1">{pctOf(t.synced, t.total)} of {t.total} total leads</p>
+                      </CardContent>
+                    </Card>
+                  );
+                })()}
                 <Card>
                   <CardContent className="pt-6 text-center">
                     <div className="flex items-center justify-center gap-1.5 text-muted-foreground mb-2">
@@ -605,6 +637,9 @@ export default function GroupInsightsPage() {
                             {showWhatsappLeads && (
                               <th className="text-center p-3 font-medium whitespace-nowrap">Total leads</th>
                             )}
+                            {showSynced && (
+                              <th className="text-center p-3 font-medium whitespace-nowrap">Synced to LSQ</th>
+                            )}
                             <th className="text-center p-3 font-medium whitespace-nowrap">Chats</th>
                             <th className="text-center p-3 font-medium whitespace-nowrap">Conv. Rate</th>
                           </tr>
@@ -625,6 +660,16 @@ export default function GroupInsightsPage() {
                               {showWhatsappLeads && (
                                 <td className="text-center p-3 font-semibold">{account.leads + (account.whatsappLeads ?? 0)}</td>
                               )}
+                              {showSynced && (() => {
+                                const a = syncedOf(account);
+                                return (
+                                  <td className="text-center p-3 font-medium whitespace-nowrap">
+                                    {account.leadsquaredEnabled || a.synced > 0
+                                      ? <>{a.synced} <span className="text-xs font-normal text-muted-foreground">({pctOf(a.synced, a.total)})</span></>
+                                      : <span className="text-muted-foreground" title="LeadSquared is off for this account">—</span>}
+                                  </td>
+                                );
+                              })()}
                               <td className="text-center p-3 font-medium">{account.conversations}</td>
                               <td className="text-center p-3 font-medium">
                                 {account.conversations > 0

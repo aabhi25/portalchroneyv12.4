@@ -586,6 +586,8 @@ export interface IStorage {
     totals: {
       leads: number;
       whatsappLeads: number;
+      leadsSynced: number;
+      whatsappLeadsSynced: number;
       conversations: number;
       visitors: number;
       products: number;
@@ -596,11 +598,15 @@ export interface IStorage {
       businessName: string;
       leads: number;
       whatsappLeads: number;
+      leadsSynced: number;
+      whatsappLeadsSynced: number;
       conversations: number;
       visitors: number;
       products: number;
       faqs: number;
+      leadsquaredEnabled: boolean;
     }[];
+    leadsquaredAccounts: number;
   }>;
   
   // Group Training methods
@@ -5543,6 +5549,9 @@ export class DatabaseStorage implements IStorage {
     totals: {
       leads: number;
       whatsappLeads: number;
+      /** Of those, how many are in LeadSquared (website / WhatsApp). */
+      leadsSynced: number;
+      whatsappLeadsSynced: number;
       conversations: number;
       visitors: number;
       products: number;
@@ -5553,25 +5562,39 @@ export class DatabaseStorage implements IStorage {
       businessName: string;
       leads: number;
       whatsappLeads: number;
+      /** Of those, how many are in LeadSquared (website / WhatsApp). */
+      leadsSynced: number;
+      whatsappLeadsSynced: number;
       conversations: number;
       visitors: number;
       products: number;
       faqs: number;
+      leadsquaredEnabled: boolean;
     }[];
+    /** How many accounts of the group have LeadSquared switched on. */
+    leadsquaredAccounts: number;
   }> {
     const accountBreakdown: {
       businessAccountId: string;
       businessName: string;
       leads: number;
       whatsappLeads: number;
+      /** Of those, how many are in LeadSquared (website / WhatsApp). */
+      leadsSynced: number;
+      whatsappLeadsSynced: number;
       conversations: number;
       visitors: number;
       products: number;
       faqs: number;
+      leadsquaredEnabled: boolean;
     }[] = [];
     
     let totalLeads = 0;
     let totalWhatsappLeads = 0;
+    let totalLeadsSynced = 0;
+    let totalWhatsappLeadsSynced = 0;
+    const lsqOn = new Set((await db.select({ id: widgetSettings.businessAccountId }).from(widgetSettings)
+      .where(and(inArray(widgetSettings.businessAccountId, accountIds), eq(widgetSettings.leadsquaredEnabled, 'true')))).map(r => r.id));
     let totalConversations = 0;
     let totalVisitors = 0;
     let totalProducts = 0;
@@ -5597,13 +5620,16 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get unique lead count (by email, or phone if no email)
-      const [leadResult] = await db
-        .select({ 
-          count: sql<number>`COUNT(DISTINCT CASE 
+      // ...and of those, the ones in LeadSquared (same de-duplication).
+      const leadKey = sql`CASE 
             WHEN ${leads.email} IS NOT NULL AND ${leads.email} != '' THEN ${leads.email}
             WHEN ${leads.phone} IS NOT NULL AND ${leads.phone} != '' THEN ${leads.phone}
             ELSE ${leads.id}::text
-          END)::integer` 
+          END`;
+      const [leadResult] = await db
+        .select({ 
+          count: sql<number>`COUNT(DISTINCT ${leadKey})::integer`,
+          synced: sql<number>`COUNT(DISTINCT CASE WHEN ${leads.leadsquaredSyncStatus} = 'synced' THEN ${leadKey} END)::integer`,
         })
         .from(leads)
         .where(and(...leadConditions));
@@ -5671,8 +5697,8 @@ export class DatabaseStorage implements IStorage {
       // not just a message, and (if the account requires PAN + email) qualified.
       const { isQualificationRequired } = await import('./services/leadQualificationService');
       const qualifiedOnly = await isQualificationRequired(accountId);
-      const waResult = await db.execute<{ n: number }>(sql`
-        SELECT COUNT(*)::int AS n FROM whatsapp_leads
+      const waResult = await db.execute<{ n: number; synced: number }>(sql`
+        SELECT COUNT(*)::int AS n, (COUNT(*) FILTER (WHERE leadsquared_sync_status = 'synced'))::int AS synced FROM whatsapp_leads
         WHERE business_account_id = ${accountId}
           AND direction = 'incoming' AND status != 'message_only'
           ${qualifiedOnly ? sql`AND qualified_at IS NOT NULL` : sql``}
@@ -5680,22 +5706,29 @@ export class DatabaseStorage implements IStorage {
           ${dateTo ? sql`AND received_at <= ${dateTo}` : sql``}
       `);
       const whatsappLeadCount = Number(waResult.rows[0]?.n ?? 0);
+      const whatsappSyncedCount = Number(waResult.rows[0]?.synced ?? 0);
 
       const accountMetrics = {
         businessAccountId: accountId,
         businessName: account.name,
         leads: (leadResult?.count || 0) + purged.leads.total,
         whatsappLeads: whatsappLeadCount,
+        // Leads removed by auto-delete keep no CRM status, so they aren't counted as synced.
+        leadsSynced: Number(leadResult?.synced || 0),
+        whatsappLeadsSynced: whatsappSyncedCount,
         conversations: (conversationResult?.count || 0) + purged.conversations.total,
         visitors: visitorCount,
         products: productResult?.count || 0,
         faqs: faqResult?.count || 0,
+        leadsquaredEnabled: lsqOn.has(accountId),
       };
       
       accountBreakdown.push(accountMetrics);
       
       totalLeads += accountMetrics.leads;
       totalWhatsappLeads += accountMetrics.whatsappLeads;
+      totalLeadsSynced += accountMetrics.leadsSynced;
+      totalWhatsappLeadsSynced += accountMetrics.whatsappLeadsSynced;
       totalConversations += accountMetrics.conversations;
       totalVisitors += accountMetrics.visitors;
       totalProducts += accountMetrics.products;
@@ -5706,12 +5739,15 @@ export class DatabaseStorage implements IStorage {
       totals: {
         leads: totalLeads,
         whatsappLeads: totalWhatsappLeads,
+        leadsSynced: totalLeadsSynced,
+        whatsappLeadsSynced: totalWhatsappLeadsSynced,
         conversations: totalConversations,
         visitors: totalVisitors,
         products: totalProducts,
         faqs: totalFaqs,
       },
       accountBreakdown,
+      leadsquaredAccounts: lsqOn.size,
     };
   }
 

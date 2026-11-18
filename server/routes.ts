@@ -12099,12 +12099,15 @@ Return ONLY the refined instruction, nothing else.`
           totals: {
             leads: 0,
             whatsappLeads: 0,
+            leadsSynced: 0,
+            whatsappLeadsSynced: 0,
             conversations: 0,
             visitors: 0,
             products: 0,
             faqs: 0,
           },
           accountBreakdown: [],
+          leadsquaredAccounts: 0,
         });
       }
       
