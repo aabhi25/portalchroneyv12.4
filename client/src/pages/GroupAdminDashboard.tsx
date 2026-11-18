@@ -502,6 +502,8 @@ export default function GroupAdminDashboard() {
   const whatsappLeadsTotal = whatsappLeadsQuery.data?.pages[0]?.total ?? 0;
   const showingWhatsapp = leadsChannel === 'whatsapp';
   const [openWaLeadId, setOpenWaLeadId] = useState<string | null>(null);
+  // WhatsApp chat opened from a lead (popup on the Leads page).
+  const [leadChat, setLeadChat] = useState<GroupWhatsappChat | null>(null);
   const openWaLead = whatsappLeads.find(l => l.id === openWaLeadId) ?? null;
   const [isExportingWaLeads, setIsExportingWaLeads] = useState(false);
   const syncWaLeadMutation = useMutation({
@@ -1732,10 +1734,29 @@ export default function GroupAdminDashboard() {
           onSync={(lead) => syncWaLeadMutation.mutate(lead)}
           syncing={syncWaLeadMutation.isPending && syncWaLeadMutation.variables?.id === openWaLead?.id}
           onOpenChat={selectedGroup?.canViewConversations ? (lead) => {
-            setOpenWaLeadId(null);
-            setLocation(`/group-admin/conversations?wa=${lead.businessAccountId}&key=${encodeURIComponent(lead.chatKey!)}`);
+            // The chat opens in a popup over the Leads page (the lead panel stays behind it).
+            setLeadChat({
+              phoneKey: lead.chatKey!, senderPhone: lead.phone, businessAccountId: lead.businessAccountId,
+              businessAccountName: lead.businessAccountName, name: lead.name, messageCount: 0,
+              lastMessage: lead.lastMessage, lastMessageAt: lead.capturedAt, firstMessageAt: "", isLead: true,
+            });
           } : undefined}
         />
+
+        <Dialog open={!!leadChat} onOpenChange={(open) => { if (!open) setLeadChat(null); }}>
+          <DialogContent className="flex h-[85vh] w-full max-w-2xl flex-col gap-0 overflow-hidden p-0" data-testid="group-lead-whatsapp-chat">
+            <DialogTitle className="sr-only">WhatsApp chat</DialogTitle>
+            {leadChat && selectedGroupId && (
+              <GroupWhatsappChatThread
+                key={`${leadChat.businessAccountId}:${leadChat.phoneKey}`}
+                groupId={selectedGroupId}
+                chat={leadChat}
+                onBack={() => setLeadChat(null)}
+                inDialog
+              />
+            )}
+          </DialogContent>
+        </Dialog>
 
         <TabsContent value="conversations" className="mt-0 flex-1 flex flex-col">
           {!selectedGroup?.canViewConversations ? (

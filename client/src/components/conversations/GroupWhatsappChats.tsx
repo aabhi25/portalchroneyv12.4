@@ -136,10 +136,12 @@ export function GroupWhatsappChatList({ chats, total, page, onPage, loading, sel
 }
 
 /** One WhatsApp chat, read-only: the student's messages on the left, the account's replies on the right. */
-export function GroupWhatsappChatThread({ groupId, chat, onBack }: {
+export function GroupWhatsappChatThread({ groupId, chat, onBack, inDialog = false }: {
   groupId: string;
   chat: GroupWhatsappChat;
   onBack: () => void;
+  /** Shown in a popup (Leads page): room for the popup's close button, no "All WhatsApp chats" link. */
+  inDialog?: boolean;
 }) {
   const query = useInfiniteQuery<{ messages: GroupWhatsappMessage[]; name: string | null; senderPhone: string; hasMore: boolean; oldestTimestamp: string | null }>({
     queryKey: ["/api/group-admin/groups", groupId, "conversations", "whatsapp", chat.businessAccountId, chat.phoneKey],
@@ -166,15 +168,17 @@ export function GroupWhatsappChatThread({ groupId, chat, onBack }: {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={onBack}
-        className="md:hidden flex items-center gap-1 border-b border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-green-700"
-      >
-        <ChevronLeft className="w-4 h-4" />
-        All WhatsApp chats
-      </button>
-      <div className="flex items-center gap-3 border-b border-gray-200 bg-white px-4 py-2.5">
+      {!inDialog && (
+        <button
+          type="button"
+          onClick={onBack}
+          className="md:hidden flex items-center gap-1 border-b border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-green-700"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          All WhatsApp chats
+        </button>
+      )}
+      <div className={`flex items-center gap-3 border-b border-gray-200 bg-white py-2.5 pl-4 ${inDialog ? "pr-12" : "pr-4"}`}>
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-green-500 to-emerald-600">
           <FaWhatsapp className="h-4 w-4 text-white" />
         </div>
