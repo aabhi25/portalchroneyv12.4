@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, Gem, Heart, Loader2, RefreshCw, Send, Share2, Sparkles, User, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Gem, Heart, Loader2, RefreshCw, Send, Share2, Sparkles, User, X } from "lucide-react";
 import { motifTilePhoto, type DesignChoices, type DesignImage, type DesignStudioPublicConfig, type MotifSuggestion, type PieceId, type PriceRange, type TierId, type VoteTally } from "@shared/designStudio";
 
 /**
@@ -71,7 +71,7 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
   const [choices, setChoices] = useState<DesignChoices>({});
   const [advice, setAdvice] = useState<{ intro: string; suggestions: MotifSuggestion[] } | null>(null);
   const [adviceLoading, setAdviceLoading] = useState(false);
-  const [showAllMotifs, setShowAllMotifs] = useState(false);
+  const motifCarousel = useRef<HTMLDivElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [change, setChange] = useState("");
   const [busy, setBusy] = useState(false);
@@ -190,7 +190,6 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
       setAdvice(await call(`sessions/${session.id}/motifs`, { choices: next }));
     } catch {
       setAdvice({ intro: "Pick a motif you like:", suggestions: [] });
-      setShowAllMotifs(true);
     } finally {
       setAdviceLoading(false);
     }
@@ -380,30 +379,53 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
     ) : null;
   };
 
-  const motifTile = (id: string, why?: string) => {
-    const m = motifOf(id);
-    if (!m) return null;
-    const active = choices.motifId === id;
-    // The brand's own photo of the motif, else one of its products with the motif (in the piece being designed when there is one).
-    const photo = brokenPhotos.has(`motif:${id}`) ? null : motifTilePhoto(m, choices.piece);
+  type MotifOption = DesignStudioPublicConfig["motifs"][number];
+  /** The brand's own photo of the motif, else one of its products with the motif (in the piece being designed when there is one). */
+  const motifPhoto = (m: MotifOption) => (brokenPhotos.has(`motif:${m.id}`) ? null : motifTilePhoto(m, choices.piece));
+
+  /** A motif with a photo: a large card in the carousel. */
+  const motifCard = (m: MotifOption, why?: string) => {
+    const active = choices.motifId === m.id;
     return (
       <button
-        key={id} type="button" onClick={() => set({ motifId: id })} data-testid={`design-motif-${id}`}
-        className={`flex items-center gap-3 rounded-xl border bg-white p-2.5 text-left transition-all ${active ? "shadow-sm" : "border-gray-200 hover:border-gray-400"}`}
+        key={m.id} type="button" onClick={() => set({ motifId: m.id })} data-testid={`design-motif-${m.id}`}
+        className={`relative w-[62%] max-w-[240px] shrink-0 snap-start overflow-hidden rounded-2xl border bg-white text-left transition-all ${active ? "shadow-md" : "border-gray-200 hover:border-gray-400"}`}
+        style={active ? { borderColor: chatColor, boxShadow: `0 0 0 1.5px ${chatColor}` } : undefined}
+      >
+        <span className="block aspect-square w-full bg-gray-50">
+          <img src={motifPhoto(m)!} alt="" loading="lazy" className="h-full w-full object-cover" onError={() => setBrokenPhotos(prev => new Set(prev).add(`motif:${m.id}`))} />
+        </span>
+        {why && <span className="absolute left-2 top-2 rounded-full bg-white/95 px-2 py-0.5 text-[10.5px] font-semibold shadow-sm" style={{ color: chatColor }}>Suggested</span>}
+        {active && <span className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full text-white shadow-sm" style={{ background: chatColor }}><Check className="h-3.5 w-3.5" /></span>}
+        <span className="block px-3 py-2.5">
+          <span className="block text-[14px] font-semibold text-gray-900">{m.name}</span>
+          <span className="mt-0.5 block text-[12px] leading-snug text-gray-600">{why || m.meaning}</span>
+        </span>
+      </button>
+    );
+  };
+
+  /** A suggested motif with no photo: its name and the reason, with no empty picture box. */
+  const motifRow = (m: MotifOption, why: string) => {
+    const active = choices.motifId === m.id;
+    return (
+      <button
+        key={m.id} type="button" onClick={() => set({ motifId: m.id })} data-testid={`design-motif-${m.id}`}
+        className={`flex items-center gap-3 rounded-xl border bg-white px-3 py-2.5 text-left transition-all ${active ? "shadow-sm" : "border-gray-200 hover:border-gray-400"}`}
         style={active ? { borderColor: chatColor, boxShadow: `0 0 0 1px ${chatColor}` } : undefined}
       >
-        <span className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-lg bg-gray-50">
-          {photo
-            ? <img src={photo} alt="" loading="lazy" className="h-full w-full object-cover" onError={() => setBrokenPhotos(prev => new Set(prev).add(`motif:${id}`))} />
-            : <Sparkles className="h-5 w-5" style={{ color: chatColor }} strokeWidth={1.5} />}
-        </span>
         <span className="min-w-0 flex-1">
           <span className="block text-[13.5px] font-semibold text-gray-900">{m.name}</span>
-          <span className="block text-[12px] leading-snug text-gray-600">{why || m.meaning}</span>
+          <span className="block text-[12px] leading-snug text-gray-600">{why}</span>
         </span>
         {active && <Check className="h-4 w-4 shrink-0" style={{ color: chatColor }} />}
       </button>
     );
+  };
+
+  const slideMotifs = (direction: 1 | -1) => {
+    const el = motifCarousel.current;
+    if (el) el.scrollBy({ left: direction * el.clientWidth * 0.65, behavior: "smooth" });
   };
 
   const renderStep = () => {
@@ -446,16 +468,46 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
     }
     if (step === "motif") {
       const suggested = advice?.suggestions ?? [];
-      const others = config.motifs.filter(m => !suggested.some(s => s.motifId === m.id));
+      const whyOf = (id: string) => suggested.find(x => x.motifId === id)?.why;
+      // The AI's suggestions first, in its order, then the rest.
+      const ordered = [
+        ...suggested.map(x => motifOf(x.motifId)).filter((m): m is MotifOption => !!m),
+        ...config.motifs.filter(m => !suggested.some(x => x.motifId === m.id)),
+      ];
+      // Motifs with a photo go in the carousel. Those without one are listed in words, so nothing shows an empty picture.
+      const pictured = ordered.filter(m => motifPhoto(m));
+      const plain = ordered.filter(m => !motifPhoto(m));
+      const plainSuggested = plain.filter(m => whyOf(m.id));
+      const plainOthers = plain.filter(m => !whyOf(m.id));
+      const chosenPlain = plainOthers.find(m => m.id === choices.motifId);
+      const arrow = "absolute top-[34%] hidden h-8 w-8 place-items-center rounded-full border border-gray-200 bg-white text-gray-700 shadow-md [@media(hover:hover)]:grid";
       return (
         <>
           {guide(adviceLoading ? "Thinking about what would suit…" : advice?.intro || "Pick a motif you like:")}
           {adviceLoading && <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-gray-400" /></div>}
-          <div className="grid gap-2">{suggested.map(s => motifTile(s.motifId, s.why))}</div>
-          {!adviceLoading && others.length > 0 && (
-            showAllMotifs || suggested.length === 0
-              ? <div className="mt-2 grid gap-2">{others.map(m => motifTile(m.id))}</div>
-              : <button type="button" onClick={() => setShowAllMotifs(true)} className="mt-2 flex items-center gap-1 text-[13px] font-medium" style={{ color: chatColor }} data-testid="design-more-motifs">See all motifs <ChevronRight className="h-3.5 w-3.5" /></button>
+          {!adviceLoading && pictured.length > 0 && (
+            <div className="relative -mx-3">
+              <div
+                ref={motifCarousel} data-testid="design-motif-carousel"
+                className="flex snap-x snap-mandatory scroll-px-3 gap-2.5 overflow-x-auto px-3 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
+                {pictured.map(m => motifCard(m, whyOf(m.id)))}
+              </div>
+              {pictured.length > 1 && (
+                <>
+                  <button type="button" onClick={() => slideMotifs(-1)} className={`${arrow} left-1.5`} aria-label="Earlier motifs" data-testid="design-motifs-back"><ChevronLeft className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => slideMotifs(1)} className={`${arrow} right-1.5`} aria-label="More motifs" data-testid="design-motifs-next"><ChevronRight className="h-4 w-4" /></button>
+                </>
+              )}
+            </div>
+          )}
+          {!adviceLoading && plainSuggested.length > 0 && <div className="mt-2 grid gap-2">{plainSuggested.map(m => motifRow(m, whyOf(m.id)!))}</div>}
+          {!adviceLoading && plainOthers.length > 0 && (
+            <>
+              <p className="mb-1.5 mt-3 text-[12px] font-semibold uppercase tracking-wide text-gray-500">{pictured.length + plainSuggested.length > 0 ? "More motifs" : "Motifs"}</p>
+              <div className="flex flex-wrap gap-1.5">{plainOthers.map(m => chip(m.name, choices.motifId === m.id, () => set({ motifId: m.id }), `design-motif-${m.id}`))}</div>
+              {chosenPlain && <p className="mt-1.5 text-[12.5px] text-gray-600" data-testid="design-motif-meaning">{chosenPlain.meaning}</p>}
+            </>
           )}
           <p className="mb-1.5 mt-4 text-[12px] font-semibold uppercase tracking-wide text-gray-500">Your own idea (optional)</p>
           <textarea
@@ -691,7 +743,7 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
 
   const nextButton = () => {
     if (step === "who") {
-      return primary("Suggest motifs", () => { setShowAllMotifs(false); setStep("motif"); askAdvice(choices); }, !choices.recipient || !choices.occasion, "design-next-who");
+      return primary("Suggest motifs", () => { setStep("motif"); askAdvice(choices); }, !choices.recipient || !choices.occasion, "design-next-who");
     }
     if (step === "motif") return primary("Next", () => setStep("material"), !choices.motifId && !(choices.idea && choices.idea.trim().length >= 3), "design-next-motif");
     if (step === "material") return primary(busy ? "Starting…" : "Show my designs", drawDesigns, !choices.metalId || !choices.stoneId || !choices.tier, "design-draw");
