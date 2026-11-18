@@ -653,9 +653,13 @@ export interface IStorage {
     fromDate?: Date;
     toDate?: Date;
     accountId?: string;
+    includeUniqueLeads?: boolean;
   }): Promise<{
     leads: (Lead & { businessAccountName: string })[];
     total: number;
+    uniqueLeads?: number;
+    /** Of `total`, how many are in LeadSquared. */
+    syncedToLeadsquared: number;
   }>;
   
   // Discount Rules methods (Smart Behavioral Discounts)
@@ -5947,9 +5951,10 @@ export class DatabaseStorage implements IStorage {
     leads: (Lead & { businessAccountName: string })[];
     total: number;
     uniqueLeads?: number;
+    syncedToLeadsquared: number;
   }> {
     if (accountIds.length === 0) {
-      return { leads: [], total: 0, uniqueLeads: filters?.includeUniqueLeads ? 0 : undefined };
+      return { leads: [], total: 0, uniqueLeads: filters?.includeUniqueLeads ? 0 : undefined, syncedToLeadsquared: 0 };
     }
     
     const whereClause = this.groupLeadsWhere(accountIds, filters);
@@ -5958,7 +5963,10 @@ export class DatabaseStorage implements IStorage {
     // deduplicate per-account by email → phone → id, then sum across accounts.
     const shouldCountUnique = filters?.includeUniqueLeads === true;
     const countQueries: Promise<any>[] = [
-      db.select({ count: count() }).from(leads).where(whereClause).then(r => r[0]),
+      db.select({
+        count: count(),
+        synced: sql<number>`count(*) FILTER (WHERE ${leads.leadsquaredSyncStatus} = 'synced')`.mapWith(Number),
+      }).from(leads).where(whereClause).then(r => r[0]),
     ];
     if (shouldCountUnique) {
       const whereSQL = whereClause ? sql`WHERE ${whereClause}` : sql``;
@@ -5982,6 +5990,7 @@ export class DatabaseStorage implements IStorage {
     const [countResult, uniqueLeadsResult] = await Promise.all(countQueries);
     
     const total = countResult?.count || 0;
+    const syncedToLeadsquared = countResult?.synced || 0;
     const uniqueLeads = shouldCountUnique ? (uniqueLeadsResult?.uniqueCount ?? 0) : undefined;
     
     // Get leads with business account names
@@ -6007,6 +6016,7 @@ export class DatabaseStorage implements IStorage {
       })),
       total,
       uniqueLeads,
+      syncedToLeadsquared,
     };
   }
 

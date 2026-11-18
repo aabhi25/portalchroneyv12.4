@@ -13812,12 +13812,12 @@ Return ONLY the refined instruction, nothing else.`
       // Get business account IDs for this group
       const accountIds = await getGroupAdminAccountIdsForGroup(req.user!.id, groupId);
       if (accountIds.length === 0) {
-        return res.json({ leads: [], total: 0, uniqueLeads: 0, page, limit });
+        return res.json({ leads: [], total: 0, uniqueLeads: 0, syncedToLeadsquared: 0, leadsquaredAccounts: 0, page, limit });
       }
       
       // Get leads for all accounts in this group with filters
       // Only compute uniqueLeads on first page (offset === 0) to avoid repeated queries
-      const { leads, total, uniqueLeads } = await storage.getLeadsForAccounts(accountIds, limit, offset, {
+      const { leads, total, uniqueLeads, syncedToLeadsquared } = await storage.getLeadsForAccounts(accountIds, limit, offset, {
         ...filters,
         includeUniqueLeads: !exportAll && offset === 0,
       });
@@ -13833,10 +13833,17 @@ Return ONLY the refined instruction, nothing else.`
       // Same extras as the business Leads table: real interests, journey name and answers.
       await addWebsiteLeadExtras(protectedLeads as Array<Record<string, any>>, maskedAccountIds);
       
+      // Accounts using LeadSquared (the page shows "Synced to LeadSquared" only when there are any).
+      const leadsquaredAccounts = offset === 0 && !exportAll
+        ? (await db.select({ id: widgetSettings.businessAccountId }).from(widgetSettings)
+            .where(and(inArray(widgetSettings.businessAccountId, accountIds), eq(widgetSettings.leadsquaredEnabled, 'true')))).length
+        : undefined;
       res.json({
         leads: protectedLeads,
         total,
         uniqueLeads,
+        syncedToLeadsquared,
+        leadsquaredAccounts,
         page,
         limit: exportAll ? total : limit,
         hasMore: exportAll ? false : offset + protectedLeads.length < total,
@@ -13866,7 +13873,7 @@ Return ONLY the refined instruction, nothing else.`
       const fromDateStr = req.query.fromDate as string | undefined;
       const toDateStr = req.query.toDate as string | undefined;
       const { queryGroupWhatsappLeads } = await import("./services/unifiedLeadsService");
-      const { leads: rows, total } = await queryGroupWhatsappLeads(accountIds, {
+      const { leads: rows, total, syncedToLeadsquared } = await queryGroupWhatsappLeads(accountIds, {
         search: (req.query.search as string | undefined) || undefined,
         from: fromDateStr ? new Date(fromDateStr) : undefined,
         to: toDateStr ? new Date(toDateStr) : undefined,
@@ -13910,7 +13917,14 @@ Return ONLY the refined instruction, nothing else.`
         lastMessage: r.detail.lastMessage ?? null,
         extractedData: r.detail.extractedData ?? {},
       }));
-      res.json({ leads, total, page, limit, hasMore: !exportAll && (page - 1) * limit + leads.length < total });
+      // Accounts whose WhatsApp leads go to LeadSquared (first page only: it is the same for every page).
+      let leadsquaredAccounts: number | undefined;
+      if (page === 1 && !exportAll) {
+        const { whatsappLsqConfigured } = await import("./services/whatsappLeadLsqSync");
+        leadsquaredAccounts = 0;
+        for (const id of accountIds) if (await whatsappLsqConfigured(id)) leadsquaredAccounts++;
+      }
+      res.json({ leads, total, syncedToLeadsquared, leadsquaredAccounts, page, limit, hasMore: !exportAll && (page - 1) * limit + leads.length < total });
     } catch (error: any) {
       console.error('[Group Admin] Error fetching WhatsApp leads:', error);
       res.status(500).json({ error: error.message });

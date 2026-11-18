@@ -52,6 +52,10 @@ import { useGroupAdminGroupId, useStickyDate, useStickyState } from "@/lib/stick
 import { GroupWhatsappChatList, GroupWhatsappChatThread, useGroupWhatsappChats, type GroupWhatsappChat } from "@/components/conversations/GroupWhatsappChats";
 
 type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'currentMonth' | 'lastMonth' | 'custom';
+const DATE_PRESET_LABEL: Record<DatePreset, string> = {
+  all: 'All time', today: 'Today', yesterday: 'Yesterday', last7: 'Last 7 days',
+  currentMonth: 'This month', lastMonth: 'Last month', custom: 'Custom range',
+};
 
 interface GroupAssignment {
   groupId: string;
@@ -250,7 +254,8 @@ export default function GroupAdminDashboard() {
   const [leadsSearch, setLeadsSearch] = useState("");
   // Date and account filters are shared by Leads and Conversations (and the account with Insights),
   // and remembered while this browser tab is open.
-  const [leadsDatePreset, setLeadsDatePreset] = useStickyState<DatePreset>("groupAdmin.filters.datePreset", "all");
+  // Opens on Today (a choice is kept for this browser tab); "All Time" is one click away.
+  const [leadsDatePreset, setLeadsDatePreset] = useStickyState<DatePreset>("groupAdmin.filters.datePreset.v2", "today");
   const [leadsFromDate, setLeadsFromDate] = useStickyDate("groupAdmin.filters.from");
   const [leadsToDate, setLeadsToDate] = useStickyDate("groupAdmin.filters.to");
   const [leadsAccountFilter, setLeadsAccountFilter] = useStickyState<string>("groupAdmin.filters.account", "all");
@@ -464,6 +469,8 @@ export default function GroupAdminDashboard() {
     total: number;
     hasMore: boolean;
     uniqueLeads?: number;
+    syncedToLeadsquared?: number;
+    leadsquaredAccounts?: number;
   }>({
     queryKey: ["/api/group-admin/groups", selectedGroupId, "leads", leadsQueryParams],
     queryFn: async ({ pageParam = 1 }) => {
@@ -480,7 +487,7 @@ export default function GroupAdminDashboard() {
   });
 
   // WhatsApp leads, same filters. The first page also gives the count on the switch.
-  const whatsappLeadsQuery = useInfiniteQuery<{ leads: GroupWhatsappLead[]; total: number; hasMore: boolean }>({
+  const whatsappLeadsQuery = useInfiniteQuery<{ leads: GroupWhatsappLead[]; total: number; hasMore: boolean; syncedToLeadsquared?: number; leadsquaredAccounts?: number }>({
     queryKey: ["/api/group-admin/groups", selectedGroupId, "leads", "whatsapp", leadsQueryParams],
     queryFn: async ({ pageParam = 1 }) => {
       const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads/whatsapp?${leadsQueryParams}&page=${pageParam}`, { credentials: "include" });
@@ -537,6 +544,16 @@ export default function GroupAdminDashboard() {
   const allLeads = useMemo(() => leadsInfiniteData?.pages.flatMap(p => p.leads) || [], [leadsInfiniteData]);
   const leadsTotal = leadsInfiniteData?.pages[0]?.total || 0;
   const leadsUniqueLeads = leadsInfiniteData?.pages[0]?.uniqueLeads ?? null;
+  // Summary cards: website + WhatsApp leads for these filters, and how many are in LeadSquared.
+  const leadSummary = useMemo(() => {
+    const web = leadsInfiniteData?.pages[0];
+    const wa = whatsappLeadsQuery.data?.pages[0];
+    if (!web && !wa) return null;
+    const total = (web?.total ?? 0) + (wa?.total ?? 0);
+    const synced = (web?.syncedToLeadsquared ?? 0) + (wa?.syncedToLeadsquared ?? 0);
+    const usesLsq = (web?.leadsquaredAccounts ?? 0) + (wa?.leadsquaredAccounts ?? 0) > 0;
+    return { total, synced, usesLsq, web: web?.total ?? 0, wa: wa?.total ?? 0 };
+  }, [leadsInfiniteData, whatsappLeadsQuery.data]);
 
   // Columns of the Leads table: chosen for the whole group (any admin who can view leads).
   const leadColumnsQueryKey = ["/api/group-admin/groups", selectedGroupId, "leads", "table-columns"];
@@ -1242,6 +1259,25 @@ export default function GroupAdminDashboard() {
                   </div>
                 </div>
               </div>
+
+              {leadSummary && (
+                <div className={`grid gap-3 px-6 pt-4 bg-white ${leadSummary.usesLsq ? 'sm:grid-cols-2' : 'sm:max-w-sm'}`} data-testid="group-leads-summary">
+                  <div className="rounded-xl border border-gray-200 px-4 py-3">
+                    <p className="text-[13px] text-gray-500">Total leads <span className="text-gray-400">· {DATE_PRESET_LABEL[leadsDatePreset]}</span></p>
+                    <p className="mt-1 text-2xl font-semibold tabular-nums text-gray-900" data-testid="group-summary-total">{leadSummary.total.toLocaleString()}</p>
+                    <p className="text-xs text-gray-400">{leadSummary.web.toLocaleString()} website · {leadSummary.wa.toLocaleString()} WhatsApp</p>
+                  </div>
+                  {leadSummary.usesLsq && (
+                    <div className="rounded-xl border border-gray-200 px-4 py-3">
+                      <p className="text-[13px] text-gray-500">Synced to LeadSquared <span className="text-gray-400">· {DATE_PRESET_LABEL[leadsDatePreset]}</span></p>
+                      <p className="mt-1 flex items-baseline gap-2">
+                        <span className="text-2xl font-semibold tabular-nums text-emerald-700" data-testid="group-summary-synced">{leadSummary.synced.toLocaleString()}</span>
+                        <span className="text-[13px] text-gray-500">{leadSummary.total > 0 ? `${Math.round((leadSummary.synced / leadSummary.total) * 100)}% of ${leadSummary.total.toLocaleString()} leads` : 'of 0 leads'}</span>
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="px-6 pt-3 border-b border-gray-100 bg-white">
                 <div className="flex items-center gap-1" role="tablist" aria-label="Lead source">

@@ -5,6 +5,7 @@ import { isMaskedValue } from "@shared/contactMasking";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
+import { crmStatusLook } from "./LeadCrm";
 
 /** A WhatsApp lead as the group admin's Leads page lists it (/api/group-admin/groups/:id/leads/whatsapp). */
 export interface GroupWhatsappLead {
@@ -47,8 +48,9 @@ function leadDetails(lead: GroupWhatsappLead): string[] {
   return leadAnswers(lead).map(([k, v]) => `${k}: ${v}`);
 }
 
-const lsqLabel = (s: string | null) =>
-  !s ? "Not sent" : s === "synced" ? "Synced" : s === "failed" ? "Failed" : s === "pending" ? "Pending" : s === "needs_attention" ? "Needs attention" : s.charAt(0).toUpperCase() + s.slice(1);
+const lsqLabel = (s: string | null) => (!s ? "Not sent" : crmStatusLook(s).text);
+/** Held back on purpose (journey step not reached, junk-looking number): not an error. */
+const HELD = ["waiting", "waiting_journey", "invalid_phone"];
 
 /** Rows for the Excel export (same columns as the table, every answer as its own column). */
 export function whatsappLeadsExcelRows(leads: GroupWhatsappLead[]): Record<string, string>[] {
@@ -71,7 +73,7 @@ function LsqStatus({ lead, onSync, syncing }: { lead: GroupWhatsappLead; onSync?
   if (onSync && lead.canSyncLeadSquared && s !== "synced") {
     return (
       <div className="flex items-center gap-1.5">
-        {s && s !== "pending" && <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-700" title={formatCrmSyncError(lead.leadsquaredSyncError)}>{lsqLabel(s)}</span>}
+        {s && s !== "pending" && <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${HELD.includes(s) ? crmStatusLook(s).className : "bg-red-100 text-red-700"}`} title={HELD.includes(s) ? lead.leadsquaredSyncError || undefined : formatCrmSyncError(lead.leadsquaredSyncError)}>{lsqLabel(s)}</span>}
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); onSync(lead); }}
@@ -80,16 +82,16 @@ function LsqStatus({ lead, onSync, syncing }: { lead: GroupWhatsappLead; onSync?
           title="Send to LeadSquared"
         >
           <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
-          {s && s !== "pending" ? "Retry" : "Sync"}
+          {s && s !== "pending" && !HELD.includes(s) ? "Retry" : "Sync"}
         </button>
       </div>
     );
   }
   if (!s) return <span className="text-sm text-gray-400">—</span>;
-  const style = s === "synced" ? "bg-green-100 text-green-700" : s === "failed" ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600";
-  const label = s === "synced" ? "Synced" : s === "failed" ? "Failed" : s === "pending" ? "Pending" : s.charAt(0).toUpperCase() + s.slice(1);
+  const style = s === "synced" ? "bg-green-100 text-green-700" : s === "failed" ? "bg-red-100 text-red-700" : crmStatusLook(s).className;
+  const label = lsqLabel(s);
   return (
-    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${style}`} title={s === "failed" ? formatCrmSyncError(lead.leadsquaredSyncError) : undefined}>
+    <span className={`px-2 py-0.5 text-xs font-medium rounded-full whitespace-nowrap ${style}`} title={s === "failed" ? formatCrmSyncError(lead.leadsquaredSyncError) : HELD.includes(s) ? lead.leadsquaredSyncError || undefined : undefined}>
       {label}
     </span>
   );
@@ -268,11 +270,12 @@ export function GroupWhatsappLeadSheet({ lead, onClose, onSync, syncing, onOpenC
                       <p className="text-xs text-gray-500">{format(new Date(lead.leadsquaredSyncedAt), "MMM d, yyyy h:mm a")}</p>
                     )}
                     {lead.leadsquaredSyncStatus === "failed" && <p className="text-xs text-red-600">{formatCrmSyncError(lead.leadsquaredSyncError)}</p>}
+                    {HELD.includes(lead.leadsquaredSyncStatus ?? "") && lead.leadsquaredSyncError && <p className="text-xs text-gray-500">{lead.leadsquaredSyncError}</p>}
                   </div>
                   {lead.canSyncLeadSquared && lead.leadsquaredSyncStatus !== "synced" && (
                     <Button size="sm" variant="outline" onClick={() => onSync(lead)} disabled={syncing}>
                       <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
-                      {lead.leadsquaredSyncStatus && lead.leadsquaredSyncStatus !== "pending" ? "Retry sync" : "Sync now"}
+                      {lead.leadsquaredSyncStatus && lead.leadsquaredSyncStatus !== "pending" && !HELD.includes(lead.leadsquaredSyncStatus) ? "Retry sync" : "Sync now"}
                     </Button>
                   )}
                 </div>

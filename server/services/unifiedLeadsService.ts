@@ -431,11 +431,11 @@ export async function queryGroupWhatsappLeads(
   accountIds: string[],
   filters: Pick<UnifiedLeadFilters, "search" | "from" | "to">,
   paging: { limit: number; offset: number } | null,
-): Promise<{ leads: Array<UnifiedLeadRow & { businessAccountId: string }>; total: number }> {
-  if (accountIds.length === 0) return { leads: [], total: 0 };
+): Promise<{ leads: Array<UnifiedLeadRow & { businessAccountId: string }>; total: number; syncedToLeadsquared: number }> {
+  if (accountIds.length === 0) return { leads: [], total: 0, syncedToLeadsquared: 0 };
   const accounts = (await db.select().from(businessAccounts).where(inArray(businessAccounts.id, accountIds)))
     .filter(a => a.whatsappEnabled === "true");
-  if (accounts.length === 0) return { leads: [], total: 0 };
+  if (accounts.length === 0) return { leads: [], total: 0, syncedToLeadsquared: 0 };
 
   const { isQualificationRequired } = await import("./leadQualificationService");
   const branches: SQL[] = [];
@@ -444,8 +444,9 @@ export async function queryGroupWhatsappLeads(
     branches.push(sql`SELECT b.*, ${a.id}::text AS account_id FROM (${branchSql("whatsapp", a.id, filters, { excludeDrafts })}) b`);
   }
   const union = sql.join(branches, sql` UNION ALL `);
-  const countRes = await db.execute(sql`SELECT count(*)::int AS n FROM (${union}) u`);
+  const countRes = await db.execute(sql`SELECT count(*)::int AS n, count(*) FILTER (WHERE u.lsq_synced)::int AS synced FROM (${union}) u`);
   const total = Number((countRes.rows[0] as any)?.n || 0);
+  const syncedToLeadsquared = Number((countRes.rows[0] as any)?.synced || 0);
   const order = sql`u.captured_at DESC, u.id ASC`;
   const pageRes = await db.execute(paging
     ? sql`SELECT u.account_id, u.channel, u.id FROM (${union}) u ORDER BY ${order} LIMIT ${paging.limit} OFFSET ${paging.offset}`
@@ -461,7 +462,7 @@ export async function queryGroupWhatsappLeads(
     }
   }
   const leadsOut = page.map(p => byKey.get(`whatsapp:${p.id}`)).filter((r): r is UnifiedLeadRow & { businessAccountId: string } => !!r);
-  return { leads: leadsOut, total };
+  return { leads: leadsOut, total, syncedToLeadsquared };
 }
 
 /** Anything that can link a website lead to a WhatsApp number (used hand-off code, verified OTP, answered AI call)? */
