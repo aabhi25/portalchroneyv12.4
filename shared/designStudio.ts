@@ -7,6 +7,11 @@
  * design by describing the change, then asks the brand to make it ("Make this for me"), which
  * becomes a lead with the design attached.
  *
+ * Extras (each a switch in the brand's set-up): trying a design on with a selfie, a link the
+ * shopper sends to family so they can vote for a design, and a "Customise this" button on product
+ * cards that starts from one of the brand's own products (its photo is the first "design", and
+ * every change is drawn from it).
+ *
  * Everything here is plain data and arithmetic shared by the server, the portal and the widget.
  * Prices are estimates from the brand's own rules and are shown as a range, only once the brand
  * has confirmed its rates (`ratesConfirmed`).
@@ -115,6 +120,12 @@ export interface DesignStudioSettings {
   /** Most design images the whole account makes in 24 hours (keeps the AI bill in check). */
   dailyRenderCap: number;
   imageProvider: "google" | "openai";
+  /** "Try it on": the shopper sees a design on their own photo. */
+  tryOn: boolean;
+  /** "Share with family": a link where family and friends vote for a design. */
+  familyVote: boolean;
+  /** "Customise this" on product cards in the chat, for the pieces the brand makes. */
+  customiseProducts: boolean;
 }
 
 export const MAX_STYLE_PHOTOS = 5;
@@ -169,6 +180,9 @@ export function defaultDesignStudioSettings(): DesignStudioSettings {
     maxRendersPerSession: 12,
     dailyRenderCap: 150,
     imageProvider: "google",
+    tryOn: true,
+    familyVote: true,
+    customiseProducts: false,
   };
 }
 
@@ -258,6 +272,9 @@ export function normalizeDesignStudioSettings(raw: unknown): DesignStudioSetting
     maxRendersPerSession: Math.round(num(r.maxRendersPerSession, d.maxRendersPerSession, DESIGNS_PER_ROUND, 40)),
     dailyRenderCap: Math.round(num(r.dailyRenderCap, d.dailyRenderCap, DESIGNS_PER_ROUND, 5000)),
     imageProvider: r.imageProvider === "openai" ? "openai" : "google",
+    tryOn: r.tryOn !== false,
+    familyVote: r.familyVote !== false,
+    customiseProducts: r.customiseProducts === true,
   };
 }
 
@@ -279,6 +296,39 @@ export interface DesignChoices {
   /** A stone id, or "none". */
   stoneId?: string;
   tier?: TierId;
+  /** "Customise this": the product the shopper started from. Set by the server only. */
+  base?: BaseProduct;
+}
+
+export interface BaseProduct {
+  productId: string;
+  name: string;
+  imageUrl: string;
+  price?: string | null;
+  productUrl?: string | null;
+}
+
+/** Which piece a product is, read from its name ("Silver Heart Pendant" → pendant). Null when it isn't clear. */
+export function pieceForProduct(name: string | null | undefined): PieceId | null {
+  const n = (name || "").toLowerCase();
+  // Things sold alongside jewellery that aren't jewellery.
+  if (/\b(box|case|pouch|cleaner|cloth|polish|stand|organi[sz]er|voucher|gift\s?card)\b/.test(n)) return null;
+  // The more specific words first: "earring" before "ring", "mangalsutra" before "pendant" and "chain".
+  if (/\bmangal\s?sutra/.test(n)) return "mangalsutra";
+  if (/\bear\s?-?rings?\b|\bjhumk[ai]s?\b|\bstuds?\b|\bhoops?\b|\bdanglers?\b|\btops\b|\bbalis?\b/.test(n)) return "earrings";
+  if (/\bpendants?\b|\blockets?\b/.test(n)) return "pendant";
+  if (/\bnecklaces?\b|\bchokers?\b|\bhaar\b|\bchains?\b/.test(n)) return "necklace";
+  if (/\bbangles?\b|\bkadas?\b|\bkangans?\b/.test(n)) return "bangle";
+  if (/\bbracelets?\b/.test(n)) return "bracelet";
+  if (/\brings?\b|\bbands?\b/.test(n)) return "ring";
+  return null;
+}
+
+/** "Customise this" is offered on a product when the brand has it on and makes that kind of piece. */
+export function canCustomiseProduct(product: { name?: string | null; imageUrl?: string | null }, studio: { customise?: boolean; pieces?: string[] } | null | undefined): boolean {
+  if (!studio?.customise || !product.imageUrl) return false;
+  const piece = pieceForProduct(product.name);
+  return !!piece && (studio.pieces || []).includes(piece);
 }
 
 export function cleanChoices(raw: unknown, settings: DesignStudioSettings): DesignChoices {
@@ -388,6 +438,8 @@ export const ANGLES: { id: AngleId; name: string; brief: string; note: string }[
 
 /** Quick changes offered under a design. */
 export const QUICK_CHANGES = ["Make it more delicate", "Make the motif bigger", "Add more stones", "Fewer stones", "More traditional", "More modern"];
+/** Quick changes offered on one of the brand's own products ("Customise this"). */
+export const CUSTOMISE_CHANGES = ["Make it in rose gold", "Make it in yellow gold", "Add my initial", "Add more stones", "Make it more delicate", "Make it bolder"];
 
 export interface DesignPromptInput {
   choices: DesignChoices;
@@ -449,8 +501,33 @@ export function buildChangePrompt(change: string): string {
   ].join("\n");
 }
 
+/** The instruction for the first change to one of the brand's own products (the product's photo is attached). */
+export function buildCustomisePrompt(productName: string, change: string): string {
+  return [
+    `The attached image shows a piece of jewellery this jeweller sells ("${productName}"). It may be shown on a model or a stand: look only at the jewellery.`,
+    "Draw a customised version of this same piece as a product photograph.",
+    `Change only this: "${change}".`,
+    "Keep everything else about the design the same: its shape, proportions, motif, stone layout and finish, so it is clearly the same piece with that one change.",
+    MAKEABLE,
+    PHOTO,
+  ].join("\n");
+}
+
+/** What was asked for on the way to a design, oldest first ("add my initial" → "make it rose gold"). */
+export function changeTrail(designs: DesignImage[], designId: string | null | undefined): string[] {
+  const trail: string[] = [];
+  let current = designs.find(d => d.id === designId);
+  for (let i = 0; current && i < 50; i++) {
+    if (current.change) trail.unshift(current.change);
+    const parentId: string | undefined = current.parentId;
+    current = parentId ? designs.find(d => d.id === parentId) : undefined;
+  }
+  return trail;
+}
+
 /** One line describing the choices, for the lead, the chat and the request list. */
 export function describeChoices(settings: DesignStudioSettings, c: DesignChoices): string {
+  if (c.base) return `Customised "${c.base.name}"`;
   const piece = PIECES.find(p => p.id === c.piece)?.name;
   const motif = availableMotifs(settings).find(m => m.id === c.motifId)?.name;
   const metal = settings.metals.find(m => m.id === c.metalId)?.name;
@@ -481,7 +558,37 @@ export interface DesignImage {
   /** Set on a changed design: the design it was changed from, and what was asked. */
   parentId?: string;
   change?: string;
+  /** "Customise this": the brand's own product photo, where the changes start from. Not a drawing. */
+  original?: boolean;
   createdAt: string;
+}
+
+/** One family member's vote on a shared session. One per voter; voting again moves it. */
+export interface DesignVote {
+  designId: string;
+  voterId: string;
+  name?: string;
+  at: string;
+}
+
+export const MAX_VOTES = 60;
+
+export interface VoteTally { count: number; names: string[] }
+
+/** Votes per design, with the names of those who gave one. */
+export function tallyVotes(votes: DesignVote[] | null | undefined): Record<string, VoteTally> {
+  const out: Record<string, VoteTally> = {};
+  for (const v of votes || []) {
+    const t = (out[v.designId] ||= { count: 0, names: [] });
+    t.count++;
+    if (v.name) t.names.push(v.name);
+  }
+  return out;
+}
+
+/** The word the try-on instructions know each piece by. */
+export function tryOnTypeFor(piece: PieceId | null | undefined): string {
+  return piece === "mangalsutra" ? "necklace" : piece === "earrings" ? "earrings" : piece || "jewellery";
 }
 
 /** A drawing that has been "pending" this long is treated as failed (the server restarted mid-way). */
@@ -516,6 +623,9 @@ export interface DesignStudioPublicConfig {
   currencySymbol: string;
   makingDays: { min: number; max: number };
   contactBeforeChanges: boolean;
+  customiseChanges: string[];
+  tryOn: boolean;
+  familyVote: boolean;
 }
 
 export function toPublicConfig(settings: DesignStudioSettings, enabled: boolean): DesignStudioPublicConfig {
@@ -536,6 +646,9 @@ export function toPublicConfig(settings: DesignStudioSettings, enabled: boolean)
     currencySymbol: settings.currencySymbol,
     makingDays: settings.makingDays,
     contactBeforeChanges: settings.contactBeforeChanges,
+    customiseChanges: CUSTOMISE_CHANGES,
+    tryOn: settings.tryOn,
+    familyVote: settings.familyVote,
   };
 }
 

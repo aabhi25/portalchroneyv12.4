@@ -3,9 +3,9 @@ import multer from "multer";
 import { requireAuth, requireBusinessAccount } from "../auth";
 import { MOTIF_LIBRARY, toPublicConfig } from "@shared/designStudio";
 import {
-  DesignStudioError, designFunnel, getDesignStudioSettings, getSession, imageAiStatus, isDesignStudioOn, listRequests,
-  prepareUploadedPhoto, requestDesign, saveContact, saveDesignStudioSettings, similarProducts, startChange, startDesigns,
-  startSession, storeStudioImage, suggestMotifs, toPublicSession, updateRequest,
+  DesignStudioError, castVote, designFunnel, getDesignStudioSettings, getSession, getSharedDesigns, imageAiStatus, isDesignStudioOn,
+  listRequests, prepareUploadedPhoto, requestDesign, saveContact, saveDesignStudioSettings, shareSession, similarProducts, startChange,
+  startDesigns, startSession, storeStudioImage, suggestMotifs, toPublicSession, tryOnDesign, updateRequest,
 } from "../services/designStudio";
 import { hideContactsForView, hidesContactsFromView, inBusinessUserView } from "../lib/contactViewMask";
 
@@ -13,6 +13,8 @@ import { hideContactsForView, hidesContactsFromView, inBusinessUserView } from "
  * Design Studio (shared/designStudio.ts).
  *  - /api/design-studio/public/…: the website chat. No login: an account id, and for a session its
  *    id plus the visitor's token. Every call checks the account has the Design Studio switched on.
+ *  - /api/design-studio/public/share/:token: the "Share with family" page. The link's secret is
+ *    the only key; it shows the designs and takes one vote per person.
  *  - /api/design-studio/…: the brand's portal (its design kit, its requests and numbers).
  */
 const router = Router();
@@ -61,6 +63,7 @@ router.post("/api/design-studio/public/sessions", async (req, res) => {
     const str = (v: unknown) => (typeof v === "string" ? v : null);
     const row = await startSession({
       businessAccountId, conversationId: str(req.body?.conversationId), visitorToken: str(req.body?.visitorToken), pageUrl: str(req.body?.pageUrl),
+      productId: str(req.body?.productId),
     });
     await sendSession(res, row);
   } catch (error) {
@@ -125,6 +128,51 @@ router.post("/api/design-studio/public/sessions/:id/similar", async (req, res) =
   }
 });
 
+const imagesOnly = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPEG, PNG and WebP photos can be used."));
+  },
+});
+const onePhoto = (field: string) => (req: Request, res: Response, next: () => void) =>
+  imagesOnly.single(field)(req, res, err => (err ? res.status(400).json({ error: err.code === "LIMIT_FILE_SIZE" ? "That photo is too large (10 MB at most)." : err.message }) : next()));
+
+// The shopper's photo comes as a form upload; the picture goes straight back and nothing is kept.
+router.post("/api/design-studio/public/sessions/:id/try-on", onePhoto("selfie"), async (req, res) => {
+  try {
+    const { row } = await sessionOf(req);
+    res.json({ image: await tryOnDesign(row, String(req.body?.designId || ""), req.file?.buffer) });
+  } catch (error) {
+    fail(res, error, "try-on");
+  }
+});
+
+router.post("/api/design-studio/public/sessions/:id/share", async (req, res) => {
+  try {
+    await sendSession(res, await shareSession((await sessionOf(req)).row));
+  } catch (error) {
+    fail(res, error, "share");
+  }
+});
+
+router.get("/api/design-studio/public/share/:token", async (req, res) => {
+  try {
+    res.json(await getSharedDesigns(req.params.token, req.get("x-voter-id") || null));
+  } catch (error) {
+    fail(res, error, "shared designs");
+  }
+});
+
+router.post("/api/design-studio/public/share/:token/vote", async (req, res) => {
+  try {
+    res.json(await castVote(req.params.token, req.body || {}));
+  } catch (error) {
+    fail(res, error, "vote");
+  }
+});
+
 // ---------------------------------------------------------------------------
 // The brand's portal
 // ---------------------------------------------------------------------------
@@ -157,18 +205,7 @@ router.put("/api/design-studio/settings", ...portal, async (req, res) => {
   }
 });
 
-const photoUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Only JPEG, PNG and WebP photos can be used."));
-  },
-});
-
-router.post("/api/design-studio/upload", ...portal, (req, res, next) => {
-  photoUpload.single("photo")(req, res, err => (err ? res.status(400).json({ error: err.message }) : next()));
-}, async (req, res) => {
+router.post("/api/design-studio/upload", ...portal, onePhoto("photo"), async (req, res) => {
   try {
     const id = await portalAccount(req);
     if (!req.file) return res.status(400).json({ error: "Choose a photo." });

@@ -9,7 +9,10 @@
  *    for it), tagged "Design Studio";
  *  - the limit on images per session;
  *  - "Make this for me": the session becomes a request, the lead carries the design, the chat shows it;
- *  - the brand's side: the request list, moving a request on, and the numbers.
+ *  - the brand's side: the request list, moving a request on, and the numbers;
+ *  - "Customise this": a session that starts from one of the brand's products, changed from its photo;
+ *  - "Try it on": the design on the shopper's photo, sent straight back and not kept;
+ *  - "Share with family": the link, one vote per person, votes on the session and on the request.
  *
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55601/postgres?sslmode=disable \
  *   DESIGN_STUDIO_TEST_DB=1 npx tsx server/services/__tests__/designStudio.integration.test.ts
@@ -237,6 +240,126 @@ async function main() {
     const [other] = await db.insert(schema.businessAccounts).values({ name: `Other ${stamp}`, website: "https://other.example.com" } as any).returning();
     expect(await code(() => studio.updateRequest(other.id, row.id, { status: "closed" })) === "not_found" && (await studio.listRequests(other.id, from, to)).length === 0, "another account can't see or change it");
     await db.delete(schema.businessAccounts).where(eq(schema.businessAccounts.id, other.id));
+
+    // ── "Customise this": start from one of the brand's products ───────────
+    const sharp = (await import("sharp")).default;
+    await fs.mkdir(uploads, { recursive: true });
+    const photo = await sharp({ create: { width: 600, height: 600, channels: 3, background: "#e9dcc5" } }).jpeg().toBuffer();
+    await fs.writeFile(path.join(uploads, "product.jpg"), photo);
+    const productPhoto = `/uploads/design-studio/${B}/product.jpg`;
+    const [pendant] = await db.insert(schema.products).values({ businessAccountId: B, name: "Silver Heart Pendant", description: "A heart pendant", price: "2499.00", imageUrl: productPhoto } as any).returning();
+    const [noPhoto] = await db.insert(schema.products).values({ businessAccountId: B, name: "Gold Band Ring", description: "A band" } as any).returning();
+    const [notMade] = await db.insert(schema.products).values({ businessAccountId: B, name: "Diamond Mangalsutra", description: "x", imageUrl: productPhoto } as any).returning();
+    const start = (productId: string) => studio.startSession({ businessAccountId: B, visitorToken: "visitor-3", productId });
+    expect(await code(() => start(pendant.id)) === "not_customisable", "Customise this is off until the brand switches it on");
+    await studio.saveDesignStudioSettings(B, { ...(await studio.getDesignStudioSettings(B)), customiseProducts: true, maxRendersPerSession: 12 });
+    expect(await code(() => start(noPhoto.id)) === "not_customisable" && await code(() => start(notMade.id)) === "not_customisable" && await code(() => start("no-such-product")) === "not_customisable",
+      "not for a product without a photo, a piece the brand doesn't make, or an unknown product");
+    let custom = await start(pendant.id);
+    const original = custom.designs[0];
+    expect(custom.designs.length === 1 && original.original === true && original.status === "ready" && original.url === productPhoto && custom.renderCount === 0
+      && custom.choices.piece === "pendant" && custom.choices.base?.name === "Silver Heart Pendant" && custom.choices.base?.price === "2499.00",
+      "the session starts on the product: its photo is the first design, and no image is used up", custom.choices);
+    expect(await code(() => studio.requestDesign(custom, { designId: original.id, name: "Meera", phone: "9811204567" })) === "no_change", "the product as it is can't be sent as a design request");
+    expect(await code(() => studio.shareSession(custom)) === "not_found", "nothing to share before a design is drawn");
+
+    const waitCustom = async () => {
+      for (let i = 0; i < 60; i++) {
+        const r = await studio.getSession(custom.id, B, "visitor-3");
+        if (r.designs.every(d => d.status !== "pending")) return r;
+        await new Promise(res => setTimeout(res, 500));
+      }
+      return studio.getSession(custom.id, B, "visitor-3");
+    };
+    custom = await studio.startChange(custom, original.id, "make it rose gold");
+    expect(custom.renderCount === 1 && custom.designs[1].parentId === original.id, "the first change needs no details: it is drawn from the product's photo");
+    custom = await waitCustom();
+    const rose = custom.designs[1];
+    expect(rose.status === "ready" && rose.url!.startsWith(`/uploads/design-studio/${B}/`) && rose.url !== productPhoto && custom.status === "designed", "the changed piece is drawn and kept", rose);
+
+    // ── "Try it on" ────────────────────────────────────────────────────────
+    const selfie = await sharp({ create: { width: 800, height: 1000, channels: 3, background: "#c8a58a" } }).jpeg().toBuffer();
+    expect(await code(() => studio.tryOnDesign(custom, rose.id, undefined)) === "no_photo" && await code(() => studio.tryOnDesign(custom, rose.id, Buffer.from("not a picture"))) === "no_photo", "try-on needs a real photo");
+    expect(await code(() => studio.tryOnDesign(custom, "nope", selfie)) === "not_found", "try-on needs a real design");
+    const tried = await studio.tryOnDesign(custom, rose.id, selfie);
+    custom = await studio.getSession(custom.id, B, "visitor-3");
+    const filesAfter = await fs.readdir(uploads);
+    expect(tried.startsWith("data:image/jpeg;base64,") && tried.length > 2000 && custom.renderCount === 2 && custom.designs.length === 2, "try-on: the picture comes straight back, counted as one image, not added to the designs");
+    expect(filesAfter.length === (await fs.readdir(uploads)).length && !filesAfter.some(f => /selfie|try/i.test(f)), "try-on: nothing about it is saved");
+    expect((await studio.tryOnDesign(custom, original.id, selfie)).startsWith("data:image/jpeg"), "the product as it is can be tried on too");
+    custom = await studio.getSession(custom.id, B, "visitor-3");
+    expect(custom.renderCount === 3 && await code(() => studio.tryOnDesign(custom, rose.id, selfie)) === "contact_required" && await code(() => studio.startChange(custom, rose.id, "add more stones")) === "contact_required",
+      "after three images, the next try-on or change asks for the shopper's details");
+    await studio.saveDesignStudioSettings(B, { ...(await studio.getDesignStudioSettings(B)), tryOn: false });
+    expect(await code(() => studio.tryOnDesign(custom, rose.id, selfie)) === "off", "try-on switched off by the brand");
+    await studio.saveDesignStudioSettings(B, { ...(await studio.getDesignStudioSettings(B)), tryOn: true });
+
+    // ── "Share with family" ────────────────────────────────────────────────
+    custom = await studio.shareSession(custom);
+    const token = custom.shareToken!;
+    expect(/^[0-9a-f]{32}$/.test(token) && (await studio.shareSession(custom)).shareToken === token, "sharing makes one link, the same each time");
+    let shared = await studio.getSharedDesigns(token, "voter-aaaa-1111");
+    expect(shared.brand === `Design Studio ${stamp}` && shared.designs.length === 2 && shared.designs[0].original && shared.designs[1].id === rose.id && Object.keys(shared.votes).length === 0
+      && shared.myVote === null && shared.summary === 'Customised "Silver Heart Pendant"' && !JSON.stringify(shared).includes("visitor-3") && !JSON.stringify(shared).includes("leadId"),
+      "family see the designs and the brand, nothing about the shopper", shared);
+    expect(await code(() => studio.getSharedDesigns("0".repeat(32))) === "not_found" && await code(() => studio.getSharedDesigns("../etc")) === "not_found", "a wrong link shows nothing");
+    const beforeVotes = (await studio.getSession(custom.id, B, "visitor-3")).updatedAt.getTime();
+    shared = await studio.castVote(token, { designId: rose.id, voterId: "voter-aaaa-1111", name: "  Mom <3  " });
+    expect(shared.votes[rose.id].count === 1 && shared.votes[rose.id].names[0] === "Mom 3" && shared.myVote === rose.id, "a vote, with a tidied name", shared.votes);
+    shared = await studio.castVote(token, { designId: original.id, voterId: "voter-aaaa-1111", name: "Mom" });
+    expect(!shared.votes[rose.id] && shared.votes[original.id].count === 1 && shared.myVote === original.id, "voting again moves the vote: one per person");
+    await studio.castVote(token, { designId: rose.id, voterId: "voter-bbbb-2222", name: "Riya" });
+    shared = await studio.castVote(token, { designId: rose.id, voterId: "voter-cccc-3333" });
+    expect(shared.votes[rose.id].count === 2 && shared.votes[rose.id].names.join() === "Riya" && shared.votes[original.id].count === 1, "three people, two designs", shared.votes);
+    expect(await code(() => studio.castVote(token, { designId: rose.id, voterId: "x" })) === "bad_vote" && await code(() => studio.castVote(token, { designId: "nope", voterId: "voter-dddd-4444" })) === "not_found"
+      && await code(() => studio.castVote("f".repeat(32), { designId: rose.id, voterId: "voter-dddd-4444" })) === "not_found", "a vote needs a voter, a real design and the right link");
+    custom = await studio.getSession(custom.id, B, "visitor-3");
+    pub = studio.toPublicSession(custom, await studio.getDesignStudioSettings(B));
+    expect(pub.shareToken === token && pub.votes[rose.id].count === 2 && custom.updatedAt.getTime() === beforeVotes, "the shopper sees the votes; a vote doesn't count as the shopper designing", pub.votes);
+    await studio.saveDesignStudioSettings(B, { ...(await studio.getDesignStudioSettings(B)), familyVote: false });
+    expect(await code(() => studio.shareSession({ ...custom, shareToken: null })) === "off", "sharing switched off by the brand");
+    await studio.saveDesignStudioSettings(B, { ...(await studio.getDesignStudioSettings(B)), familyVote: true });
+
+    // The customised piece, asked for: the lead and the brand's list carry the product, the change and the votes.
+    custom = await studio.requestDesign(custom, { designId: rose.id, name: "Meera Shah", phone: "9811204568" });
+    const [customLead] = await db.select().from(schema.leads).where(eq(schema.leads.id, custom.leadId!));
+    expect(custom.status === "requested" && (customLead.message || "").startsWith('Design Studio: Customised "Silver Heart Pendant" · changes: make it rose gold') && (customLead.message || "").includes(`design: ${rose.url}`),
+      "the request for a customised product says which product and what to change", customLead.message);
+    const customRequest = (await studio.listRequests(B, new Date(Date.now() - 3600_000), new Date(Date.now() + 3600_000))).find(r => r.id === custom.id)!;
+    expect(customRequest.product?.name === "Silver Heart Pendant" && customRequest.changes.join() === "make it rose gold" && customRequest.votes.total === 3 && customRequest.votes.chosen === 2
+      && customRequest.designs.find(d => d.original)?.votes === 1 && customRequest.designUrl === rose.url, "the brand's list: the product, the change and the family votes", customRequest);
+
+    // The same over the web: a photo upload for try-on, the shared page and a vote.
+    const express2 = (await import("express")).default;
+    const app2 = express2();
+    app2.use(express2.json());
+    app2.use((await import("../../routes/designStudio")).default);
+    const web2 = await new Promise<import("node:http").Server>(r => { const srv = app2.listen(0, "127.0.0.1", () => r(srv)); });
+    const base2 = `http://127.0.0.1:${(web2.address() as AddressInfo).port}/api/design-studio/public`;
+    const form = new FormData();
+    form.append("businessAccountId", B);
+    form.append("visitorToken", "visitor-3");
+    form.append("designId", rose.id);
+    form.append("selfie", new Blob([selfie], { type: "image/jpeg" }), "me.jpg");
+    const webTry = await fetch(`${base2}/sessions/${custom.id}/try-on`, { method: "POST", body: form });
+    const webTryBody = await webTry.json() as any;
+    expect(webTry.status === 200 && String(webTryBody.image).startsWith("data:image/jpeg;base64,"), "web: try-on with an uploaded photo", webTry.status);
+    const notPhoto = new FormData();
+    notPhoto.append("businessAccountId", B);
+    notPhoto.append("visitorToken", "visitor-3");
+    notPhoto.append("designId", rose.id);
+    notPhoto.append("selfie", new Blob(["hello"], { type: "text/plain" }), "me.txt");
+    expect((await fetch(`${base2}/sessions/${custom.id}/try-on`, { method: "POST", body: notPhoto })).status === 400, "web: a file that isn't a photo is refused");
+    const webShared = await fetch(`${base2}/share/${token}`, { headers: { "x-voter-id": "voter-bbbb-2222" } });
+    const webSharedBody = await webShared.json() as any;
+    expect(webShared.status === 200 && webSharedBody.myVote === rose.id && webSharedBody.designs.length === 2, "web: the shared page, knowing this person's vote");
+    const webVote = await fetch(`${base2}/share/${token}/vote`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ designId: original.id, voterId: "voter-eeee-5555", name: "Dad" }) });
+    expect(webVote.status === 200 && ((await webVote.json()) as any).votes[original.id].count === 2, "web: a vote");
+    expect((await fetch(`${base2}/share/${"a".repeat(32)}`)).status === 404, "web: a wrong link is not found");
+    const startCustom = await fetch(`${base2}/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ businessAccountId: B, visitorToken: "visitor-4", productId: pendant.id }) });
+    const startCustomBody = await startCustom.json() as any;
+    expect(startCustom.status === 200 && startCustomBody.session.designs[0].original === true && startCustomBody.session.choices.base.productId === pendant.id, "web: a session started from a product");
+    await new Promise(r => web2.close(() => r(null)));
   } finally {
     await db.delete(schema.businessAccounts).where(eq(schema.businessAccounts.id, B)).catch(() => undefined);
     await fs.rm(uploads, { recursive: true, force: true }).catch(() => undefined);

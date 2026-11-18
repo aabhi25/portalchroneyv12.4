@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ShoppingBag, ShoppingCart, Check, ChevronRight, Loader2, Sparkles, ExternalLink } from "lucide-react";
+import { ShoppingBag, ShoppingCart, Check, ChevronRight, Loader2, Sparkles, ExternalLink, PenTool } from "lucide-react";
 import { COMPARE_MAX } from "@/components/CompareTray";
 import { FaWhatsapp } from "react-icons/fa";
 import {
@@ -55,6 +55,9 @@ interface ProductCardProps {
   addToCartEnabled?: boolean;
   tryOnEnabled?: boolean;
   onTryOn?: (product: Product) => void;
+  /** Design Studio "Customise this": shown on the products it returns true for. */
+  canCustomise?: (product: Product) => boolean;
+  onCustomise?: (product: Product) => void;
   pagination?: ProductPagination;
   searchQuery?: string;
   businessAccountId?: string | null;
@@ -76,6 +79,8 @@ export function ProductCard({
   addToCartEnabled = false,
   tryOnEnabled = false,
   onTryOn,
+  canCustomise,
+  onCustomise,
   pagination,
   searchQuery,
   businessAccountId,
@@ -335,6 +340,18 @@ export function ProductCard({
                     </button>
                   )}
                 </div>
+                {onCustomise && canCustomise?.(product) && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onCustomise(product); }}
+                    className="mt-1.5 flex w-full items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors hover:bg-gray-50"
+                    style={{ borderColor: chatColor, color: chatColor }}
+                    title="Change this piece to your taste"
+                    data-testid="button-customise-product"
+                  >
+                    <PenTool className="w-3 h-3" />
+                    Customise this
+                  </button>
+                )}
               </div>
 
               <div className="absolute inset-0 border-2 border-transparent group-hover:border-purple-400/50 dark:group-hover:border-purple-600/50 rounded-lg pointer-events-none transition-colors duration-200" />

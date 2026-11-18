@@ -1,12 +1,14 @@
 /**
  * Tests for the Design Studio's shared rules (shared/designStudio.ts): the brand's settings made safe,
- * what a shopper may choose, the price estimate, the motif ranking, the image AI's instructions and
- * the "I want something custom" check on a chat message.
+ * what a shopper may choose, the price estimate, the motif ranking, the image AI's instructions,
+ * the "I want something custom" check on a chat message, which products get "Customise this",
+ * the trail of changes behind a design and the family votes.
  * Run manually: `npx tsx server/services/__tests__/designStudio.test.ts` (self-asserting, no database).
  */
 import {
-  MOTIF_LIBRARY, availableMotifs, buildChangePrompt, buildDesignPrompt, cleanChoices, defaultDesignStudioSettings, describeChoices,
-  estimatePrice, formatPriceRange, missingChoices, normalizeDesignStudioSettings, rankMotifs, roundPrice, toPublicConfig, wantsCustomDesign,
+  MOTIF_LIBRARY, availableMotifs, buildChangePrompt, buildCustomisePrompt, buildDesignPrompt, canCustomiseProduct, changeTrail, cleanChoices,
+  defaultDesignStudioSettings, describeChoices, estimatePrice, formatPriceRange, missingChoices, normalizeDesignStudioSettings, pieceForProduct,
+  rankMotifs, roundPrice, tallyVotes, toPublicConfig, tryOnTypeFor, wantsCustomDesign, type DesignImage,
 } from "@shared/designStudio";
 
 let failed = 0;
@@ -102,6 +104,43 @@ for (const yes of ["Do you make custom jewellery?", "can I customise this ring",
 for (const no of ["Where is my order?", "customer care number", "show me gold rings", "what is your return policy", "designs under 5000"]) {
   expect(!wantsCustomDesign(no), `not custom: "${no}"`);
 }
+
+// ── extras: on or off ───────────────────────────────────────────────────────
+expect(fresh.tryOn && fresh.familyVote && !fresh.customiseProducts, "a new account: try-on and family vote on, Customise this off");
+const extras = normalizeDesignStudioSettings({ tryOn: false, familyVote: false, customiseProducts: true });
+expect(!extras.tryOn && !extras.familyVote && extras.customiseProducts && !toPublicConfig(extras, true).tryOn && !toPublicConfig(extras, true).familyVote, "the extras can each be switched");
+
+// ── "Customise this": which products ────────────────────────────────────────
+const pieces: [string, string | null][] = [
+  ["Silver Zircon Heart Pendant", "pendant"], ["Gold Solitaire Ring", "ring"], ["Rose Gold Drop Earrings", "earrings"], ["Silver Jhumkas", "earrings"],
+  ["Diamond Studs", "earrings"], ["Couple Bands", "ring"], ["Pearl Choker", "necklace"], ["Gold Chain", "necklace"], ["Pendant with Chain", "pendant"],
+  ["Silver Kada for Men", "bangle"], ["Charm Bracelet", "bracelet"], ["Diamond Mangalsutra Pendant", "mangalsutra"], ["Gift Card", null], ["Earring Box", null],
+  ["Springtime Brooch", null],
+];
+for (const [name, piece] of pieces) expect(pieceForProduct(name) === piece, `"${name}" → ${piece ?? "not a piece we know"}`, pieceForProduct(name));
+const studio = { customise: true, pieces: ["ring", "pendant"] };
+expect(canCustomiseProduct({ name: "Gold Solitaire Ring", imageUrl: "https://shop.example.com/r.jpg" }, studio), "a ring with a photo, where rings are made: Customise this");
+expect(!canCustomiseProduct({ name: "Gold Solitaire Ring", imageUrl: null }, studio) && !canCustomiseProduct({ name: "Pearl Choker", imageUrl: "x" }, studio)
+  && !canCustomiseProduct({ name: "Gold Solitaire Ring", imageUrl: "x" }, { ...studio, customise: false }) && !canCustomiseProduct({ name: "Gold Solitaire Ring", imageUrl: "x" }, null),
+  "not without a photo, not a piece the brand doesn't make, not when switched off");
+const custom = buildCustomisePrompt("Silver Heart Pendant", "make it rose gold");
+expect(custom.includes('"Silver Heart Pendant"') && custom.includes('"make it rose gold"') && custom.includes("clearly the same piece") && custom.includes("a real piece a jeweller can make"), "customising a product: the same piece with one change", custom);
+expect(describeChoices(fresh, { piece: "pendant", base: { productId: "p1", name: "Silver Heart Pendant", imageUrl: "x" } }) === 'Customised "Silver Heart Pendant"', "a customised product in one line");
+expect(!("base" in cleanChoices({ piece: "ring", base: { productId: "p1", name: "x", imageUrl: "y" } }, fresh)), "a shopper can't set the product a session starts from");
+
+// ── the changes behind a design, and the votes ──────────────────────────────
+const at = "2026-11-18T10:00:00.000Z";
+const made: DesignImage[] = [
+  { id: "a", status: "ready", note: "", round: 1, original: true, createdAt: at },
+  { id: "b", status: "ready", note: "", round: 2, parentId: "a", change: "make it rose gold", createdAt: at },
+  { id: "c", status: "ready", note: "", round: 3, parentId: "b", change: "add the initial R", createdAt: at },
+  { id: "d", status: "ready", note: "", round: 3, parentId: "a", change: "add more stones", createdAt: at },
+];
+expect(changeTrail(made, "c").join(" | ") === "make it rose gold | add the initial R" && changeTrail(made, "d").join() === "add more stones" && changeTrail(made, "a").length === 0 && changeTrail(made, "zz").length === 0,
+  "the changes that led to a design, oldest first");
+const tally = tallyVotes([{ designId: "b", voterId: "v1", name: "Mom", at }, { designId: "b", voterId: "v2", at }, { designId: "c", voterId: "v3", name: "Riya", at }]);
+expect(tally.b.count === 2 && tally.b.names.join() === "Mom" && tally.c.count === 1 && !tally.a && Object.keys(tallyVotes(null)).length === 0, "votes counted per design, with the names given", tally);
+expect(tryOnTypeFor("mangalsutra") === "necklace" && tryOnTypeFor("ring") === "ring" && tryOnTypeFor(undefined) === "jewellery", "try-on knows a mangalsutra as a necklace");
 
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log("\nAll Design Studio checks passed");

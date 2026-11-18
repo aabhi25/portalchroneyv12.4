@@ -81,6 +81,7 @@ import { GeminiPlatformKeyCard } from "@/components/photoSearch/GeminiKeyEditor"
 import { SuperAdminFrame, isSuperAdminHome } from "@/components/superadmin/SuperAdminFrame";
 import PublicDemo from "@/pages/PublicDemo";
 import PublicChat from "@/pages/PublicChat";
+import DesignVote from "@/pages/DesignVote";
 import Login from "@/pages/Login";
 import ChangePassword from "@/pages/ChangePassword";
 import ResetPassword from "@/pages/ResetPassword";
@@ -231,6 +232,11 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
 
   if (location.startsWith("/public-chat/")) {
     return <PublicChat />;
+  }
+
+  // Design Studio "Share with family": the page family open to vote for a design.
+  if (location.startsWith("/design-vote/")) {
+    return <DesignVote />;
   }
 
   // Show login page if not authenticated
@@ -569,7 +575,7 @@ function AppWithProviders() {
   } as React.CSSProperties;
 
   // Skip auth check for public routes
-  const isPublicRoute = location.startsWith("/embed/chat") || location.startsWith("/reset-password") || location.startsWith("/public-chat/") || location.startsWith("/demo/");
+  const isPublicRoute = location.startsWith("/embed/chat") || location.startsWith("/reset-password") || location.startsWith("/public-chat/") || location.startsWith("/demo/") || location.startsWith("/design-vote/");
 
   // Check authentication status ONCE (skip for public routes)
   const { data: currentUser, isLoading: authLoading } = useQuery<MeResponseDto>({
@@ -604,6 +610,9 @@ function AppWithProviders() {
     }
     if (location.startsWith("/public-chat/")) {
       return <PublicChat />;
+    }
+    if (location.startsWith("/design-vote/")) {
+      return <DesignVote />;
     }
   }
 

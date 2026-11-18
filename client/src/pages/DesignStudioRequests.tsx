@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { Loader2, Sparkles } from "lucide-react";
+import { Heart, Loader2, Sparkles } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -21,7 +21,10 @@ interface DesignRequest {
   requestedAt: string | null;
   summary: string;
   designUrl: string | null;
-  designs: { id: string; url: string; note: string }[];
+  designs: { id: string; url: string; note: string; votes: number; original: boolean }[];
+  changes: string[];
+  product: { name: string; productUrl: string | null } | null;
+  votes: { total: number; chosen: number };
   priceText: string | null;
   requestNote: string | null;
   staffNotes: string | null;
@@ -125,11 +128,21 @@ export default function DesignStudioRequests() {
                 <span className="text-[12px] text-gray-500">{r.requestedAt ? new Date(r.requestedAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}</span>
               </div>
               <p className="mt-0.5 text-[13px] text-gray-700">{[r.phone, r.email].filter(Boolean).join(" · ") || "Contact details are on the lead"}</p>
-              <p className="mt-2 text-[13.5px] text-gray-800">{r.summary}</p>
+              <p className="mt-2 text-[13.5px] text-gray-800">
+                {r.summary}
+                {r.product?.productUrl && <a href={r.product.productUrl} target="_blank" rel="noopener noreferrer" className="ml-1.5 text-[12.5px] font-medium text-blue-600 hover:underline">See the product</a>}
+              </p>
+              {r.changes.length > 0 && <p className="mt-0.5 text-[13px] text-gray-700" data-testid="text-design-changes">Changes asked for: {r.changes.join(" → ")}</p>}
               <p className="mt-0.5 text-[12.5px] text-gray-500">
                 {r.priceText ? `Estimate shown: ${r.priceText}` : "No estimate shown"}
-                {r.designs.length > 1 ? ` · ${r.designs.length} designs made` : ""}
+                {(n => (n > 1 ? ` · ${n} designs made` : ""))(r.designs.filter(d => !d.original).length)}
               </p>
+              {r.votes.total > 0 && (
+                <p className="mt-1 flex items-center gap-1.5 text-[12.5px] font-medium text-rose-700" data-testid="text-design-family-votes">
+                  <Heart className="h-3.5 w-3.5 fill-current" />
+                  Family votes: {r.votes.chosen} of {r.votes.total} for the chosen design
+                </p>
+              )}
               {r.requestNote && <p className="mt-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-[13px] text-gray-700">“{r.requestNote}”</p>}
               <Link href="/admin/leads" className="mt-2 inline-block text-[12.5px] font-medium text-blue-600 hover:underline">See this shopper in Leads</Link>
             </div>
@@ -157,7 +170,10 @@ export default function DesignStudioRequests() {
             {open?.designs.map(d => (
               <a key={d.id} href={d.url} target="_blank" rel="noopener noreferrer" className={`overflow-hidden rounded-xl border ${d.url === open.designUrl ? "border-2 border-green-500" : "border-gray-200"}`}>
                 <img src={d.url} alt={d.note} className="w-full" />
-                <span className="block px-2 py-1.5 text-[12px] text-gray-700">{d.url === open.designUrl ? "Chosen · " : ""}{d.note}</span>
+                <span className="block px-2 py-1.5 text-[12px] text-gray-700">
+                  {d.url === open.designUrl ? "Chosen · " : ""}{d.note}
+                  {d.votes > 0 && <span className="ml-1 font-medium text-rose-700">· {d.votes} family vote{d.votes === 1 ? "" : "s"}</span>}
+                </span>
               </a>
             ))}
           </div>

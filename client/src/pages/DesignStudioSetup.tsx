@@ -16,7 +16,8 @@ import {
 
 /**
  * Design Studio › Set-up: the brand's design kit (shared/designStudio.ts). What it makes, the
- * motifs, metals and stones on offer, its price rules, photos of its own style, and the limits.
+ * motifs, metals and stones on offer, its price rules, photos of its own style, the extras
+ * (try-on, family vote, "Customise this" on products) and the limits.
  * Shoppers see estimated prices only once "Show estimated prices" is on.
  */
 
@@ -282,6 +283,30 @@ export default function DesignStudioSetup() {
           <Label>Your style in a few words</Label>
           <Textarea rows={2} maxLength={200} value={form.styleNote} placeholder="e.g. minimal and delicate, everyday wear, fine pavé work" onChange={e => set({ styleNote: e.target.value })} data-testid="input-design-style-note" />
         </div>
+      </Section>
+
+      <Section title="Extras" hint="More ways for shoppers to decide. Each can be switched off.">
+        <label className="flex items-center justify-between gap-3">
+          <span>
+            <span className="block text-[13.5px] text-gray-800">Try it on</span>
+            <span className="block text-[12.5px] text-gray-500">The shopper uploads a photo of themselves and sees the design on them. Each try-on is one more image; the photo isn't kept.</span>
+          </span>
+          <Switch checked={form.tryOn} onCheckedChange={v => set({ tryOn: v })} data-testid="switch-design-try-on" />
+        </label>
+        <label className="flex items-center justify-between gap-3">
+          <span>
+            <span className="block text-[13.5px] text-gray-800">Share with family</span>
+            <span className="block text-[12.5px] text-gray-500">The shopper sends a link on WhatsApp; family and friends vote for a design. You see the votes on the request.</span>
+          </span>
+          <Switch checked={form.familyVote} onCheckedChange={v => set({ familyVote: v })} data-testid="switch-design-family-vote" />
+        </label>
+        <label className="flex items-center justify-between gap-3">
+          <span>
+            <span className="block text-[13.5px] text-gray-800">"Customise this" on your products</span>
+            <span className="block text-[12.5px] text-gray-500">A button on product cards in the chat, for the pieces you ticked in "What you make". The shopper says what to change (metal, stones, an initial) and sees the changed piece.</span>
+          </span>
+          <Switch checked={form.customiseProducts} onCheckedChange={v => set({ customiseProducts: v })} data-testid="switch-design-customise" />
+        </label>
       </Section>
 
       <Section title="Limits" hint="Every design image costs a little on your AI key. These keep it in check.">

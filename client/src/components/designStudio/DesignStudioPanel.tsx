@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Check, ChevronRight, ExternalLink, Loader2, RefreshCw, Send, Sparkles, X } from "lucide-react";
-import type { DesignChoices, DesignImage, DesignStudioPublicConfig, MotifSuggestion, PieceId, PriceRange, TierId } from "@shared/designStudio";
+import { ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, Heart, Loader2, RefreshCw, Send, Share2, Sparkles, User, X } from "lucide-react";
+import type { DesignChoices, DesignImage, DesignStudioPublicConfig, MotifSuggestion, PieceId, PriceRange, TierId, VoteTally } from "@shared/designStudio";
 
 /**
  * Design Studio in the website chat (shared/designStudio.ts): the shopper picks a piece, who it is
  * for, a motif (with the AI's advice), the metal, stones and size, then sees three design previews,
  * changes one by describing the change, and asks the brand to make it.
+ *
+ * "Customise this" on a product card opens it on that product instead: the product's photo is
+ * the starting point and the shopper says what to change.
+ *
+ * Extras the brand can switch off: "Try it on" (the design on the shopper's own photo, never
+ * kept) and "Share with family" (a link where family vote; the votes show on the designs).
  *
  * It covers the chat while open. The session is kept for the browser tab, so closing the panel and
  * coming back carries on from the designs.
@@ -22,6 +28,8 @@ interface Session {
   requested: boolean;
   chosenDesignId: string | null;
   rendersLeft: number;
+  shareToken: string | null;
+  votes: Record<string, VoteTally>;
 }
 
 interface SimilarProduct { id: string; name: string; price: string | null; imageUrl: string | null; productUrl: string | null }
@@ -39,6 +47,8 @@ interface Props {
   onClose: () => void;
   /** The shopper asked for a design to be made: the chat shows it. */
   onRequested: (design: { url: string; summary: string }) => void;
+  /** "Customise this": the product the shopper tapped. */
+  product?: { id: string; name: string } | null;
 }
 
 const sessionKey = (accountId: string) => `chroney-design-session-${accountId}`;
@@ -52,7 +62,7 @@ const remembered = (accountId: string) => {
   try { return sessionStorage.getItem(sessionKey(accountId)); } catch { return null; }
 };
 
-export function DesignStudioPanel({ businessAccountId, visitorToken, conversationId, pageUrl, chatColor, chatColorEnd, onClose, onRequested }: Props) {
+export function DesignStudioPanel({ businessAccountId, visitorToken, conversationId, pageUrl, chatColor, chatColorEnd, onClose, onRequested, product }: Props) {
   const [config, setConfig] = useState<DesignStudioPublicConfig | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [step, setStep] = useState<Step>("piece");
@@ -66,10 +76,18 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /** The contact form: why it is open, and what to do once the details are in. */
-  const [contactFor, setContactFor] = useState<null | { kind: "change"; text: string } | { kind: "again" } | { kind: "request" }>(null);
+  const [contactFor, setContactFor] = useState<null | { kind: "change"; text: string } | { kind: "again" } | { kind: "request" } | { kind: "tryon"; photo: File }>(null);
   const [contact, setContact] = useState({ name: "", phone: "", email: "", note: "" });
   const [similar, setSimilar] = useState<SimilarProduct[] | null>(null);
   const [similarLoading, setSimilarLoading] = useState(false);
+  /** Try-on: the picture for each design tried (kept only while the panel is open), and the one on show. */
+  const [tryOns, setTryOns] = useState<Record<string, string>>({});
+  const [tryOnBusy, setTryOnBusy] = useState(false);
+  const [showTryOn, setShowTryOn] = useState<string | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const selfieInput = useRef<HTMLInputElement>(null);
+  const changeInput = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<Session | null>(null);
   sessionRef.current = session;
@@ -97,28 +115,29 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
         if (cancelled) return;
         if (!res.ok || !cfg?.enabled) { setLoadError("Designing isn't available right now."); return; }
         setConfig(cfg);
+        const open = (s: Session) => {
+          setSession(s);
+          setChoices(s.choices || {});
+          if (s.designs.length > 0) {
+            setStep("designs");
+            setSelectedId([...s.designs].reverse().find(d => d.status === "ready")?.id ?? null);
+          }
+        };
         const earlier = remembered(businessAccountId);
         if (earlier) {
           try {
             const { session: s } = await call<{ session: Session }>(`sessions/${earlier}/state`);
             if (cancelled) return;
-            if (!s.requested) {
-              setSession(s);
-              setChoices(s.choices || {});
-              if (s.designs.length > 0) {
-                setStep("designs");
-                setSelectedId([...s.designs].reverse().find(d => d.status === "ready")?.id ?? null);
-              }
-              return;
-            }
+            // Carry on, unless it was sent already or the shopper has now tapped a different product.
+            if (!s.requested && (!product || s.choices?.base?.productId === product.id)) return open(s);
           } catch { /* gone: start a new one */ }
         }
-        const { session: s } = await call<{ session: Session }>("sessions", { conversationId: conversationId || null, pageUrl: pageUrl || null });
+        const { session: s } = await call<{ session: Session }>("sessions", { conversationId: conversationId || null, pageUrl: pageUrl || null, productId: product?.id || null });
         if (cancelled) return;
         remember(businessAccountId, s.id);
-        setSession(s);
-      } catch {
-        if (!cancelled) setLoadError("Designing isn't available right now. Please try again in a moment.");
+        open(s);
+      } catch (e: any) {
+        if (!cancelled) setLoadError(e?.code === "not_customisable" ? e.message : "Designing isn't available right now. Please try again in a moment.");
       }
     })();
     return () => { cancelled = true; };
@@ -144,6 +163,16 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
     }, 2500);
     return () => clearInterval(timer);
   }, [drawing, session?.id, call]);
+
+  // Shared with family: look for new votes now and then.
+  const shared = !!session?.shareToken && step === "designs";
+  useEffect(() => {
+    if (!shared || drawing || !session) return;
+    const timer = setInterval(() => {
+      call<{ session: Session }>(`sessions/${session.id}/state`).then(r => setSession(r.session)).catch(() => undefined);
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [shared, drawing, session?.id, call]);
 
   useEffect(() => { bodyRef.current?.scrollTo({ top: 0 }); }, [step]);
 
@@ -225,8 +254,47 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
     const then = contactFor;
     setContactFor(null);
     if (then.kind === "change") await askChange(then.text);
+    else if (then.kind === "tryon") await tryOn(then.photo);
     else await drawDesigns();
   }).catch(() => undefined);
+
+  /** The selected design on the shopper's photo. The photo is sent once and not kept. */
+  const tryOn = async (photo: File | undefined) => {
+    if (!session || !selectedId || !photo) return;
+    const designId = selectedId;
+    setTryOnBusy(true);
+    setError(null);
+    try {
+      const body = new FormData();
+      body.append("businessAccountId", businessAccountId);
+      body.append("visitorToken", visitorToken || "");
+      body.append("designId", designId);
+      body.append("selfie", photo);
+      const res = await fetch(`/api/design-studio/public/sessions/${session.id}/try-on`, { method: "POST", body });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data?.code === "contact_required") { setContactFor({ kind: "tryon", photo }); return; }
+      if (!res.ok || !data.image) throw new Error(data?.error || "Try-on isn't available right now. Please try again in a little while.");
+      setTryOns(t => ({ ...t, [designId]: data.image }));
+      setShowTryOn(designId);
+      setSession(s => (s ? { ...s, rendersLeft: Math.max(0, s.rendersLeft - 1) } : s));
+    } catch (e: any) {
+      setError(e?.message || "Try-on isn't available right now.");
+    } finally {
+      setTryOnBusy(false);
+    }
+  };
+
+  const shareLink = session?.shareToken ? `${window.location.origin}/design-vote/${session.shareToken}` : "";
+  const shareText = `Help me choose my jewellery design 💍 Tap to see them and vote: ${shareLink}`;
+  const openShare = () => run(async () => {
+    if (!session) return;
+    if (!session.shareToken) setSession((await call<{ session: Session }>(`sessions/${session.id}/share`)).session);
+    setShareOpen(true);
+    setCopied(false);
+  }).catch(() => undefined);
+  const copyLink = async () => {
+    try { await navigator.clipboard.writeText(shareLink); setCopied(true); } catch { setCopied(false); }
+  };
 
   const loadSimilar = async () => {
     if (!session) return;
@@ -242,6 +310,7 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
 
   const summaryText = useMemo(() => {
     const c = session?.choices || choices;
+    if (c.base) return `Customised ${c.base.name}`;
     const tier = config?.tiers.find(t => t.id === c.tier)?.name;
     return [
       [tier, pieceOf(c.piece)?.name].filter(Boolean).join(" "),
@@ -253,14 +322,18 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
   }, [session?.choices, choices, config]);
 
   const stepIndex = STEPS.indexOf(step);
+  const base = session?.choices?.base ?? null;
   const back = () => {
     setError(null);
     if (contactFor) return setContactFor(null);
-    if (step === "piece" || step === "done") return onClose();
+    // A product being customised has no earlier steps to go back to.
+    if (step === "piece" || step === "done" || (step === "designs" && base)) return onClose();
     setStep(STEPS[stepIndex - 1]);
   };
 
   const selected = session?.designs.find(d => d.id === selectedId) ?? null;
+  const totalVotes = Object.values(session?.votes || {}).reduce((n, v) => n + v.count, 0);
+  const canShare = !!config?.familyVote && !!session?.designs.some(d => d.status === "ready" && !d.original);
   const latestRound = Math.max(0, ...(session?.designs.map(d => d.round) ?? [0]));
   const days = config ? (config.makingDays.min === config.makingDays.max ? `${config.makingDays.min} days` : `${config.makingDays.min}–${config.makingDays.max} days`) : "";
 
@@ -295,6 +368,15 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
       {label}
     </button>
   );
+
+  const voteBadge = (designId: string) => {
+    const votes = session?.votes[designId]?.count;
+    return votes ? (
+      <span className="absolute right-1 top-1 flex items-center gap-0.5 rounded-full bg-white/95 px-1.5 py-0.5 text-[10.5px] font-semibold shadow-sm" style={{ color: chatColor }}>
+        <Heart className="h-2.5 w-2.5 fill-current" />{votes}
+      </span>
+    ) : null;
+  };
 
   const motifTile = (id: string, why?: string) => {
     const m = motifOf(id);
@@ -431,10 +513,12 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
         {guide(
           drawing ? "Sketching your designs… this takes about half a minute."
             : failedAll ? "Sorry, I couldn't draw that. Please try again."
-              : selected ? "Like it? I can change anything: just tell me what. When it feels right, tap “Make this for me”."
-                : "Here are your designs. Tap one to see it bigger.",
+              : selected?.original ? `What would you like to change about this ${pieceOf(session.choices.piece)?.name.toLowerCase() || "piece"}? Pick one below, or tell me in your own words.`
+                : selected ? "Like it? I can change anything: just tell me what. When it feels right, tap “Make this for me”."
+                  : "Here are your designs. Tap one to see it bigger.",
         )}
-        <div className={`grid gap-2 ${round.length > 1 ? "grid-cols-3" : "grid-cols-1"}`}>
+        {/* One finished design on its own is already shown big below: no need for its tile too. */}
+        {!(round.length === 1 && round[0].status === "ready" && selectedId === round[0].id) && <div className={`grid gap-2 ${round.length > 1 ? "grid-cols-3" : "grid-cols-1"}`}>
           {round.map(d => (
             <button
               key={d.id} type="button" disabled={d.status !== "ready"} onClick={() => { setSelectedId(d.id); setError(null); }} data-testid={`design-tile-${d.status}`}
@@ -448,40 +532,86 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
                 </span>
               )}
               {d.status === "failed" && <span className="absolute inset-0 grid place-items-center px-2 text-center text-[11px] text-gray-500">Couldn't draw this one</span>}
+              {voteBadge(d.id)}
             </button>
           ))}
-        </div>
+        </div>}
         {failedAll && <div className="mt-3">{primary("Try again", drawDesigns, false, "design-retry")}</div>}
 
         {selected?.url && (
           <motion.div key={selected.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-3">
             <div className="relative overflow-hidden rounded-2xl border border-gray-200 bg-gray-50">
               <img src={selected.url} alt={selected.note} className="w-full" data-testid="design-selected" />
-              <span className="absolute left-2 top-2 rounded-full bg-black/55 px-2 py-0.5 text-[10.5px] font-medium text-white">Design preview</span>
+              <span className="absolute left-2 top-2 rounded-full bg-black/55 px-2 py-0.5 text-[10.5px] font-medium text-white">{selected.original ? "The original" : "Design preview"}</span>
             </div>
             <p className="mt-2 text-[13px] text-gray-700">{selected.note}</p>
-            <p className="mt-0.5 text-[12px] text-gray-500">{summaryText}</p>
-            <div className="mt-2 flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2">
-              <span>
-                <span className="block text-[11px] uppercase tracking-wide text-gray-500">{session.priceText ? "Estimated price" : "Price"}</span>
-                <span className="block text-[14px] font-semibold text-gray-900" data-testid="design-price">{session.priceText || "Quoted by our designer"}</span>
-              </span>
-              <span className="text-right">
-                <span className="block text-[11px] uppercase tracking-wide text-gray-500">Made in</span>
-                <span className="block text-[14px] font-semibold text-gray-900">{days}</span>
-              </span>
-            </div>
-            <p className="mt-1.5 text-[11px] leading-snug text-gray-500">This is a preview. Our designer finalises the details{session.priceText ? " and the exact price" : ""} with you before anything is made.</p>
+            {!selected.original && <p className="mt-0.5 text-[12px] text-gray-500">{summaryText}</p>}
+            {session.votes[selected.id] && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-[12.5px] font-medium" style={{ color: chatColor }} data-testid="design-votes">
+                <Heart className="h-3.5 w-3.5 fill-current" />
+                {session.votes[selected.id].count} family vote{session.votes[selected.id].count === 1 ? "" : "s"}
+                {session.votes[selected.id].names.length > 0 && <span className="font-normal text-gray-500">· {session.votes[selected.id].names.slice(0, 4).join(", ")}</span>}
+              </p>
+            )}
+            {selected.original ? (
+              base?.price && (
+                <div className="mt-2 rounded-xl bg-gray-50 px-3 py-2">
+                  <span className="block text-[11px] uppercase tracking-wide text-gray-500">Price as it is</span>
+                  <span className="block text-[14px] font-semibold text-gray-900">{config.currencySymbol}{Number(base.price).toLocaleString("en-IN")}</span>
+                </div>
+              )
+            ) : (
+              <>
+                <div className="mt-2 flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2">
+                  <span>
+                    <span className="block text-[11px] uppercase tracking-wide text-gray-500">{session.priceText ? "Estimated price" : "Price"}</span>
+                    <span className="block text-[14px] font-semibold text-gray-900" data-testid="design-price">{session.priceText || "Quoted by our designer"}</span>
+                  </span>
+                  <span className="text-right">
+                    <span className="block text-[11px] uppercase tracking-wide text-gray-500">Made in</span>
+                    <span className="block text-[14px] font-semibold text-gray-900">{days}</span>
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[11px] leading-snug text-gray-500">This is a preview. Our designer finalises the details{session.priceText ? " and the exact price" : ""} with you before anything is made.</p>
+                <div className="mt-3">{primary("Make this for me", () => { setError(null); setContactFor({ kind: "request" }); }, drawing, "design-make-this")}</div>
+              </>
+            )}
 
-            <div className="mt-3">{primary("Make this for me", () => { setError(null); setContactFor({ kind: "request" }); }, drawing, "design-make-this")}</div>
+            {(config.tryOn || (canShare && !selected.original)) && (
+              <div className="mt-2 flex gap-2">
+                {config.tryOn && (
+                  <button
+                    type="button" disabled={tryOnBusy || busy} data-testid="design-try-on"
+                    onClick={() => (tryOns[selected.id] ? setShowTryOn(selected.id) : selfieInput.current?.click())}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-gray-200 px-3 py-2.5 text-[13px] font-medium text-gray-700 hover:border-gray-400 disabled:opacity-50"
+                  >
+                    {tryOnBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <User className="h-4 w-4" />}
+                    {tryOnBusy ? "Putting it on you…" : tryOns[selected.id] ? "See it on you" : "Try it on"}
+                  </button>
+                )}
+                {canShare && !selected.original && (
+                  <button
+                    type="button" disabled={busy} onClick={openShare} data-testid="design-share"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-gray-200 px-3 py-2.5 text-[13px] font-medium text-gray-700 hover:border-gray-400 disabled:opacity-50"
+                  >
+                    <Share2 className="h-4 w-4" />
+                    {totalVotes > 0 ? `Family votes (${totalVotes})` : "Share with family"}
+                  </button>
+                )}
+              </div>
+            )}
+            {tryOnBusy && <p className="mt-1 text-[11px] text-gray-500">This takes about half a minute. Your photo isn't kept.</p>}
 
             <p className="mb-1.5 mt-4 text-[12px] font-semibold uppercase tracking-wide text-gray-500">Change something</p>
             <div className="flex flex-wrap gap-1.5">
-              {config.quickChanges.map(q => chip(q, false, () => askChange(q), `design-quick-${q}`))}
+              {(base ? config.customiseChanges : config.quickChanges).map(q => chip(q, false, () => {
+                // "Add my initial" needs the letter: it goes in the box for the shopper to finish.
+                if (/initial$/i.test(q)) { setChange("Add the initial "); changeInput.current?.focus(); } else askChange(q);
+              }, `design-quick-${q}`))}
             </div>
             <div className="mt-2 flex items-center gap-2">
               <input
-                value={change} onChange={e => setChange(e.target.value.slice(0, 200))} placeholder="Describe a change…" data-testid="design-change-input"
+                ref={changeInput} value={change} onChange={e => setChange(e.target.value.slice(0, 200))} placeholder="Describe a change…" data-testid="design-change-input"
                 onKeyDown={e => { if (e.key === "Enter" && change.trim().length >= 3 && !busy && !drawing) askChange(change); }}
                 className="min-w-0 flex-1 rounded-xl border border-gray-200 px-3 py-2 text-[13.5px] outline-none focus:border-gray-400"
               />
@@ -503,8 +633,9 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
             <p className="mb-1.5 mt-4 text-[12px] font-semibold uppercase tracking-wide text-gray-500">Earlier designs</p>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {earlier.map(d => (
-                <button key={d.id} type="button" onClick={() => setSelectedId(d.id)} className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-gray-200" style={selectedId === d.id ? { borderColor: chatColor } : undefined}>
+                <button key={d.id} type="button" onClick={() => setSelectedId(d.id)} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-gray-200" style={selectedId === d.id ? { borderColor: chatColor } : undefined}>
                   <img src={d.url} alt={d.note} className="h-full w-full object-cover" />
+                  {voteBadge(d.id)}
                 </button>
               ))}
             </div>
@@ -512,7 +643,7 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
         )}
         {!drawing && (
           <button type="button" onClick={() => setStep("piece")} className="mt-4 flex items-center gap-1.5 text-[12.5px] font-medium text-gray-600 hover:text-gray-900" data-testid="design-start-over">
-            <RefreshCw className="h-3.5 w-3.5" /> Start a different design
+            <RefreshCw className="h-3.5 w-3.5" /> {base ? "Design something from scratch" : "Start a different design"}
           </button>
         )}
       </>
@@ -574,11 +705,12 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
     return (
       <div className="absolute inset-0 z-10 flex items-end bg-black/40" onClick={() => !busy && setContactFor(null)}>
         <motion.div initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="max-h-[92%] w-full overflow-y-auto rounded-t-2xl bg-white p-4" onClick={e => e.stopPropagation()}>
-          <h3 className="text-[16px] font-semibold text-gray-900">{isRequest ? "Make this for me" : "Keep designing"}</h3>
+          <h3 className="text-[16px] font-semibold text-gray-900">{isRequest ? "Make this for me" : contactFor.kind === "tryon" ? "Try it on" : "Keep designing"}</h3>
           <p className="mt-1 text-[13px] leading-snug text-gray-600">
             {isRequest
               ? needDetails ? "Share your details and our designer will call you with the final design and price." : "Our designer will call you with the final design and price."
-              : "Share your name and mobile number to keep changing your design. We'll save it for you."}
+              : contactFor.kind === "tryon" ? "Share your name and mobile number to try it on. We'll save your design for you."
+                : "Share your name and mobile number to keep changing your design. We'll save it for you."}
           </p>
           <div className="mt-3 space-y-2.5">
             {needDetails && field("name", "Your name", "text", "name")}
@@ -601,13 +733,59 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
     );
   };
 
+  function shareSheet() {
+    if (!shareOpen || !session?.shareToken) return null;
+    return (
+      <div className="absolute inset-0 z-10 flex items-end bg-black/40" onClick={() => setShareOpen(false)}>
+        <motion.div initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="w-full rounded-t-2xl bg-white p-4" onClick={e => e.stopPropagation()} data-testid="design-share-sheet">
+          <h3 className="text-[16px] font-semibold text-gray-900">Share with family</h3>
+          <p className="mt-1 text-[13px] leading-snug text-gray-600">Send this link to family and friends. They see your designs and vote for their favourite. Their votes show up here on each design.</p>
+          <a
+            href={`https://wa.me/?text=${encodeURIComponent(shareText)}`} target="_blank" rel="noopener noreferrer" data-testid="design-share-whatsapp"
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[#25D366] px-4 py-3 text-[14px] font-semibold text-white"
+          >
+            <Share2 className="h-4 w-4" /> Send on WhatsApp
+          </a>
+          <div className="mt-2 flex items-center gap-2">
+            <input readOnly value={shareLink} onFocus={e => e.target.select()} className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-[12.5px] text-gray-700" data-testid="design-share-link" />
+            <button type="button" onClick={copyLink} className="flex shrink-0 items-center gap-1 rounded-xl border border-gray-200 px-3 py-2 text-[12.5px] font-medium text-gray-700" data-testid="design-share-copy">
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          {totalVotes > 0 && <p className="mt-2 text-[12.5px] text-gray-600">{totalVotes} vote{totalVotes === 1 ? "" : "s"} so far.</p>}
+        </motion.div>
+      </div>
+    );
+  }
+
+  function tryOnView() {
+    const picture = showTryOn ? tryOns[showTryOn] : null;
+    if (!picture) return null;
+    return (
+      <div className="absolute inset-0 z-20 flex flex-col bg-black/95" onClick={() => setShowTryOn(null)} data-testid="design-try-on-view">
+        <div className="flex items-center justify-between px-3 py-3 text-white">
+          <p className="text-[15px] font-semibold">How it looks on you</p>
+          <button type="button" aria-label="Close" onClick={() => setShowTryOn(null)} className="rounded-full p-1 hover:bg-white/20"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="flex min-h-0 flex-1 items-center justify-center px-3" onClick={e => e.stopPropagation()}>
+          <img src={picture} alt="The design on you" className="max-h-full max-w-full rounded-xl object-contain" />
+        </div>
+        <div className="flex gap-2 px-3 py-3" onClick={e => e.stopPropagation()}>
+          <a href={picture} download="my-design-try-on.jpg" className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2.5 text-[13.5px] font-semibold text-gray-900"><Download className="h-4 w-4" /> Save photo</a>
+          <button type="button" onClick={() => { setShowTryOn(null); selfieInput.current?.click(); }} className="flex-1 rounded-xl border border-white/50 px-3 py-2.5 text-[13.5px] font-medium text-white">Try another photo</button>
+        </div>
+        <p className="px-3 pb-3 text-center text-[11px] text-white/70">A preview made by AI. Your photo isn't kept.</p>
+      </div>
+    );
+  }
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col bg-white" style={{ zIndex: 100000 }} data-testid="design-studio-panel">
       <div className="flex items-center gap-2 px-3 py-3 text-white" style={{ background: gradient }}>
         <button type="button" onClick={back} aria-label="Back" className="rounded-full p-1 hover:bg-white/20" data-testid="design-back"><ArrowLeft className="h-5 w-5" /></button>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[15px] font-semibold">{config?.label || "Design your own jewellery"}</p>
-          {step !== "done" && stepIndex >= 0 && (
+          <p className="truncate text-[15px] font-semibold">{base ? "Customise this piece" : config?.label || "Design your own jewellery"}</p>
+          {step !== "done" && stepIndex >= 0 && !base && (
             <div className="mt-1 flex gap-1">
               {STEPS.map((s, i) => <span key={s} className={`h-1 flex-1 rounded-full ${i <= stepIndex ? "bg-white" : "bg-white/35"}`} />)}
             </div>
@@ -627,6 +805,12 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
 
       {config && session && !loadError && nextButton() && <div className="border-t border-gray-100 px-3 py-3">{nextButton()}</div>}
       {contactForm()}
+      {shareSheet()}
+      {tryOnView()}
+      <input
+        ref={selfieInput} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" data-testid="design-selfie-input"
+        onChange={e => { const photo = e.target.files?.[0]; e.target.value = ""; tryOn(photo); }}
+      />
     </motion.div>
   );
 }

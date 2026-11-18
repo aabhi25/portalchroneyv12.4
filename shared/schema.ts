@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid, numeric, jsonb, customType, integer, index, uniqueIndex, boolean, date, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
-import type { DesignChoices, DesignImage, DesignStudioSettings } from "./designStudio";
+import type { DesignChoices, DesignImage, DesignStudioSettings, DesignVote } from "./designStudio";
 
 // Custom vector type for pgvector photo fingerprints (768 dimensions, Gemini Embedding 2)
 const vector768 = customType<{  data: number[];
@@ -6124,12 +6124,15 @@ export const designSessions = pgTable("design_sessions", {
   requestNote: text("request_note"), // the shopper's note with the request (size, date needed)
   staffNotes: text("staff_notes"),
   pageUrl: text("page_url"),
+  shareToken: text("share_token"), // "Share with family": the link's secret, made when the shopper first shares
+  votes: jsonb("votes").$type<DesignVote[]>().notNull().default([]), // family votes given through the shared link
   requestedAt: timestamp("requested_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
   index("design_sessions_account_created_idx").on(table.businessAccountId, table.createdAt),
   index("design_sessions_account_requested_idx").on(table.businessAccountId, table.requestedAt),
+  uniqueIndex("design_sessions_share_token_idx").on(table.shareToken),
 ]);
 
 export type DesignStudioSettingsRow = typeof designStudioSettings.$inferSelect;

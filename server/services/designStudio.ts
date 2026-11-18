@@ -11,20 +11,25 @@
  *    shopper's name and mobile number before any change after the first set.
  *  - "Make this for me": the session becomes a design request and its lead goes through the same
  *    lead store and CRM gate as every other website lead. Contact details stay on the lead only.
+ *  - "Customise this": a session that starts from one of the brand's own products. The product's
+ *    photo is the first "design" (not a drawing); every change is drawn from it.
+ *  - "Try it on": the design on the shopper's own photo. Neither the photo nor the result is kept.
+ *  - "Share with family": a secret link where family vote for a design, one vote each.
  */
 import { promises as fs } from "fs";
 import path from "path";
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import sharp from "sharp";
 import { and, desc, eq, gte, isNotNull, lte, sql } from "drizzle-orm";
 import { db } from "../db";
 import { storage } from "../storage";
 import { businessAccounts, designSessions, designStudioSettings, leads, type BusinessAccount, type DesignSessionRow } from "@shared/schema";
 import {
-  ANGLES, DESIGNS_PER_ROUND, PIECES, RENDER_STALE_MS, REQUEST_STATUSES, availableMotifs, buildChangePrompt, buildDesignPrompt,
-  cleanChoices, defaultDesignStudioSettings, describeChoices, estimatePrice, formatPriceRange, missingChoices,
-  normalizeDesignStudioSettings, rankMotifs,
-  type DesignChoices, type DesignImage, type DesignSessionStatus, type DesignStudioSettings, type MotifSuggestion, type PriceRange,
+  ANGLES, DESIGNS_PER_ROUND, MAX_VOTES, PIECES, RENDER_STALE_MS, REQUEST_STATUSES, availableMotifs, buildChangePrompt, buildCustomisePrompt,
+  buildDesignPrompt, changeTrail, cleanChoices, defaultDesignStudioSettings, describeChoices, estimatePrice, formatPriceRange, missingChoices,
+  normalizeDesignStudioSettings, pieceForProduct, rankMotifs, tallyVotes, tryOnTypeFor,
+  type DesignChoices, type DesignImage, type DesignSessionStatus, type DesignStudioSettings, type DesignVote, type MotifSuggestion,
+  type PriceRange, type VoteTally,
 } from "@shared/designStudio";
 import { validatePhoneNumber } from "@shared/validation/phone";
 import { createOpenAI } from "../lib/openaiClient";
@@ -36,6 +41,7 @@ import { r2Storage } from "./r2StorageService";
 import { upsertConversationLead } from "./leadCapture/leadStore";
 import { syncConversationLeadIfReady } from "./leadCapture/crmGate";
 import { hybridProductSearch } from "./productHybridSearch";
+import { friendlyTryOnError, tryOnPromptFor } from "./tryOn";
 
 const FOLDER = "design-studio";
 const RENDER_TIMEOUT_MS = 150_000;
@@ -106,8 +112,25 @@ export async function prepareUploadedPhoto(buffer: Buffer): Promise<Buffer> {
   return sharp(buffer).rotate().resize(1280, 1280, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 86 }).toBuffer();
 }
 
-/** One of our own images as a PNG the image AI can read. Null when it can't be loaded. */
-async function loadReference(url: string): Promise<Buffer | null> {
+/** A web address outside this server and its private network (a product photo on the brand's shop). */
+function isOutsideAddress(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" && !(u.protocol === "http:" && process.env.NODE_ENV !== "production")) return false;
+    const host = u.hostname.toLowerCase();
+    if (process.env.NODE_ENV !== "production" && (host === "localhost" || host === "127.0.0.1")) return true;
+    return !(host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") || /^\[|^(127|10|0)\.|^192\.168\.|^169\.254\.|^172\.(1[6-9]|2\d|3[01])\./.test(host) || !host.includes("."));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One of our own images as a PNG the image AI can read. Null when it can't be loaded.
+ * `productPhoto`: the address is a product's photo from the brand's own catalogue, which may live
+ * on the brand's shop.
+ */
+async function loadReference(url: string, productPhoto = false): Promise<Buffer | null> {
   try {
     let raw: Buffer;
     if (url.startsWith(`/uploads/${FOLDER}/`)) {
@@ -115,12 +138,14 @@ async function loadReference(url: string): Promise<Buffer | null> {
       if (!file.startsWith(path.join(process.cwd(), "uploads", FOLDER))) return null;
       raw = await fs.readFile(file);
     } else {
-      if (!(await ownImagePrefixes()).some(p => url.startsWith(p))) return null;
+      const allowed = (await ownImagePrefixes()).some(p => url.startsWith(p)) || (productPhoto && isOutsideAddress(url));
+      if (!allowed) return null;
       const res = await fetchWithTimeout(url, undefined, 20_000);
       if (!res.ok) return null;
       raw = Buffer.from(await res.arrayBuffer());
+      if (raw.length > 20 * 1024 * 1024) return null;
     }
-    return await sharp(raw).resize(1024, 1024, { fit: "inside", withoutEnlargement: true }).png().toBuffer();
+    return await sharp(raw).resize(1024, 1024, { fit: "inside", withoutEnlargement: true }).flatten({ background: "#ffffff" }).png().toBuffer();
   } catch (e: any) {
     console.warn("[Design Studio] Could not load a reference image:", e?.message);
     return null;
@@ -205,6 +230,9 @@ export interface PublicSession {
   requested: boolean;
   chosenDesignId: string | null;
   rendersLeft: number;
+  /** "Share with family": the link's secret once shared, and the votes so far per design. */
+  shareToken: string | null;
+  votes: Record<string, VoteTally>;
 }
 
 /** What the widget sees of a session. */
@@ -223,10 +251,30 @@ export function toPublicSession(row: DesignSessionRow, settings: DesignStudioSet
     requested: !!row.requestedAt,
     chosenDesignId: row.chosenDesignId,
     rendersLeft: Math.max(0, settings.maxRendersPerSession - row.renderCount),
+    shareToken: row.shareToken,
+    votes: tallyVotes(row.votes),
   };
 }
 
-export async function startSession(input: { businessAccountId: string; conversationId?: string | null; visitorToken?: string | null; pageUrl?: string | null }): Promise<DesignSessionRow> {
+export async function startSession(input: {
+  businessAccountId: string; conversationId?: string | null; visitorToken?: string | null; pageUrl?: string | null;
+  /** "Customise this": the product to start from. */
+  productId?: string | null;
+}): Promise<DesignSessionRow> {
+  // "Customise this": only where the brand offers it, and only for a piece it makes.
+  let choices: DesignChoices = {};
+  let designs: DesignImage[] = [];
+  if (input.productId) {
+    const settings = await getDesignStudioSettings(input.businessAccountId);
+    const product = settings.customiseProducts ? await storage.getProduct(input.productId, input.businessAccountId).catch(() => undefined) : undefined;
+    const piece = pieceForProduct(product?.name);
+    if (!product?.imageUrl || !piece || !settings.pieces.includes(piece)) {
+      throw new DesignStudioError("not_customisable", "This piece can't be customised here. You can design your own instead.", 400);
+    }
+    choices = { piece, base: { productId: product.id, name: product.name, imageUrl: product.imageUrl, price: product.price ?? null, productUrl: (product as any).productUrl ?? null } };
+    designs = [{ id: randomUUID(), status: "ready", url: product.imageUrl, note: `The original: ${product.name}`, round: 1, original: true, createdAt: new Date().toISOString() }];
+  }
+
   let conversationId: string | null = null;
   if (input.conversationId && !input.conversationId.startsWith("temp_")) {
     const conv = await storage.getConversation(input.conversationId, input.businessAccountId).catch(() => undefined);
@@ -241,6 +289,8 @@ export async function startSession(input: { businessAccountId: string; conversat
     conversationId,
     visitorToken: input.visitorToken?.trim().slice(0, 200) || null,
     pageUrl: input.pageUrl?.trim().slice(0, 1000) || null,
+    choices,
+    designs,
     createdAt: now,
     updatedAt: now,
   }).returning();
@@ -258,13 +308,14 @@ export async function getSession(id: string, businessAccountId: string, visitorT
   return row;
 }
 
-async function updateSession(id: string, change: (row: DesignSessionRow) => Partial<DesignSessionRow> | null): Promise<DesignSessionRow> {
+/** `touch: false` leaves updated_at alone (a family vote isn't the shopper designing; the daily image count goes by updated_at). */
+async function updateSession(id: string, change: (row: DesignSessionRow) => Partial<DesignSessionRow> | null, touch = true): Promise<DesignSessionRow> {
   return db.transaction(async tx => {
     const [row] = await tx.select().from(designSessions).where(eq(designSessions.id, id)).for("update");
     if (!row) throw new DesignStudioError("not_found", "This design session wasn't found. Please start again.", 404);
     const patch = change(row);
     if (!patch) return row;
-    const [updated] = await tx.update(designSessions).set({ ...patch, updatedAt: new Date() }).where(eq(designSessions.id, id)).returning();
+    const [updated] = await tx.update(designSessions).set({ ...patch, ...(touch ? { updatedAt: new Date() } : {}) }).where(eq(designSessions.id, id)).returning();
     return updated;
   });
 }
@@ -281,8 +332,9 @@ async function checkLimits(row: DesignSessionRow, settings: DesignStudioSettings
   }
 }
 
+/** The first few images are free to see; after that the shopper's details come first (when the brand asks for them). */
 function needsContact(row: DesignSessionRow, settings: DesignStudioSettings): boolean {
-  return settings.contactBeforeChanges && !row.leadId && (row.designs || []).length > 0;
+  return settings.contactBeforeChanges && !row.leadId && row.renderCount >= DESIGNS_PER_ROUND;
 }
 
 const CONTACT_FIRST = new DesignStudioError("contact_required", "Please share your name and mobile number to keep designing.", 403);
@@ -328,7 +380,7 @@ export async function startDesigns(row: DesignSessionRow, rawChoices: unknown): 
   void (async () => {
     const motif = availableMotifs(settings).find(m => m.id === choices.motifId);
     const [styleRefs, motifRef] = await Promise.all([
-      Promise.all(settings.stylePhotos.slice(0, 3).map(loadReference)).then(list => list.filter((b): b is Buffer => !!b)),
+      Promise.all(settings.stylePhotos.slice(0, 3).map(url => loadReference(url))).then(list => list.filter((b): b is Buffer => !!b)),
       motif?.imageUrl ? loadReference(motif.imageUrl) : Promise.resolve(null),
     ]);
     const references = motifRef ? [...styleRefs, motifRef] : styleRefs;
@@ -368,11 +420,14 @@ export async function startChange(row: DesignSessionRow, designId: string, rawCh
 
   void (async () => {
     try {
-      const reference = await loadReference(parent.url!);
+      const reference = await loadReference(parent.url!, !!parent.original);
       if (!reference) throw new Error("The design to change could not be loaded");
-      const image = await draw(account, settings, buildChangePrompt(change), [reference]);
+      // The first change to one of the brand's products starts from its catalogue photo.
+      const prompt = parent.original ? buildCustomisePrompt(row.choices?.base?.name || "this piece", change) : buildChangePrompt(change);
+      const image = await draw(account, settings, prompt, [reference]);
       await finishDesign(row.id, design.id, { status: "ready", url: await storeStudioImage(row.businessAccountId, image) });
-    } catch {
+    } catch (e: any) {
+      console.warn(`[Design Studio] A change could not be drawn for ${row.businessAccountId}:`, e?.message);
       await finishDesign(row.id, design.id, { status: "failed" });
     }
   })();
@@ -477,12 +532,16 @@ function cleanContact(input: ContactInput): { name: string; phone: string; email
   return { name, phone, email: email || null };
 }
 
-function requestSummary(row: DesignSessionRow, settings: DesignStudioSettings, designUrl?: string | null, note?: string | null): string {
+function requestSummary(row: DesignSessionRow, settings: DesignStudioSettings, design?: DesignImage | null, note?: string | null): string {
   const price = settings.ratesConfirmed && row.priceLow != null && row.priceHigh != null
     ? ` · estimate ${formatPriceRange(settings.currencySymbol, { low: row.priceLow, high: row.priceHigh })}` : "";
+  const changes = design ? changeTrail(row.designs || [], design.id) : [];
+  const base = row.choices?.base;
   return `Design Studio: ${describeChoices(settings, row.choices || {}) || "custom design"}${price}`
+    + (changes.length ? ` · changes: ${changes.join(" → ")}` : "")
+    + (base?.productUrl ? ` · product: ${base.productUrl}` : "")
     + (note ? ` · note: ${note}` : "")
-    + (designUrl ? ` · design: ${designUrl}` : "");
+    + (design?.url ? ` · design: ${design.url}` : "");
 }
 
 /** Saves the shopper's name and number as a lead on their chat (made if they haven't chatted yet). */
@@ -528,8 +587,9 @@ export async function requestDesign(row: DesignSessionRow, input: ContactInput &
   const settings = await getDesignStudioSettings(row.businessAccountId);
   const design = (row.designs || []).find(d => d.id === input.designId && d.status === "ready" && d.url);
   if (!design) throw new DesignStudioError("not_found", "Please pick a design first.", 404);
+  if (design.original) throw new DesignStudioError("no_change", "Tell us what you'd like changed first.");
   const note = typeof input.note === "string" ? input.note.trim().replace(/\s+/g, " ").slice(0, 300) : "";
-  const summary = requestSummary(row, settings, design.url, note);
+  const summary = requestSummary(row, settings, design, note);
 
   // A shopper who already gave their details needn't type them again.
   let current = row;
@@ -576,19 +636,126 @@ export async function similarProducts(row: DesignSessionRow): Promise<SimilarPro
   const piece = PIECES.find(p => p.id === c.piece)?.name;
   const motif = availableMotifs(settings).find(m => m.id === c.motifId)?.name.replace(/\s*\(.*\)/, "");
   const metal = settings.metals.find(m => m.id === c.metalId)?.name.replace(/\b\d+k\b|\b925\b/gi, "").trim();
-  const query = [motif, metal, piece].filter(Boolean).join(" ") || c.idea || "";
+  const query = c.base?.name || [motif, metal, piece].filter(Boolean).join(" ") || c.idea || "";
   if (!query) return [];
   try {
     let hits = await hybridProductSearch(row.businessAccountId, { query, productType: piece, limit: 12 });
     if (hits.length === 0 && piece) hits = await hybridProductSearch(row.businessAccountId, { query: piece, limit: 12 });
     return hits
-      .filter(h => h.imageUrl && h.stockStatus !== "out_of_stock" && h.stockStatus !== "outofstock")
+      .filter(h => h.imageUrl && h.id !== c.base?.productId && h.stockStatus !== "out_of_stock" && h.stockStatus !== "outofstock")
       .slice(0, 6)
       .map(h => ({ id: h.id, name: h.name, price: h.price, imageUrl: h.imageUrl, productUrl: h.productUrl }));
   } catch (e: any) {
     console.warn("[Design Studio] Ready pieces search failed:", e?.message);
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Try it on
+// ---------------------------------------------------------------------------
+
+/**
+ * The design on the shopper's own photo. Returns the picture itself (a data URL): neither the photo
+ * nor the result is saved anywhere. Counts as one image; needs the shopper's details when the brand
+ * asks for them after the first few images.
+ */
+export async function tryOnDesign(row: DesignSessionRow, designId: string, selfie: Buffer | undefined): Promise<string> {
+  const settings = await getDesignStudioSettings(row.businessAccountId);
+  if (!settings.tryOn) throw new DesignStudioError("off", "Try-on isn't available here.", 404);
+  const design = (row.designs || []).find(d => d.id === designId && d.status === "ready" && d.url);
+  if (!design) throw new DesignStudioError("not_found", "That design wasn't found.", 404);
+  if (!selfie?.length) throw new DesignStudioError("no_photo", "Please choose a photo of yourself.");
+  if (needsContact(row, settings)) throw CONTACT_FIRST;
+  await checkLimits(row, settings, 1);
+  const account = await storage.getBusinessAccount(row.businessAccountId);
+  if (!account) throw new DesignStudioError("not_found", "Account not found.", 404);
+
+  let person: Buffer;
+  try {
+    person = await sharp(selfie).rotate().resize(1536, 1536, { fit: "inside", withoutEnlargement: true }).flatten({ background: "#ffffff" }).png().toBuffer();
+  } catch {
+    throw new DesignStudioError("no_photo", "We couldn't read that photo. Please try another one.");
+  }
+  const piece = await loadReference(design.url!, !!design.original);
+  if (!piece) throw new DesignStudioError("try_on_failed", "Try-on isn't available right now. Please try again in a little while.", 502);
+
+  await updateSession(row.id, current => ({ renderCount: current.renderCount + 1 }));
+  try {
+    const image = await draw(account, settings, tryOnPromptFor(tryOnTypeFor(row.choices?.piece)), [person, piece]);
+    return `data:image/jpeg;base64,${image.toString("base64")}`;
+  } catch (e: any) {
+    if (e instanceof DesignStudioError) throw e;
+    throw new DesignStudioError("try_on_failed", friendlyTryOnError(e), 502);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Share with family
+// ---------------------------------------------------------------------------
+
+/** Makes the session's share link (once): family open it and vote, no login. */
+export async function shareSession(row: DesignSessionRow): Promise<DesignSessionRow> {
+  const settings = await getDesignStudioSettings(row.businessAccountId);
+  if (!settings.familyVote) throw new DesignStudioError("off", "Sharing isn't available here.", 404);
+  if (!(row.designs || []).some(d => d.status === "ready" && !d.original)) throw new DesignStudioError("not_found", "There's no design to share yet.", 400);
+  if (row.shareToken) return row;
+  return updateSession(row.id, current => (current.shareToken ? null : { shareToken: randomBytes(16).toString("hex") }));
+}
+
+export interface SharedDesigns {
+  brand: string;
+  website: string | null;
+  label: string;
+  summary: string;
+  designs: { id: string; url: string; note: string; original: boolean }[];
+  votes: Record<string, VoteTally>;
+  /** The design this voter chose, when they have voted. */
+  myVote: string | null;
+}
+
+async function sharedRow(token: string): Promise<DesignSessionRow> {
+  const [row] = /^[0-9a-f]{32}$/.test(token) ? await db.select().from(designSessions).where(eq(designSessions.shareToken, token)) : [];
+  if (!row || !(await isDesignStudioOn(row.businessAccountId))) throw new DesignStudioError("not_found", "This link isn't available any more.", 404);
+  return row;
+}
+
+async function sharedView(row: DesignSessionRow, voterId?: string | null): Promise<SharedDesigns> {
+  const [settings, account] = await Promise.all([getDesignStudioSettings(row.businessAccountId), storage.getBusinessAccount(row.businessAccountId)]);
+  // The newest designs: what the shopper is deciding between now.
+  const designs = (row.designs || []).filter(d => d.status === "ready" && d.url).slice(-6)
+    .map(d => ({ id: d.id, url: d.url!, note: d.note, original: !!d.original }));
+  return {
+    brand: account?.name || "",
+    website: account?.website || null,
+    label: settings.label,
+    summary: describeChoices(settings, row.choices || {}),
+    designs,
+    votes: tallyVotes(row.votes),
+    myVote: (row.votes || []).find(v => v.voterId === voterId)?.designId ?? null,
+  };
+}
+
+/** What a family member sees on the shared link. */
+export async function getSharedDesigns(token: string, voterId?: string | null): Promise<SharedDesigns> {
+  return sharedView(await sharedRow(token), voterId);
+}
+
+/** One vote per person (per browser): voting again moves it. */
+export async function castVote(token: string, input: { designId?: unknown; voterId?: unknown; name?: unknown }): Promise<SharedDesigns> {
+  const row = await sharedRow(token);
+  const voterId = typeof input.voterId === "string" && /^[A-Za-z0-9-]{8,64}$/.test(input.voterId) ? input.voterId : null;
+  if (!voterId) throw new DesignStudioError("bad_vote", "Your vote couldn't be saved. Please try again.");
+  const design = (row.designs || []).find(d => d.id === input.designId && d.status === "ready" && d.url);
+  if (!design) throw new DesignStudioError("not_found", "That design isn't here any more.", 404);
+  const name = typeof input.name === "string" ? input.name.trim().replace(/\s+/g, " ").replace(/[<>]/g, "").slice(0, 30) : "";
+  const updated = await updateSession(row.id, current => {
+    const others = (current.votes || []).filter(v => v.voterId !== voterId);
+    if (others.length >= MAX_VOTES) throw new DesignStudioError("votes_full", "Voting on these designs is full. Thank you!", 429);
+    const vote: DesignVote = { designId: design.id, voterId, at: new Date().toISOString(), ...(name ? { name } : {}) };
+    return { votes: [...others, vote] };
+  }, false);
+  return sharedView(updated, voterId);
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +768,13 @@ export interface DesignRequestRow {
   requestedAt: Date | null;
   summary: string;
   designUrl: string | null;
-  designs: { id: string; url: string; note: string }[];
+  designs: { id: string; url: string; note: string; votes: number; original: boolean }[];
+  /** What the shopper asked to change on the way to the chosen design, oldest first. */
+  changes: string[];
+  /** "Customise this": the product it started from. */
+  product: { name: string; productUrl: string | null } | null;
+  /** Family votes: how many in all, and how many for the chosen design. */
+  votes: { total: number; chosen: number };
   priceText: string | null;
   requestNote: string | null;
   staffNotes: string | null;
@@ -628,13 +801,18 @@ export async function listRequests(businessAccountId: string, from: Date, to: Da
   return rows.map(({ session: s, name, phone, email }) => {
     const ready = (s.designs || []).filter(d => d.status === "ready" && d.url);
     const chosen = ready.find(d => d.id === s.chosenDesignId);
+    const tally = tallyVotes(s.votes);
+    const base = s.choices?.base;
     return {
       id: s.id,
       status: s.status as DesignSessionStatus,
       requestedAt: s.requestedAt,
       summary: describeChoices(settings, s.choices || {}),
       designUrl: chosen?.url ?? null,
-      designs: ready.map(d => ({ id: d.id, url: d.url!, note: d.note })),
+      designs: ready.map(d => ({ id: d.id, url: d.url!, note: d.note, votes: tally[d.id]?.count ?? 0, original: !!d.original })),
+      changes: changeTrail(s.designs || [], s.chosenDesignId),
+      product: base ? { name: base.name, productUrl: base.productUrl ?? null } : null,
+      votes: { total: (s.votes || []).length, chosen: chosen ? tally[chosen.id]?.count ?? 0 : 0 },
       priceText: s.priceLow != null && s.priceHigh != null ? formatPriceRange(settings.currencySymbol, { low: s.priceLow, high: s.priceHigh }) : null,
       requestNote: s.requestNote,
       staffNotes: s.staffNotes,

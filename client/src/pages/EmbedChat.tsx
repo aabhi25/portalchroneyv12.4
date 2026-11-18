@@ -17,6 +17,7 @@ import { OrderDetailOverlay } from "@/components/OrderDetailOverlay";
 import { ConversationStarters } from "@/components/ConversationStarters";
 import { ChatImageCropOverlay } from "@/components/ChatImageCropOverlay";
 import { TryOnOverlay } from "@/components/TryOnOverlay";
+import { canCustomiseProduct } from "@shared/designStudio";
 import { useUrgencyOffer } from "@/hooks/useUrgencyOffer";
 import { QuickBrowseButtons } from "@/components/QuickBrowseButtons";
 import { ChoicePictureTiles, showPictureTiles } from "@/components/ChoicePictureTiles";
@@ -208,7 +209,7 @@ interface WidgetSettings {
   id: string;
   businessAccountId: string;
   /** Design Studio switched on for the account (shared/designStudio.ts): the button's wording. */
-  designStudio?: { label: string; tagline: string } | null;
+  designStudio?: { label: string; tagline: string; customise?: boolean; pieces?: string[] } | null;
   /** Live AI avatar button (null unless a super admin enabled it and it can start). */
   liveAvatar?: {
     enabled: boolean; displayName: string; styleHint: string;
@@ -631,6 +632,8 @@ export default function EmbedChat() {
   const [pendingSearchImageUrl, setPendingSearchImageUrl] = useState<string | null>(null);
   const [showTryOnOverlay, setShowTryOnOverlay] = useState(false);
   const [showDesignStudio, setShowDesignStudio] = useState(false);
+  /** "Customise this" on a product card: the product the Design Studio opens on. */
+  const [designStudioProduct, setDesignStudioProduct] = useState<{ id: string; name: string } | null>(null);
   const [tryOnProduct, setTryOnProduct] = useState<{imageUrl: string; name: string; type?: string} | null>(null);
   const [expandedImageUrl, setExpandedImageUrl] = useState<string | null>(null);
   const [visitorSessionId, setVisitorSessionId] = useState<string | null>(null);
@@ -6459,6 +6462,8 @@ export default function EmbedChat() {
                       addToCartEnabled={settings?.addToCartEnabled !== 'false'}
                       tryOnEnabled={settings?.tryOnEnabled === 'true'}
                       onTryOn={handleTryOn}
+                      canCustomise={(p) => canCustomiseProduct(p, settings?.designStudio)}
+                      onCustomise={(p) => { setDesignStudioProduct({ id: p.id, name: p.name }); setShowDesignStudio(true); }}
                       pagination={msg.productPagination}
                       searchQuery={msg.productSearchQuery}
                       businessAccountId={businessAccountId}
@@ -6530,6 +6535,8 @@ export default function EmbedChat() {
                       addToCartEnabled={settings?.addToCartEnabled !== 'false'}
                       tryOnEnabled={settings?.tryOnEnabled === 'true'}
                       onTryOn={handleTryOn}
+                      canCustomise={(p) => canCustomiseProduct(p, settings?.designStudio)}
+                      onCustomise={(p) => { setDesignStudioProduct({ id: p.id, name: p.name }); setShowDesignStudio(true); }}
                       businessAccountId={businessAccountId}
                       userMessage={lastUserMsg}
                       selectedLanguage={selectedLanguage !== 'auto' ? selectedLanguage : undefined}
@@ -7659,7 +7666,8 @@ export default function EmbedChat() {
               pageUrl={parentPageUrl}
               chatColor={chatColor}
               chatColorEnd={chatColorEnd}
-              onClose={() => setShowDesignStudio(false)}
+              product={designStudioProduct}
+              onClose={() => { setShowDesignStudio(false); setDesignStudioProduct(null); }}
               onRequested={({ url, summary }) => {
                 // The request shows in the chat, so the shopper finds it when they come back.
                 setIsMenuMode(false);

@@ -498,6 +498,13 @@
       "when": 1795016600229,
       "tag": "0070_design_studio",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1795018839234,
+      "tag": "0071_design_studio_family_vote",
+      "breakpoints": true
     }
   ]
 }

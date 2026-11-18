@@ -125,7 +125,7 @@ import designStudioRoutes from "./routes/designStudio";
 import { wantsCustomDesign } from "@shared/designStudio";
 
 /** Added to the website chat's instructions when the account has the Design Studio on. */
-const DESIGN_STUDIO_CHAT_NOTE = `CUSTOM JEWELLERY: this shop lets shoppers design their own jewellery right here in the chat and have it made to order. When someone asks about custom, personalised, bespoke or made-to-order jewellery, or wants a design changed to their taste, say yes warmly in one or two sentences and tell them to tap the "Design your own" button that appears under your reply. Do not ask them design questions yourself and do not quote a price for a custom piece: the design tool does both.`;
+const DESIGN_STUDIO_CHAT_NOTE = `CUSTOM JEWELLERY: this shop lets shoppers design their own jewellery right here in the chat and have it made to order. When someone asks about custom, personalised, bespoke or made-to-order jewellery, or wants a design changed to their taste, say yes warmly in one or two sentences and tell them to tap the "Design your own" button that appears under your reply. End your reply there: do not ask what they want in the design and do not quote a price for a custom piece. The design tool does both.`;
 import { productHasGeminiFingerprint } from "./services/visualSearchEngine";
 import tutorRoutes from "./routes/tutor";
 import { getPublicTutorConfig } from "./services/tutor/settings";
@@ -27612,7 +27612,8 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         k12ImageUploadEnabled,
         // Design Studio switched on: the chat offers "Design your own jewellery" (shared/designStudio.ts).
         designStudio: businessAccount?.designStudioEnabled === 'true'
-          ? await (await import('./services/designStudio')).getDesignStudioSettings(businessAccountId).then(d => ({ label: d.label, tagline: d.tagline }))
+          ? await (await import('./services/designStudio')).getDesignStudioSettings(businessAccountId)
+              .then(d => ({ label: d.label, tagline: d.tagline, customise: d.customiseProducts, pieces: d.pieces }))
           : null,
         requirePreChatOtp: preChatGate.active,
         phoneValidation: captchaGate.active ? captchaGate.phoneValidation : preChatGate.phoneValidation,
