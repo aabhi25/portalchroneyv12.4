@@ -1864,6 +1864,10 @@ Return JSON:
         stepId: step_id,
         response: answer,
       });
+      if (context.conversationId) {
+        const { onWebsiteJourneyProgress } = await import('./leadCapture/journeyCrmGate');
+        onWebsiteJourneyProgress(context.conversationId, { stepId: step_id });
+      }
     } catch (error: any) {
       // Ignore duplicate key errors - question already answered
       if (!error.message?.includes('duplicate')) {

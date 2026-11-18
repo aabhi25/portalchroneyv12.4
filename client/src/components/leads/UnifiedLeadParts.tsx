@@ -158,6 +158,10 @@ function StateLine({ label, state }: { label: string; state?: CrmSyncState }) {
           <Badge className="bg-green-100 text-green-700">Synced</Badge>
         ) : state.status === "pending" ? (
           <Badge className="bg-gray-100 text-gray-600">In progress</Badge>
+        ) : state.status === "waiting_journey" ? (
+          <Badge className="bg-gray-100 text-gray-600">Waiting for journey step</Badge>
+        ) : state.status === "invalid_phone" ? (
+          <Badge className="bg-amber-100 text-amber-700">Number looks invalid</Badge>
         ) : state.status ? (
           <Badge className="bg-red-100 text-red-700">{state.status.replace(/_/g, " ")}</Badge>
         ) : (
@@ -166,7 +170,9 @@ function StateLine({ label, state }: { label: string; state?: CrmSyncState }) {
         {state.syncedAt && <span className="text-xs text-gray-400">{format(new Date(state.syncedAt), "PPp")}</span>}
       </div>
       {state.crmLeadId && <code className="ml-28 text-xs bg-gray-100 px-2 py-0.5 rounded font-mono w-fit">{state.crmLeadId}</code>}
-      {state.error && state.status !== "synced" && <p className="ml-28 text-xs text-red-600 bg-red-50 rounded p-2">{formatCrmSyncError(state.error)}</p>}
+      {state.error && state.status !== "synced" && (state.status === "waiting_journey" || state.status === "invalid_phone"
+        ? <p className="ml-28 text-xs text-gray-600 bg-gray-50 rounded p-2">{state.error}</p>
+        : <p className="ml-28 text-xs text-red-600 bg-red-50 rounded p-2">{formatCrmSyncError(state.error)}</p>)}
     </div>
   );
 }

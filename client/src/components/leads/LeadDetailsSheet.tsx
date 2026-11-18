@@ -12,6 +12,9 @@ import { LeadStoryTimeline } from "./LeadStoryTimeline";
 import { CHANNEL_META, ChannelBadge, ChannelTrail, type SocialCrm, type UnifiedLeadRow } from "./UnifiedLeadParts";
 import { crmStatusLook, syncButtonLabel, type CrmTarget } from "./LeadCrm";
 
+/** Held back on purpose (journey step not reached, junk-looking number): not an error. */
+const HELD = ["waiting", "waiting_journey", "invalid_phone"];
+
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="mt-6">
@@ -226,7 +229,10 @@ export function LeadDetailsSheet({
                         {t.state?.status === "disqualified" && (
                           <p className="mt-1.5 text-[12.5px] text-amber-700">Not sent because {t.state.error || "the answer did not match the qualifying values"}.</p>
                         )}
-                        {showError && t.state?.status !== "disqualified" && (
+                        {showError && HELD.includes(t.state?.status ?? "") && (
+                          <p className="mt-1.5 text-[12.5px] text-gray-600">{t.state!.error!.replace(/\.?$/, ".")} Sync now sends it anyway.</p>
+                        )}
+                        {showError && t.state?.status !== "disqualified" && !HELD.includes(t.state?.status ?? "") && (
                           <p className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[12.5px] text-red-700">{formatCrmSyncError(t.state!.error)}</p>
                         )}
                       </li>

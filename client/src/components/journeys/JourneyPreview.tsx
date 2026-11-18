@@ -3,16 +3,19 @@ import { CalendarDays, RotateCcw, Send, ShoppingBag, Undo2 } from "lucide-react"
 import { DEFAULT_ENDING_TEXT, type JourneyModel } from "./journeyModel";
 
 interface Line {
-  from: "bot" | "you";
+  /** note: "Lead sent to your CRM here" (the journey's CRM step). */
+  from: "bot" | "you" | "note";
   text: string;
 }
+
+const CRM_NOTE = "✓ CRM step passed: the lead goes to your CRM (once it has a mobile or email)";
 
 /**
  * A small chat that plays the journey the way visitors get it: same order, same "only when an
  * earlier answer leads here" skipping and the same option paths (forward only, like the server).
  * The builder owner taps options or types answers to try every path before going live.
  */
-export function JourneyPreview({ model, aiWords }: { model: JourneyModel; aiWords: boolean }) {
+export function JourneyPreview({ model, aiWords, crmStepId }: { model: JourneyModel; aiWords: boolean; crmStepId?: string | null }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [current, setCurrent] = useState<number | null>(null);
   const [done, setDone] = useState(false);
@@ -29,7 +32,9 @@ export function JourneyPreview({ model, aiWords }: { model: JourneyModel; aiWord
 
   const ask = (index: number | null, before: Line[]) => {
     if (index === null) {
-      setLines([...before, { from: "bot", text: model.ending?.message || DEFAULT_ENDING_TEXT }]);
+      // A path that skipped the CRM question: finishing the journey sends the lead too.
+      const note: Line[] = crmStepId && !before.some(l => l.from === "note") ? [{ from: "note", text: CRM_NOTE }] : [];
+      setLines([...before, ...note, { from: "bot", text: model.ending?.message || DEFAULT_ENDING_TEXT }]);
       setCurrent(null);
       setDone(true);
       return;
@@ -69,6 +74,7 @@ export function JourneyPreview({ model, aiWords }: { model: JourneyModel; aiWord
     const q = questions[current];
     setHistory([...history, { index: current, lines: lines.length }]);
     const withAnswer: Line[] = [...lines, { from: "you", text: text || "Skipped" }];
+    if (crmStepId && q.id === crmStepId && !lines.some(l => l.from === "note")) withAnswer.push({ from: "note", text: CRM_NOTE });
     const option = q.kind === "choice" ? q.options.find(o => o.label === text) : undefined;
     if (option?.then.kind === "end") {
       setLines([...withAnswer, { from: "bot", text: option.then.message }]);
@@ -100,7 +106,9 @@ export function JourneyPreview({ model, aiWords }: { model: JourneyModel; aiWord
       </div>
       <div ref={listRef} className="flex-1 space-y-2 overflow-y-auto bg-gray-50/60 p-3" style={{ minHeight: 260, maxHeight: 460 }}>
         {questions.length === 0 && <p className="py-10 text-center text-[12px] text-gray-400">Add a question to try the journey here.</p>}
-        {lines.map((l, i) => (
+        {lines.map((l, i) => l.from === "note" ? (
+          <p key={i} className="py-0.5 text-center text-[11px] font-medium text-emerald-700" data-testid="preview-crm-note">{l.text}</p>
+        ) : (
           <div key={i} className={`flex ${l.from === "you" ? "justify-end" : "justify-start"}`}>
             <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-[13px] leading-snug ${l.from === "you" ? "bg-purple-600 text-white" : "bg-white text-gray-800 shadow-[0_1px_2px_rgba(0,0,0,0.06)]"}`}>
               {l.text}

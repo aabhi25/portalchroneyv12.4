@@ -7,6 +7,7 @@ import { emailInMessage, extractPhoneCandidates, isDecline, isValidEmail, isVali
 import { phoneModeFor } from './leadCapture/fields';
 import { upsertConversationLead } from './leadCapture/leadStore';
 import { syncConversationLeadIfReady } from './leadCapture/crmGate';
+import { onWebsiteJourneyProgress } from './leadCapture/journeyCrmGate';
 import { applyMidChatPhoneGate } from './leadCapture/phoneGate';
 import { buildJourneyProductSearch, isToolStep, productStepIntro, type JourneyProductSearch } from '../../shared/journeyProducts';
 
@@ -576,6 +577,7 @@ export class JourneyOrchestrator {
           stepId: currentStep.id,
           response: answer,
         });
+        onWebsiteJourneyProgress(conversationId, { stepId: currentStep.id });
       } catch (error: any) {
         // Ignore duplicate errors
         if (!error.message?.includes('duplicate')) {
@@ -1216,6 +1218,7 @@ Respond with JSON:
                 stepId: step.id,
                 response: autoFilledValue,
               });
+              onWebsiteJourneyProgress(conversationId, { stepId: step.id });
               console.log('[Duplicate Detection] Auto-filled:', step.questionText?.substring(0, 40), '→', autoFilledValue);
             } catch (error) {
               // Ignore duplicate errors
@@ -1446,6 +1449,7 @@ If the question has NOT been answered, respond with JSON:
               stepId: currentStep.id,
               response: analysis.answer,
             });
+            onWebsiteJourneyProgress(conversationId, { stepId: currentStep.id });
           } catch (error) {
             console.error('[Journey Skip] Error storing auto-filled response:', error);
           }

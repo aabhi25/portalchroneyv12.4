@@ -16398,6 +16398,28 @@ Important:
     }
   });
 
+  // "Send to CRM after this question": one step of the journey (or none = as soon as the lead is ready).
+  app.put("/api/journeys/:id/crm-step", requireAuth, requireBusinessAccount, async (req, res) => {
+    try {
+      const businessAccountId = req.user!.businessAccountId!;
+      const journey = await storage.getJourney(req.params.id, businessAccountId);
+      if (!journey) return res.status(404).json({ error: "Journey not found" });
+      const stepId = typeof req.body?.stepId === "string" && req.body.stepId ? req.body.stepId : null;
+      if (stepId) {
+        const [step] = await db.select({ id: journeySteps.id }).from(journeySteps)
+          .where(and(eq(journeySteps.id, stepId), eq(journeySteps.journeyId, journey.id))).limit(1);
+        if (!step) return res.status(400).json({ error: "That question is not in this journey" });
+      }
+      await db.transaction(async (tx) => {
+        await tx.update(journeySteps).set({ crmSyncAfter: "false" }).where(eq(journeySteps.journeyId, journey.id));
+        if (stepId) await tx.update(journeySteps).set({ crmSyncAfter: "true" }).where(eq(journeySteps.id, stepId));
+      });
+      res.json({ success: true, stepId });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Delete journey
   app.delete("/api/journeys/:id", requireAuth, requireBusinessAccount, async (req, res) => {
     try {
@@ -16465,6 +16487,7 @@ Important:
             skipOnValue: step.skipOnValue,
             skipToStepIndex: step.skipToStepIndex,
             isConditional: step.isConditional,
+            crmSyncAfter: step.crmSyncAfter,
             completionButtonText: step.completionButtonText,
             placeholderText: step.placeholderText,
             helpText: step.helpText,
@@ -33745,6 +33768,24 @@ Return ONLY a valid JSON object in this format:
       res.json({ step });
     } catch (error: any) {
       console.error("Error updating WhatsApp flow step:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // "Send to CRM after this step": one step of the flow (or none = LeadSquared gets the lead once the chat is quiet).
+  app.put("/api/whatsapp/flows/:flowId/crm-step", requireAuth, async (req: any, res) => {
+    try {
+      const { flowId } = req.params;
+      const ownership = await getOwnedWhatsappFlow(req, flowId);
+      if (!ownership.businessAccountId) return res.status(400).json({ error: "No active business account" });
+      if (!ownership.flow) return res.status(404).json({ error: "Flow not found" });
+      const stepId = typeof req.body?.stepId === "string" && req.body.stepId ? req.body.stepId : null;
+      const { whatsappFlowService } = await import("./services/whatsappFlowService");
+      const ok = await whatsappFlowService.setCrmStep(flowId, stepId);
+      if (!ok) return res.status(400).json({ error: "That step is not in this journey" });
+      res.json({ success: true, stepId });
+    } catch (error: any) {
+      console.error("Error setting the WhatsApp journey CRM step:", error);
       res.status(500).json({ error: error.message });
     }
   });

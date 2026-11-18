@@ -81,14 +81,14 @@ async function main() {
     expect(splitMobile("9876543210").mobileNumber === "9876543210" && splitMobile("******3210").mobileNumber === null, "plain 10 digits kept; a hidden number is never sent");
 
     // ── first send creates the lead ──
-    const A = await mkLead({ name: "Priya Sharma", phone: "+91 98765 43210", email: "priya@example.com", sourceUrl: "https://mba.example.com/?utm_source=google&utm_medium=cpc&utm_campaign=mba-oct" });
+    const A = await mkLead({ name: "Priya Sharma", phone: "+91 98765 12340", email: "priya@example.com", sourceUrl: "https://mba.example.com/?utm_source=google&utm_medium=cpc&utm_campaign=mba-oct" });
     const noContact = await mkLead({ name: "Just A Name" });
     const old = await mkLead({ name: "Old Lead", phone: "9123456780", createdAt: ago(120), updatedAt: ago(120) });
     await runMerittoSyncPass();
     const created = calls.filter(c => c.path.endsWith("/create"));
     const c0 = created.find(c => c.body.name === "Priya Sharma");
     expect(c0 && c0.headers["access-key"] === "ak-1" && c0.headers["secret-key"] === "sk-good", "create call carries access-key and secret-key", c0?.headers);
-    expect(c0?.body.mobile === "9876543210" && c0?.body.country_dial_code === "+91" && c0?.body.email === "priya@example.com", "mobile without country code + dial code + email", c0?.body);
+    expect(c0?.body.mobile === "9876512340" && c0?.body.country_dial_code === "+91" && c0?.body.email === "priya@example.com", "mobile without country code + dial code + email", c0?.body);
     expect(c0?.body.source === "google" && c0?.body.medium === "cpc" && c0?.body.campaign === "mba-oct" && c0?.body.course === "Online MBA", "UTM source/medium/campaign and a fixed course", c0?.body);
     expect(c0?.body.mobile_verification_status === "unverified", "verification status sent", c0?.body.mobile_verification_status);
     let a = await getLead(A.id);

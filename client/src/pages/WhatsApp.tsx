@@ -87,6 +87,7 @@ import { JourneysRoutingNotice } from "@/components/whatsapp/JourneysRoutingNoti
 import type { MeResponseDto } from "@shared/dto";
 import { WA_LIMITS, promptLimitFor, whatsappStepProblems } from "@shared/whatsappLimits";
 import { WaCharCounter } from "@/components/whatsapp/WaCharCounter";
+import { CrmStepPicker } from "@/components/journeys/CrmStepPicker";
 
 type SharedNumberSummary =
   | { role: "linked"; ownerAccountId: string; ownerName: string; number: string | null; tag: string; landingPageLink: string | null }
@@ -210,6 +211,8 @@ interface WhatsappFlowStep {
   defaultNextStep: string | null;
   saveToField: string | null;
   paused: boolean;
+  /** The lead goes to LeadSquared only after this step (one per journey). */
+  crmSyncAfter?: boolean;
 }
 
 interface LeadField {
@@ -3079,6 +3082,7 @@ function SortableStepItem({ step, index, onEdit, onDelete, onTogglePause, overLi
         <div className="flex items-center gap-2">
           <Badge variant="outline" className={step.paused ? 'opacity-50' : ''}>{step.type}</Badge>
           {step.paused && <Badge variant="secondary" className="text-xs bg-amber-100 text-amber-700">Paused</Badge>}
+          {step.crmSyncAfter && <Badge variant="secondary" className="text-xs bg-emerald-50 text-emerald-700" data-testid={`badge-wa-crm-step-${step.id}`}>Sent to CRM after this</Badge>}
           {overLimit > 0 && (
             <button type="button" onClick={() => onEdit(step)} title="Open this step to shorten it" data-testid={`badge-wa-too-long-${step.id}`}>
               <Badge variant="secondary" className="text-xs bg-red-100 text-red-700 hover:bg-red-200">Too long for WhatsApp</Badge>
@@ -3757,6 +3761,21 @@ function FlowBuilderSection() {
     },
   });
 
+  const crmStepMutation = useMutation({
+    mutationFn: async (stepId: string | null) => {
+      const res = await fetch(`/api/whatsapp/flows/${selectedFlow?.id}/crm-step`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stepId }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || "Couldn't save");
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/flows", selectedFlow?.id, "steps"] }),
+    onError: (e: any) => toast({ title: "Couldn't change when the lead goes to the CRM", description: e?.message, variant: "destructive" }),
+  });
+
   const togglePauseMutation = useMutation({
     mutationFn: async (step: WhatsappFlowStep) => {
       const res = await fetch(`/api/whatsapp/flows/${selectedFlow?.id}/steps/${step.id}/toggle-pause`, {
@@ -4208,6 +4227,18 @@ function FlowBuilderSection() {
                     </li>
                   ))}
                 </ul>
+              </div>
+            )}
+
+            {(stepsData?.steps?.length ?? 0) > 0 && (
+              <div className="mb-4">
+                <CrmStepPicker
+                  steps={(stepsData?.steps ?? []).filter((s) => s.type !== "end").map((s) => ({ id: s.id, text: s.prompt }))}
+                  value={stepsData?.steps?.find((s) => s.crmSyncAfter)?.id ?? null}
+                  onChange={(stepId) => crmStepMutation.mutate(stepId)}
+                  busy={crmStepMutation.isPending}
+                  defaultLabel="Once the chat is quiet for 5 minutes"
+                />
               </div>
             )}
 

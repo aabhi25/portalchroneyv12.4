@@ -18,6 +18,8 @@ export function crmStatusLook(status: string | null | undefined): { text: string
     case "synced": return { text: "Synced", className: "bg-green-50 text-green-700" };
     case "pending": return { text: "Syncing", className: "bg-gray-100 text-gray-600" };
     case "waiting": return { text: "Waiting", className: "bg-gray-100 text-gray-600" };
+    case "waiting_journey": return { text: "Waiting for journey step", className: "bg-gray-100 text-gray-600" };
+    case "invalid_phone": return { text: "Number looks invalid", className: "bg-amber-50 text-amber-700" };
     case "disqualified": return { text: "Not qualified", className: "bg-amber-50 text-amber-700" };
     case "needs_attention": return { text: "Needs a look", className: "bg-amber-50 text-amber-700" };
     case "failed":
@@ -30,7 +32,8 @@ export function crmStatusTitle(t: CrmTarget): string {
   const status = t.state?.status;
   if (status === "synced") return `Sent to ${t.label}`;
   if (status === "pending") return `${t.label}: sending now`;
-  if (status === "waiting") return `${t.label}: waiting until the lead is ready (mobile or email, required details, verification)`;
+  if (status === "waiting") return `${t.label}: ${t.state?.error || "waiting until the lead is ready (mobile or email, required details, verification)"}`;
+  if (status === "waiting_journey" || status === "invalid_phone") return `${t.label}: ${t.state?.error || "held back"}. Sync now sends it anyway.`;
   if (status === "disqualified") return `Not sent to ${t.label}: ${t.state?.error || "the answer did not match the qualifying values"}`;
   if (status === "failed") return `${t.label} (retrying automatically): ${formatCrmSyncError(t.state?.error)}`;
   if (status === "permanently_failed") return `${t.label} (gave up retrying): ${formatCrmSyncError(t.state?.error)}`;
@@ -40,7 +43,8 @@ export function crmStatusTitle(t: CrmTarget): string {
 
 /** Button text for a manual sync. */
 export function syncButtonLabel(t: CrmTarget): string {
-  return t.state?.status && t.state.status !== "pending" ? "Retry" : "Sync now";
+  const status = t.state?.status;
+  return status && !["pending", "waiting", "waiting_journey", "invalid_phone"].includes(status) ? "Retry" : "Sync now";
 }
 
 /**

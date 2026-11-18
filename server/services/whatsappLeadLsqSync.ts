@@ -11,6 +11,10 @@
  *   - failures are retried on the website schedule (leadsquaredRetryWorker delays).
  * Sync / Retry on a lead and "Sync all to CRM" send leads by hand whether or not the switch is on.
  *
+ * Journey "send to CRM after this step" (leadCapture/journeyCrmGate.ts): a new lead whose journey has
+ * such a step waits ('waiting_journey') until the person moved past it or finished; it is looked at
+ * again when the chat changes. Sync now sends it anyway; "Sync all" leaves it.
+ *
  * Connection and field mappings: the website ones, or WhatsApp's own when the LeadSquared settings
  * say so (leadsquaredWaConnection / leadsquaredWaMappings = 'own'; see whatsappLsqConnection).
  *
@@ -27,6 +31,7 @@ import { whatsappLeadFields, whatsappLeads, whatsappSettings, type WidgetSetting
 import { stableStringify } from "@shared/settingsCopy";
 import { LSQ_MAX_RETRY_COUNT, LSQ_PENDING_TIMEOUT_MS, getNextRetryDelay } from "./leadsquaredRetryWorker";
 import type { LeadDataContext } from "./leadsquaredService";
+import { JOURNEY_WAIT_STATUS, journeyWaitMessage, whatsappJourneyCrmWait } from "./leadCapture/journeyCrmGate";
 
 export const QUIET_MINUTES = 5;
 export const AUTO_WINDOW_DAYS = 7;
@@ -43,7 +48,7 @@ export type WaLsqMode = "auto" | "update" | "retry" | "manual";
 
 export interface WaLsqResult {
   success: boolean;
-  skipped?: "not_found" | "not_configured" | "not_eligible" | "already_synced" | "in_progress" | "not_due" | "unchanged" | "switched_off";
+  skipped?: "not_found" | "not_configured" | "not_eligible" | "already_synced" | "in_progress" | "not_due" | "unchanged" | "switched_off" | "waiting_journey";
   status: string | null;
   message: string;
 }
@@ -144,7 +149,7 @@ async function claim(leadId: string, mode: WaLsqMode): Promise<number | null> {
         leadsquared_retry_count = CASE WHEN ${mode === "manual"}::boolean THEN 0 ELSE leadsquared_retry_count END
     WHERE id = ${leadId}
       AND (
-        (${mode === "auto" || mode === "manual"}::boolean AND COALESCE(leadsquared_sync_status, '') = '')
+        (${mode === "auto" || mode === "manual"}::boolean AND COALESCE(leadsquared_sync_status, '') IN ('', ${JOURNEY_WAIT_STATUS}))
         OR (${mode === "update"}::boolean AND leadsquared_sync_status = 'synced')
         OR (${mode === "retry"}::boolean
             AND leadsquared_sync_status IN ('failed', 'pending')
@@ -215,6 +220,16 @@ export async function syncWhatsappLeadToLeadSquared(
   }
   if (lead.leadsquaredSyncStatus === "synced" && opts.mode !== "update") {
     return { success: true, skipped: "already_synced", status: "synced", message: "Lead is already synced to LeadSquared" };
+  }
+  if (opts.mode === "auto" && !lead.leadsquaredLeadId) {
+    const wait = await whatsappJourneyCrmWait(lead);
+    if (wait.waiting) {
+      // Marks when it was looked at (leadsquared_next_retry_at), so the worker waits for the chat to change.
+      const message = journeyWaitMessage(wait.question);
+      await db.update(whatsappLeads).set({ leadsquaredSyncStatus: JOURNEY_WAIT_STATUS, leadsquaredSyncError: message, leadsquaredNextRetryAt: new Date() })
+        .where(and(eq(whatsappLeads.id, leadId), sql`COALESCE(${whatsappLeads.leadsquaredSyncStatus}, '') IN ('', ${JOURNEY_WAIT_STATUS})`));
+      return { success: false, skipped: "waiting_journey", status: JOURNEY_WAIT_STATUS, message };
+    }
   }
 
   const { createLeadSquaredServiceFromSettings } = await import("./leadsquaredService");
@@ -288,7 +303,7 @@ export async function unsyncedWhatsappLeads(businessAccountId: string, from: Dat
   }).from(whatsappLeads).where(and(
     eq(whatsappLeads.businessAccountId, businessAccountId),
     sql`${whatsappLeads.status} <> 'message_only'`,
-    sql`(${whatsappLeads.leadsquaredSyncStatus} IS NULL OR ${whatsappLeads.leadsquaredSyncStatus} NOT IN ('synced', 'pending'))`,
+    sql`(${whatsappLeads.leadsquaredSyncStatus} IS NULL OR ${whatsappLeads.leadsquaredSyncStatus} NOT IN ('synced', 'pending', ${JOURNEY_WAIT_STATUS}))`,
     sql`${whatsappLeads.receivedAt} >= ${ts(from)} AND ${whatsappLeads.receivedAt} < ${ts(to)}`,
     ...(draftsOut ? [sql`${whatsappLeads.qualifiedAt} IS NOT NULL`] : []),
   )).orderBy(whatsappLeads.receivedAt);
@@ -300,12 +315,14 @@ export async function syncAllWhatsappLeadsToLeadSquared(businessAccountId: strin
     .where(and(
       eq(whatsappLeads.businessAccountId, businessAccountId),
       sql`${whatsappLeads.status} <> 'message_only'`,
-      sql`(${whatsappLeads.leadsquaredSyncStatus} IS NULL OR ${whatsappLeads.leadsquaredSyncStatus} NOT IN ('synced', 'pending'))`,
+      sql`(${whatsappLeads.leadsquaredSyncStatus} IS NULL OR ${whatsappLeads.leadsquaredSyncStatus} NOT IN ('synced', 'pending', ${JOURNEY_WAIT_STATUS}))`,
     ))
     .orderBy(whatsappLeads.receivedAt)
     .limit(limit);
   const out = { synced: 0, failed: 0, skipped: 0 };
   for (const { id } of rows) {
+    // Still in a journey before its "send to CRM" step: left for the person to finish (or Sync now).
+    if ((await whatsappJourneyCrmWait({ id })).waiting) { out.skipped++; continue; }
     const r = await syncWhatsappLeadToLeadSquared(id, { mode: "manual", source: "bulk", businessAccountId });
     if (r.success && !r.skipped) out.synced++;
     else if (r.skipped) out.skipped++;
@@ -325,9 +342,15 @@ export async function runWhatsappLsqSyncOnce(now = new Date()): Promise<number> 
   const res = await db.execute(sql`
     (SELECT w.id, 'auto' AS mode FROM whatsapp_leads w
       JOIN whatsapp_settings s ON s.business_account_id = w.business_account_id AND s.auto_sync_to_leadsquared = 'true'
-      WHERE COALESCE(w.leadsquared_sync_status, '') = '' AND w.status <> 'message_only' AND w.sender_phone NOT LIKE '%***%'
+      WHERE w.status <> 'message_only' AND w.sender_phone NOT LIKE '%***%'
         AND w.received_at >= ${windowStart}
         AND GREATEST(w.updated_at, COALESCE(w.last_message_at, w.updated_at)) <= ${quiet}
+        AND (COALESCE(w.leadsquared_sync_status, '') = ''
+          -- waiting for the journey step: again once the lead or its journey moved since the last look
+          OR (w.leadsquared_sync_status = ${JOURNEY_WAIT_STATUS} AND (
+            GREATEST(w.updated_at, COALESCE(w.last_message_at, w.updated_at)) > COALESCE(w.leadsquared_next_retry_at, w.received_at)
+            OR EXISTS (SELECT 1 FROM whatsapp_flow_sessions fs WHERE fs.id = w.flow_session_id
+                       AND fs.last_message_at > COALESCE(w.leadsquared_next_retry_at, w.received_at)))))
       ORDER BY w.received_at LIMIT ${BATCH})
     UNION ALL
     (SELECT w.id, 'update' AS mode FROM whatsapp_leads w

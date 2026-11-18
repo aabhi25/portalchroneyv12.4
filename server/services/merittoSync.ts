@@ -150,7 +150,7 @@ export async function syncLeadToMeritto(businessAccountId: string, leadId: strin
     }
     if (!gate.ok) {
       // Looked at again in a couple of minutes (or sooner if nothing else is waiting).
-      await record(lead.id, businessAccountId, { merittoSyncStatus: lead.merittoLeadId ? lead.merittoSyncStatus : "waiting", merittoNextRetryAt: new Date(Date.now() + NOT_READY_RECHECK_MINUTES * 60_000) });
+      await record(lead.id, businessAccountId, { merittoSyncStatus: lead.merittoLeadId ? lead.merittoSyncStatus : "waiting", merittoSyncError: lead.merittoLeadId ? lead.merittoSyncError : (gate.reason ?? null), merittoNextRetryAt: new Date(Date.now() + NOT_READY_RECHECK_MINUTES * 60_000) });
       return { outcome: "not_ready", message: gate.result };
     }
   }

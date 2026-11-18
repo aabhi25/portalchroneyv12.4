@@ -21,6 +21,7 @@ import {
   type WhatsappFlowSession,
 } from "@shared/schema";
 import { eq, and, desc, sql, asc, ne, gte, ilike } from "drizzle-orm";
+import { crmStepPassedAtSql } from "./leadCapture/journeyCrmGate";
 import OpenAI from "openai";
 import {
   restrictedReplyLanguage, channelConversationKey, flowResponseLanguageLine, checkReplyLanguage,
@@ -1997,6 +1998,7 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
         currentStepKey: nextStepKey,
         collectedData,
         lastMessageAt: new Date(),
+        crmStepPassedAt: crmStepPassedAtSql(whatsappFlowSessions, nextStepKey),
       })
       .where(eq(whatsappFlowSessions.id, sessionId));
 
@@ -2006,7 +2008,7 @@ Example: {"name": null, "phone": "9876543210", "email": null, "address": "123 Ma
   private async finalizeSessionCompletion(sessionId: string, collectedData: Record<string, any>): Promise<boolean> {
     const updated = await db
       .update(whatsappFlowSessions)
-      .set({ status: "completed", collectedData, lastMessageAt: new Date() })
+      .set({ status: "completed", collectedData, lastMessageAt: new Date(), crmStepPassedAt: crmStepPassedAtSql(whatsappFlowSessions) })
       .where(and(
         eq(whatsappFlowSessions.id, sessionId),
         ne(whatsappFlowSessions.status, "completed")
@@ -4460,6 +4462,21 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     await db.delete(whatsappFlows).where(eq(whatsappFlows.id, flowId));
     if (flow) this.invalidateFlowCache(flow.bid);
     console.log(`[WhatsApp Flow] Deleted flow: ${flowId}`);
+  }
+
+  /** "Send to CRM after this step": at most one step per flow; null clears it. False when the step isn't in the flow. */
+  async setCrmStep(flowId: string, stepId: string | null): Promise<boolean> {
+    if (stepId) {
+      const [step] = await db.select({ id: whatsappFlowSteps.id }).from(whatsappFlowSteps)
+        .where(and(eq(whatsappFlowSteps.id, stepId), eq(whatsappFlowSteps.flowId, flowId))).limit(1);
+      if (!step) return false;
+    }
+    await db.transaction(async (tx) => {
+      await tx.update(whatsappFlowSteps).set({ crmSyncAfter: false }).where(eq(whatsappFlowSteps.flowId, flowId));
+      if (stepId) await tx.update(whatsappFlowSteps).set({ crmSyncAfter: true }).where(eq(whatsappFlowSteps.id, stepId));
+    });
+    this.stepsCache.delete(flowId);
+    return true;
   }
 
   async createStep(
@@ -7397,7 +7414,7 @@ Return only JSON: {"optionId":"one configured id" | null}`,
   private async updateSessionStep(sessionId: string, stepKey: string): Promise<void> {
     await db
       .update(whatsappFlowSessions)
-      .set({ currentStepKey: stepKey, lastMessageAt: new Date() })
+      .set({ currentStepKey: stepKey, lastMessageAt: new Date(), crmStepPassedAt: crmStepPassedAtSql(whatsappFlowSessions, stepKey) })
       .where(eq(whatsappFlowSessions.id, sessionId));
   }
 

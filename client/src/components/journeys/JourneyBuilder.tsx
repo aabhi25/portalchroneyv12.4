@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle, ArrowDown, ArrowUp, CalendarCheck, CalendarDays, CornerDownRight, Flag, Hash, ListChecks,
-  Loader2, Mail, Pencil, Phone, Plus, ShoppingBag, Sparkles, Trash2, Type, User, X,
+  Loader2, Mail, Pencil, Phone, Plus, Send, ShoppingBag, Sparkles, Trash2, Type, User, X,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -18,6 +18,7 @@ import {
   type AnswerKind, type Ending, type JourneyModel, type OptionFilter, type Question, type StepRow, type Then,
 } from "./journeyModel";
 import { JourneyPreview } from "./JourneyPreview";
+import { CrmStepPicker } from "./CrmStepPicker";
 
 const KIND_ICON: Record<AnswerKind, LucideIcon> = {
   short: Type, choice: ListChecks, name: User, mobile: Phone, email: Mail, number: Hash,
@@ -46,6 +47,7 @@ export function JourneyBuilder({ journeyId, steps, aiWords }: { journeyId: strin
   const [problems, setProblems] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const crmStepId = model.questions.find(q => q.raw?.crmSyncAfter === "true")?.id ?? null;
 
   const api = <T,>(method: string, path: string, body?: unknown) => apiRequest<T>(method, `/api/journeys/${journeyId}${path}`, body);
   const refresh = async () => {
@@ -153,6 +155,10 @@ export function JourneyBuilder({ journeyId, steps, aiWords }: { journeyId: strin
     await api("PUT", `/steps/${q.id}`, { isConditional: on ? "true" : "false" });
   });
 
+  const setCrmStep = (stepId: string | null) => run("change when the lead goes to the CRM", async () => {
+    await api("PUT", "/crm-step", { stepId });
+  });
+
   const saveEnding = (draft: Ending) => run("save the ending", async () => {
     const fields = { questionText: draft.message.trim() || DEFAULT_ENDING_TEXT, completionButtonText: draft.buttonText.trim() || null };
     if (draft.id) {
@@ -184,6 +190,15 @@ export function JourneyBuilder({ journeyId, steps, aiWords }: { journeyId: strin
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]" data-testid="journey-builder">
       <div className="min-w-0 space-y-3">
+        {model.questions.length > 0 && (
+          <CrmStepPicker
+            steps={model.questions.filter(q => !NO_ANSWER.includes(q.kind) || q.kind === "appointment").map(q => ({ id: q.id!, text: q.text }))}
+            value={crmStepId}
+            onChange={setCrmStep}
+            busy={busy}
+            defaultLabel="As soon as we have their mobile or email"
+          />
+        )}
         {model.questions.length === 0 && !editing && (
           <div className="rounded-2xl border-2 border-dashed border-gray-200 p-8 text-center">
             <p className="font-medium text-gray-800">No questions yet</p>
@@ -226,6 +241,7 @@ export function JourneyBuilder({ journeyId, steps, aiWords }: { journeyId: strin
               onCancelDelete={() => setConfirmDelete(null)}
               onDelete={() => deleteQuestion(q)}
               onOnlyWhenLed={(on) => setOnlyWhenLed(q, on)}
+              crmStep={crmStepId === key}
             />
           );
         })}
@@ -267,7 +283,7 @@ export function JourneyBuilder({ journeyId, steps, aiWords }: { journeyId: strin
       </div>
 
       <div className="xl:sticky xl:top-4 xl:self-start">
-        <JourneyPreview model={previewModel} aiWords={aiWords} />
+        <JourneyPreview model={previewModel} aiWords={aiWords} crmStepId={crmStepId} />
       </div>
     </div>
   );
@@ -286,12 +302,13 @@ function thenSummary(then: Then, ownIndex: number, questions: Question[]): { tex
 
 function QuestionCard({
   q, index, questions, incoming, busy, confirmingDelete,
-  onEdit, onUp, onDown, onAskDelete, onCancelDelete, onDelete, onOnlyWhenLed,
+  onEdit, onUp, onDown, onAskDelete, onCancelDelete, onDelete, onOnlyWhenLed, crmStep,
 }: {
   q: Question; index: number; questions: Question[]; incoming: { fromIndex: number; option: string }[];
   busy: boolean; confirmingDelete: boolean;
   onEdit: () => void; onUp?: () => void; onDown?: () => void;
   onAskDelete: () => void; onCancelDelete: () => void; onDelete: () => void; onOnlyWhenLed: (on: boolean) => void;
+  crmStep?: boolean;
 }) {
   const Icon = KIND_ICON[q.kind];
   const hasExtraRules = q.keptRoutes.length > 0 || q.keepExit || q.keepSkip || !!q.defaultNextStepId;
@@ -306,6 +323,7 @@ function QuestionCard({
             {!q.required && !NO_ANSWER.includes(q.kind) && <span className="rounded-md bg-gray-100 px-2 py-0.5 text-gray-600">Optional</span>}
             {q.savedAs && <span className="rounded-md bg-blue-50 px-2 py-0.5 text-blue-700">Saved as {q.savedAs}</span>}
             {q.onlyWhenLed && <span className="rounded-md bg-purple-50 px-2 py-0.5 text-purple-700">Asked only when an earlier answer leads here</span>}
+            {crmStep && <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-emerald-700" data-testid={`badge-crm-step-${index}`}><Send className="h-3 w-3" />Sent to CRM after this</span>}
           </div>
         </button>
         <div className="flex shrink-0 items-center gap-0.5">

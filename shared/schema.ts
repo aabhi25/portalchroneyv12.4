@@ -1575,6 +1575,10 @@ export const journeySteps = pgTable("journey_steps", {
   
   // Conditional step - only shown when explicitly skipped to, not during normal progression
   isConditional: text("is_conditional").notNull().default("false"), // 'true' | 'false'
+
+  // 'true': the lead goes to the CRM only once the visitor has answered this question or finished the
+  // journey (leadCapture/journeyCrmGate.ts). One step per journey at most; none = sent as soon as it's ready.
+  crmSyncAfter: text("crm_sync_after").notNull().default("false"),
   
   // Journey Complete step configuration
   completionButtonText: text("completion_button_text"), // Button text for "Continue Exploring" or similar
@@ -3695,6 +3699,9 @@ export const whatsappFlowSteps = pgTable("whatsapp_flow_steps", {
   defaultNextStep: text("default_next_step"), // Default next step if no mapping matches
   saveToField: text("save_to_field"), // Field name to save user response (e.g., "store_name", "customer_name")
   paused: boolean("paused").notNull().default(false),
+  // The lead goes to the CRM only once the person has moved past this step or finished the journey
+  // (whatsapp_flow_sessions.crm_step_passed_at). One step per flow at most.
+  crmSyncAfter: boolean("crm_sync_after").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -3714,6 +3721,7 @@ export const whatsappFlowSessions = pgTable("whatsapp_flow_sessions", {
   collectedData: jsonb("collected_data").$type<Record<string, any>>().default({}), // Data collected during flow
   lastMessageAt: timestamp("last_message_at").notNull().defaultNow(),
   expiresAt: timestamp("expires_at"), // Session expiry time (e.g., 24 hours)
+  crmStepPassedAt: timestamp("crm_step_passed_at"), // when the person moved past the flow's "send to CRM after" step
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   businessSenderStatusIdx: index("whatsapp_flow_sessions_business_sender_status_idx").on(table.businessAccountId, table.senderPhone, table.status),

@@ -2,6 +2,7 @@ import { storage } from '../storage';
 import { conversationJourneys, journeyResponses, journeySessions } from '@shared/schema';
 import { db } from '../db';
 import { eq, and, desc } from 'drizzle-orm';
+import { onWebsiteJourneyProgress } from './leadCapture/journeyCrmGate';
 
 export interface JourneyState {
   sessionId: string; // Database session ID for linking responses
@@ -472,6 +473,7 @@ class JourneyService {
         stepId: currentStep.id,
         response,
       });
+      onWebsiteJourneyProgress(conversationId, { stepId: currentStep.id });
     } catch (error) {
       console.error('[Journey] Error storing response:', error);
     }
@@ -504,6 +506,7 @@ class JourneyService {
             completed: 'true',
             completedAt: new Date(),
           });
+          onWebsiteJourneyProgress(conversationId, { completed: true });
         }
       } catch (error) {
         console.error('[Journey] Error marking session as completed:', error);
@@ -543,6 +546,7 @@ class JourneyService {
         stepId: currentStep.id,
         response,
       });
+      onWebsiteJourneyProgress(conversationId, { stepId: currentStep.id });
     } catch (error) {
       console.error('[Journey] Error storing response:', error);
     }
@@ -964,6 +968,7 @@ class JourneyService {
           completed: 'true',
           completedAt: new Date(),
         });
+        onWebsiteJourneyProgress(conversationId, { completed: true });
       }
     } catch (error) {
       console.error('[Journey] Error marking session as completed:', error);

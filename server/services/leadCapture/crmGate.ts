@@ -13,15 +13,23 @@
  * A lead held back only because a mandatory field is still missing is not lost: once the chat has
  * been quiet for HELD_BACK_IDLE_MINUTES, sendHeldBackLeads (run by the LeadSquared retry worker)
  * sends it with what it has — verification (OTP/CAPTCHA) still applies.
+ *  - Journey "send to CRM after this question" (journeyCrmGate.ts) and a junk-looking mobile number
+ *    hold a lead that isn't in a CRM yet: it waits ('waiting_journey' / 'invalid_phone' on the
+ *    LeadSquared status) and is never sent automatically until the visitor answers — Sync now sends it.
  */
 import { storage } from '../../storage';
 import { normalizeLeadFields } from './fields';
 import { collectedFields } from './resolver';
 import { loadLeadCaptureState } from './state';
 import { runSerialized } from './leadStore';
+import { HELD_STATUSES, INVALID_PHONE_STATUS, JOURNEY_WAIT_STATUS, journeyWaitMessage, websiteJourneyCrmWait } from './journeyCrmGate';
+import { junkPhoneReason } from '@shared/phoneQuality';
 
 export type CrmGateResult = 'synced' | 'skipped:disabled' | 'skipped:no_contact' | 'skipped:mandatory_missing'
-  | 'skipped:otp_unverified' | 'skipped:captcha_unverified' | 'skipped:not_found' | 'error';
+  | 'skipped:otp_unverified' | 'skipped:captcha_unverified' | 'skipped:not_found' | 'skipped:journey_step'
+  | 'skipped:invalid_phone' | 'error';
+
+type GateOutcome = { ok: boolean; result: CrmGateResult; lead?: any; whatsapp?: string | null; missing?: string[]; reason?: string };
 
 export interface CrmGateInput {
   leadId: string;
@@ -47,7 +55,7 @@ export function whatsappForCrm(config: any, phone: string | null | undefined, wa
   return null;
 }
 
-export async function evaluateCrmGate(input: CrmGateInput): Promise<{ ok: boolean; result: CrmGateResult; lead?: any; whatsapp?: string | null; missing?: string[] }> {
+export async function evaluateCrmGate(input: CrmGateInput): Promise<GateOutcome> {
   const settings: any = await storage.getWidgetSettings(input.businessAccountId);
   if (!settings?.leadsquaredEnabled || settings.leadsquaredEnabled !== 'true') return { ok: false, result: 'skipped:disabled' };
   return evaluateLeadReadiness(input, settings);
@@ -57,21 +65,29 @@ export async function evaluateCrmGate(input: CrmGateInput): Promise<{ ok: boolea
  * The rules above without the LeadSquared switch: whether a lead is ready for any CRM (contact,
  * mandatory fields, OTP/CAPTCHA). Shared with the Meritto sync.
  */
-export async function evaluateLeadReadiness(input: CrmGateInput, settingsIn?: any): Promise<{ ok: boolean; result: CrmGateResult; lead?: any; whatsapp?: string | null; missing?: string[] }> {
+export async function evaluateLeadReadiness(input: CrmGateInput, settingsIn?: any): Promise<GateOutcome> {
   const settings: any = settingsIn ?? await storage.getWidgetSettings(input.businessAccountId);
   const lead = await storage.getLead(input.leadId, input.businessAccountId);
   if (!lead) return { ok: false, result: 'skipped:not_found' };
   if (!lead.phone && !lead.email) return { ok: false, result: 'skipped:no_contact' };
 
+  const conversationId = input.conversationId || lead.conversationId || null;
+  // Only before the lead is in a CRM: later changes are updates of a lead that was ready.
+  if (!lead.leadsquaredLeadId && !lead.merittoLeadId) {
+    const wait = await websiteJourneyCrmWait(conversationId);
+    if (wait.waiting) return { ok: false, result: 'skipped:journey_step', lead, reason: journeyWaitMessage(wait.question) };
+    const junk = junkPhoneReason(lead.phone);
+    if (junk) return { ok: false, result: 'skipped:invalid_phone', lead, reason: `The mobile number looks invalid (${junk}), so it wasn't sent automatically` };
+  }
+
   const config = settings.leadTrainingConfig;
   const fields = normalizeLeadFields(config);
-  const conversationId = input.conversationId || lead.conversationId || null;
   const state = conversationId ? await loadLeadCaptureState(conversationId) : null;
   const required = fields.filter(f => f.required);
   if (required.length > 0 && !input.ignoreMandatory) {
     const have = collectedFields(fields, { name: lead.name, email: lead.email, phone: lead.phone }, state || { v: 1, fields: {}, lastAsk: null, processedUserMsg: 0 });
     const missing = required.filter(f => !have.has(f.id)).map(f => f.id);
-    if (missing.length) return { ok: false, result: 'skipped:mandatory_missing', missing };
+    if (missing.length) return { ok: false, result: 'skipped:mandatory_missing', missing, lead };
   }
 
   const rawFields: any[] = Array.isArray(config?.fields) ? config.fields : [];
@@ -83,10 +99,10 @@ export async function evaluateLeadReadiness(input: CrmGateInput, settingsIn?: an
     const { normalizePhone } = await import('../otp');
     const e164 = normalizePhone(lead.phone);
     const verified = e164 ? await storage.hasVerifiedOtpForConversationPhone(input.businessAccountId, conversationId, e164) : false;
-    if (!verified) return { ok: false, result: 'skipped:otp_unverified' };
+    if (!verified) return { ok: false, result: 'skipped:otp_unverified', lead };
   } else if (onWidget && mobile?.captchaEnabled === true && mobile?.otpEnabled !== true && mobile?.sendUnverifiedLeadsToCrm !== true && conversationId) {
     const status = await storage.getConversationCaptchaStatus(conversationId, input.businessAccountId).catch(() => null);
-    if (status !== 'verified') return { ok: false, result: 'skipped:captcha_unverified' };
+    if (status !== 'verified') return { ok: false, result: 'skipped:captcha_unverified', lead };
   }
   return { ok: true, result: 'synced', lead, whatsapp: whatsappForCrm(config, lead.phone, state?.whatsapp) };
 }
@@ -101,6 +117,7 @@ export function syncConversationLeadIfReady(input: CrmGateInput): Promise<CrmGat
     try {
       const gate = await evaluateCrmGate(input);
       if (!gate.ok) {
+        await showHeldStatus(gate);
         if (gate.result !== 'skipped:disabled') {
           console.log(`[CRM Gate] ${input.source}: lead ${input.leadId} not synced (${gate.result}${gate.missing ? `: ${gate.missing.join(', ')}` : ''})`);
         }
@@ -122,6 +139,30 @@ export function syncConversationLeadIfReady(input: CrmGateInput): Promise<CrmGat
       return 'error';
     }
   });
+}
+
+/**
+ * Leads page: a lead held by the journey step or a junk number shows why (LeadSquared status);
+ * held for another reason now (OTP, mandatory field…) it goes back to plain "not synced".
+ */
+async function showHeldStatus(gate: GateOutcome): Promise<void> {
+  const lead = gate.lead;
+  if (!lead || lead.leadsquaredLeadId) return;
+  const current = lead.leadsquaredSyncStatus || '';
+  const held = gate.result === 'skipped:journey_step' ? JOURNEY_WAIT_STATUS : gate.result === 'skipped:invalid_phone' ? INVALID_PHONE_STATUS : null;
+  // Sync columns only: updated_at drives the other sweeps and must not move.
+  const { db } = await import('../../db');
+  const { leads } = await import('@shared/schema');
+  const { eq } = await import('drizzle-orm');
+  const set = (values: { leadsquaredSyncStatus: string | null; leadsquaredSyncError: string | null }) =>
+    db.update(leads).set(values).where(eq(leads.id, lead.id)).catch(() => undefined);
+  if (held) {
+    if (current !== '' && !(HELD_STATUSES as readonly string[]).includes(current)) return;
+    if (current === held && lead.leadsquaredSyncError === gate.reason) return;
+    await set({ leadsquaredSyncStatus: held, leadsquaredSyncError: gate.reason ?? null });
+  } else if ((HELD_STATUSES as readonly string[]).includes(current)) {
+    await set({ leadsquaredSyncStatus: null, leadsquaredSyncError: null });
+  }
 }
 
 /** A chat must be quiet this long before a lead missing a mandatory field is sent anyway. */
@@ -147,7 +188,8 @@ export async function sendHeldBackLeads(limit = 50): Promise<number> {
       FROM leads l
       JOIN conversations c ON c.id = l.conversation_id
       JOIN widget_settings ws ON ws.business_account_id = l.business_account_id AND ws.leadsquared_enabled = 'true'
-      WHERE (l.leadsquared_sync_status IS NULL OR l.leadsquared_sync_status = '')
+      -- also leads held for the journey step / a junk number: sent if that hold no longer applies
+      WHERE (l.leadsquared_sync_status IS NULL OR l.leadsquared_sync_status IN ('', 'waiting_journey', 'invalid_phone'))
         AND l.leadsquared_lead_id IS NULL
         AND (COALESCE(l.phone, '') <> '' OR COALESCE(l.email, '') <> '')
         AND c.lead_capture_state IS NOT NULL

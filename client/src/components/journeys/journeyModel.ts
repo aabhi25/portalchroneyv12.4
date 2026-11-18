@@ -41,6 +41,8 @@ export interface StepRow {
   crmFieldKey?: string | null;
   fieldName?: string | null;
   toolParameters?: string | null;
+  /** 'true': the lead goes to the CRM only after this question (one per journey). */
+  crmSyncAfter?: string | null;
 }
 
 export interface Route {

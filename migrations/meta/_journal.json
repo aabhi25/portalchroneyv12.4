@@ -477,6 +477,13 @@
       "when": 1794836586051,
       "tag": "0067_product_keyword_search",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1795002656701,
+      "tag": "0068_journey_crm_step",
+      "breakpoints": true
     }
   ]
 }

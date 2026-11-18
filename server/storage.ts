@@ -2226,7 +2226,8 @@ export class DatabaseStorage implements IStorage {
             // 'disqualified' is a terminal state — the lead form answer did not
             // match the configured qualifying values, so it must never be picked
             // up by bulk/manual sync either.
-            sql`${leads.leadsquaredSyncStatus} NOT IN ('synced', 'disqualified')`
+            // Held for the journey step or a junk number: only Sync now on the lead sends it.
+            sql`${leads.leadsquaredSyncStatus} NOT IN ('synced', 'disqualified', 'waiting_journey', 'invalid_phone')`
           )
         )
       )
