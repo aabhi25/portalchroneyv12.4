@@ -1,8 +1,10 @@
 import { format } from "date-fns";
-import { Loader2, MessageSquare, RefreshCw, X } from "lucide-react";
+import { Columns3, Loader2, MessageSquare, RefreshCw, X } from "lucide-react";
 import { FaWhatsapp } from "react-icons/fa";
 import { isMaskedValue } from "@shared/contactMasking";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
 import { crmStatusLook } from "./LeadCrm";
@@ -52,20 +54,79 @@ const lsqLabel = (s: string | null) => (!s ? "Not sent" : crmStatusLook(s).text)
 /** Held back on purpose (journey step not reached, junk-looking number): not an error. */
 const HELD = ["waiting", "waiting_journey", "invalid_phone"];
 
-/** Rows for the Excel export (same columns as the table, every answer as its own column). */
-export function whatsappLeadsExcelRows(leads: GroupWhatsappLead[]): Record<string, string>[] {
+/** Columns of the WhatsApp leads table a group admin can show or hide (Name is always shown). */
+export const WA_LEAD_COLUMNS = [
+  { key: "account", label: "Account", width: "160px" },
+  { key: "phone", label: "Phone", width: "150px" },
+  { key: "email", label: "Email", width: "190px" },
+  { key: "details", label: "Details", width: "minmax(200px, 1.5fr)" },
+  { key: "leadsquared", label: "LeadSquared", width: "190px" },
+  { key: "received", label: "Received", width: "150px" },
+] as const;
+export type WaLeadColumn = typeof WA_LEAD_COLUMNS[number]["key"];
+export const ALL_WA_LEAD_COLUMNS: WaLeadColumn[] = WA_LEAD_COLUMNS.map(c => c.key);
+
+/** Saved choice → the columns to show, in table order (unknown keys dropped; null/empty = all). */
+export function visibleWaColumns(saved: readonly string[] | null | undefined): WaLeadColumn[] {
+  if (!saved || saved.length === 0) return ALL_WA_LEAD_COLUMNS;
+  return ALL_WA_LEAD_COLUMNS.filter(k => saved.includes(k));
+}
+
+/** Rows for the Excel export (the table's shown columns, every answer as its own column). */
+export function whatsappLeadsExcelRows(leads: GroupWhatsappLead[], columns: WaLeadColumn[] = ALL_WA_LEAD_COLUMNS): Record<string, string>[] {
+  const show = (k: WaLeadColumn) => columns.includes(k);
   return leads.map(lead => {
-    const row: Record<string, string> = {
-      Name: lead.name || "-",
-      Account: lead.businessAccountName || "-",
-      Phone: lead.phone || "-",
-      Email: lead.email || "-",
-    };
-    for (const [k, v] of leadAnswers(lead)) row[k] = v;
-    row.LeadSquared = lsqLabel(lead.leadsquaredSyncStatus);
-    row.Received = format(new Date(lead.capturedAt), "yyyy-MM-dd HH:mm:ss");
+    const row: Record<string, string> = { Name: lead.name || "-" };
+    if (show("account")) row.Account = lead.businessAccountName || "-";
+    if (show("phone")) row.Phone = lead.phone || "-";
+    if (show("email")) row.Email = lead.email || "-";
+    if (show("details")) for (const [k, v] of leadAnswers(lead)) row[k] = v;
+    if (show("leadsquared")) row.LeadSquared = lsqLabel(lead.leadsquaredSyncStatus);
+    if (show("received")) row.Received = format(new Date(lead.capturedAt), "yyyy-MM-dd HH:mm:ss");
     return row;
   });
+}
+
+/** "Columns": show or hide the WhatsApp table's columns (saved for everyone in the group). */
+export function WhatsappColumnsPicker({ columns, onChange, saving }: {
+  columns: WaLeadColumn[];
+  onChange: (columns: WaLeadColumn[] | null) => void;
+  saving?: boolean;
+}) {
+  const toggle = (key: WaLeadColumn, on: boolean) => {
+    const next = on ? ALL_WA_LEAD_COLUMNS.filter(k => k === key || columns.includes(k)) : columns.filter(k => k !== key);
+    onChange(next.length === ALL_WA_LEAD_COLUMNS.length ? null : next);
+  };
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" className="h-9 gap-2" data-testid="button-wa-lead-columns">
+          <Columns3 className="h-4 w-4" />
+          Columns
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[260px] p-0">
+        <div className="border-b border-gray-100 px-3 py-2.5">
+          <p className="text-sm font-semibold text-gray-900">Columns</p>
+          <p className="text-[11px] text-gray-500">Saved for everyone in this group{saving ? " · saving…" : ""}</p>
+        </div>
+        <div className="space-y-0.5 p-2">
+          <p className="px-2 py-1 text-[11px] text-gray-400">Name is always shown</p>
+          {WA_LEAD_COLUMNS.map(c => (
+            <label key={c.key} className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-gray-800 hover:bg-gray-50">
+              <Checkbox checked={columns.includes(c.key)} onCheckedChange={(v) => toggle(c.key, v === true)} data-testid={`wa-column-${c.key}`} />
+              {c.label}
+            </label>
+          ))}
+        </div>
+        {columns.length !== ALL_WA_LEAD_COLUMNS.length && (
+          <div className="border-t border-gray-100 p-2">
+            <Button variant="ghost" size="sm" className="w-full text-purple-700" onClick={() => onChange(null)}>Show all columns</Button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function LsqStatus({ lead, onSync, syncing }: { lead: GroupWhatsappLead; onSync?: (lead: GroupWhatsappLead) => void; syncing?: boolean }) {
@@ -97,10 +158,13 @@ function LsqStatus({ lead, onSync, syncing }: { lead: GroupWhatsappLead; onSync?
   );
 }
 
-const GRID = "36px minmax(150px, 1.3fr) 160px 150px 190px minmax(200px, 1.5fr) 110px 150px";
+const gridFor = (columns: WaLeadColumn[]) =>
+  ["36px", "minmax(150px, 1.3fr)", ...WA_LEAD_COLUMNS.filter(c => columns.includes(c.key)).map(c => c.width)].join(" ");
 
 /** The group's WhatsApp leads (the "WhatsApp leads" side of the group Leads page switch). */
-export function GroupWhatsappLeadsList({ leads, total, loading, hasMore, loadingMore, onLoadMore, hasFilters, onClearFilters, onOpen, onSync, syncingId }: {
+export function GroupWhatsappLeadsList({ leads, total, loading, hasMore, loadingMore, onLoadMore, hasFilters, onClearFilters, onOpen, onSync, syncingId, columns = ALL_WA_LEAD_COLUMNS }: {
+  /** Columns to show besides Name (in table order). */
+  columns?: WaLeadColumn[];
   leads: GroupWhatsappLead[];
   total: number;
   loading: boolean;
@@ -142,6 +206,8 @@ export function GroupWhatsappLeadsList({ leads, total, loading, hasMore, loading
     );
   }
 
+  const GRID = gridFor(columns);
+  const show = (k: WaLeadColumn) => columns.includes(k);
   return (
     <div className="min-w-fit flex-1">
       <div
@@ -150,12 +216,7 @@ export function GroupWhatsappLeadsList({ leads, total, loading, hasMore, loading
       >
         <span />
         <span>Name</span>
-        <span>Account</span>
-        <span>Phone</span>
-        <span>Email</span>
-        <span>Details</span>
-        <span>LeadSquared</span>
-        <span>Received</span>
+        {WA_LEAD_COLUMNS.filter(c => show(c.key)).map(c => <span key={c.key}>{c.label}</span>)}
       </div>
       <div className="divide-y divide-gray-50">
         {leads.map((lead) => {
@@ -169,24 +230,30 @@ export function GroupWhatsappLeadsList({ leads, total, loading, hasMore, loading
                 <p className={`truncate text-sm font-semibold ${lead.name ? "text-gray-900" : "text-gray-400 italic font-normal"}`}>{lead.name || "Anonymous"}</p>
                 {lead.lastMessage && <p className="truncate text-xs text-gray-400" title={lead.lastMessage}>{lead.lastMessage}</p>}
               </div>
-              <span className="truncate text-xs font-medium px-2 py-1 rounded-md bg-gray-100 text-gray-700 w-fit max-w-full" title={lead.businessAccountName}>
-                {lead.businessAccountName}
-              </span>
-              <span
-                className={`text-sm font-mono ${lead.phone && isMaskedValue(lead.phone) ? "text-gray-500" : "text-gray-700"}`}
-                title={lead.contactsHiddenFromView ? "Hidden from view. The full number is kept for CRM sync." : undefined}
-              >
-                {lead.phone || "—"}
-              </span>
-              <span className="truncate text-sm text-gray-700" title={lead.email || undefined}>{lead.email || <span className="text-gray-400">—</span>}</span>
-              <div className="flex min-w-0 flex-wrap gap-1" title={details.join("\n")}>
-                {details.length === 0 ? <span className="text-sm text-gray-400">—</span> : details.slice(0, 2).map((d) => (
-                  <span key={d} className="max-w-[220px] truncate px-2 py-0.5 text-xs rounded-full bg-green-50 text-green-800">{d}</span>
-                ))}
-                {details.length > 2 && <span className="px-1.5 py-0.5 text-xs font-medium text-gray-500">+{details.length - 2}</span>}
-              </div>
-              <div><LsqStatus lead={lead} onSync={onSync} syncing={syncingId === lead.id} /></div>
-              <span className="whitespace-nowrap text-sm text-gray-600">{format(new Date(lead.capturedAt), "MMM d, yyyy h:mm a")}</span>
+              {show("account") && (
+                <span className="truncate text-xs font-medium px-2 py-1 rounded-md bg-gray-100 text-gray-700 w-fit max-w-full" title={lead.businessAccountName}>
+                  {lead.businessAccountName}
+                </span>
+              )}
+              {show("phone") && (
+                <span
+                  className={`text-sm font-mono ${lead.phone && isMaskedValue(lead.phone) ? "text-gray-500" : "text-gray-700"}`}
+                  title={lead.contactsHiddenFromView ? "Hidden from view. The full number is kept for CRM sync." : undefined}
+                >
+                  {lead.phone || "—"}
+                </span>
+              )}
+              {show("email") && <span className="truncate text-sm text-gray-700" title={lead.email || undefined}>{lead.email || <span className="text-gray-400">—</span>}</span>}
+              {show("details") && (
+                <div className="flex min-w-0 flex-wrap gap-1" title={details.join("\n")}>
+                  {details.length === 0 ? <span className="text-sm text-gray-400">—</span> : details.slice(0, 2).map((d) => (
+                    <span key={d} className="max-w-[220px] truncate px-2 py-0.5 text-xs rounded-full bg-green-50 text-green-800">{d}</span>
+                  ))}
+                  {details.length > 2 && <span className="px-1.5 py-0.5 text-xs font-medium text-gray-500">+{details.length - 2}</span>}
+                </div>
+              )}
+              {show("leadsquared") && <div className="min-w-0"><LsqStatus lead={lead} onSync={onSync} syncing={syncingId === lead.id} /></div>}
+              {show("received") && <span className="whitespace-nowrap text-sm text-gray-600">{format(new Date(lead.capturedAt), "MMM d, yyyy h:mm a")}</span>}
             </div>
           );
         })}

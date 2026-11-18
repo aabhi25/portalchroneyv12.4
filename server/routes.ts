@@ -13960,7 +13960,8 @@ Return ONLY the refined instruction, nothing else.`
       if (!permissions.canViewLeads) return res.status(403).json({ error: "No permission to view leads" });
       const group = await storage.getAccountGroup(groupId);
       const saved = (group as any)?.leadsTableColumns;
-      res.json({ columns: Array.isArray(saved) ? saved : null });
+      const savedWa = (group as any)?.whatsappLeadsTableColumns;
+      res.json({ columns: Array.isArray(saved) ? saved : null, whatsappColumns: Array.isArray(savedWa) ? savedWa : null });
     } catch (error: any) {
       console.error('[Group Admin] Error loading lead columns:', error);
       res.status(500).json({ error: "Failed to load columns" });
@@ -13981,6 +13982,24 @@ Return ONLY the refined instruction, nothing else.`
       res.json({ columns });
     } catch (error: any) {
       console.error('[Group Admin] Error saving lead columns:', error);
+      res.status(500).json({ error: "Failed to save columns" });
+    }
+  });
+
+  // The WhatsApp leads table's columns (shown / hidden), saved for everyone in the group; null = all.
+  app.put("/api/group-admin/groups/:groupId/leads/whatsapp/table-columns", requireAuth, requireGroupAdmin, async (req, res) => {
+    try {
+      const { groupId } = req.params;
+      const permissions = await getGroupAdminPermissions(req.user!.id, groupId);
+      if (!permissions) return res.status(403).json({ error: "Access denied to this group" });
+      if (!permissions.canViewLeads) return res.status(403).json({ error: "No permission to view leads" });
+      const parsed = z.object({ columns: z.array(z.enum(["account", "phone", "email", "details", "leadsquared", "received"])).max(10).nullable() }).strict().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid columns" });
+      const columns = parsed.data.columns ? Array.from(new Set(parsed.data.columns)) : null;
+      await db.update(accountGroups).set({ whatsappLeadsTableColumns: columns, updatedAt: new Date() } as any).where(eq(accountGroups.id, groupId));
+      res.json({ columns });
+    } catch (error: any) {
+      console.error('[Group Admin] Error saving WhatsApp lead columns:', error);
       res.status(500).json({ error: "Failed to save columns" });
     }
   });

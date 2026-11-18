@@ -484,6 +484,13 @@
       "when": 1795002656701,
       "tag": "0068_journey_crm_step",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1795007532797,
+      "tag": "0069_group_whatsapp_lead_columns",
+      "breakpoints": true
     }
   ]
 }

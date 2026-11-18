@@ -48,7 +48,7 @@ import { LeadDetailsSheet, websiteRowFromLead } from "@/components/leads/LeadDet
 import type { CrmTarget } from "@/components/leads/LeadCrm";
 import type { Lead } from "@shared/schema";
 import { FaWhatsapp } from "react-icons/fa";
-import { GroupWhatsappLeadSheet, GroupWhatsappLeadsList, whatsappLeadsExcelRows, type GroupWhatsappLead } from "@/components/leads/GroupWhatsappLeadsList";
+import { GroupWhatsappLeadSheet, GroupWhatsappLeadsList, WhatsappColumnsPicker, visibleWaColumns, whatsappLeadsExcelRows, type GroupWhatsappLead, type WaLeadColumn } from "@/components/leads/GroupWhatsappLeadsList";
 import { useGroupAdminGroupId, useStickyDate, useStickyState } from "@/lib/stickyState";
 import { GroupWhatsappChatList, GroupWhatsappChatThread, useGroupWhatsappChats, type GroupWhatsappChat } from "@/components/conversations/GroupWhatsappChats";
 
@@ -554,7 +554,7 @@ export default function GroupAdminDashboard() {
         toast({ title: "No leads to export", description: "No WhatsApp leads match the current filters.", variant: "destructive" });
         return;
       }
-      const worksheet = XLSX.utils.json_to_sheet(whatsappLeadsExcelRows(rows));
+      const worksheet = XLSX.utils.json_to_sheet(whatsappLeadsExcelRows(rows, waLeadColumns));
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "WhatsApp leads");
       XLSX.writeFile(workbook, `group-whatsapp-leads-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
@@ -582,7 +582,7 @@ export default function GroupAdminDashboard() {
 
   // Columns of the Leads table: chosen for the whole group (any admin who can view leads).
   const leadColumnsQueryKey = ["/api/group-admin/groups", selectedGroupId, "leads", "table-columns"];
-  const { data: leadColumnsData } = useQuery<{ columns: LeadColumnKey[] | null }>({
+  const { data: leadColumnsData } = useQuery<{ columns: LeadColumnKey[] | null; whatsappColumns?: string[] | null }>({
     queryKey: leadColumnsQueryKey,
     queryFn: async () => {
       const res = await fetch(`/api/group-admin/groups/${selectedGroupId}/leads/table-columns`, { credentials: "include" });
@@ -597,6 +597,21 @@ export default function GroupAdminDashboard() {
     onMutate: (columns) => {
       const previous = queryClient.getQueryData(leadColumnsQueryKey);
       queryClient.setQueryData(leadColumnsQueryKey, (old: any) => ({ ...(old || {}), columns }));
+      return { previous };
+    },
+    onError: (_error, _columns, context) => {
+      if (context?.previous) queryClient.setQueryData(leadColumnsQueryKey, context.previous);
+      toast({ title: "Couldn't save columns", description: "Please try again.", variant: "destructive" });
+    },
+  });
+  // WhatsApp leads table: columns shown / hidden (saved for the group; null = all).
+  const waLeadColumns = visibleWaColumns(leadColumnsData?.whatsappColumns);
+  const saveWaColumnsMutation = useMutation({
+    mutationFn: (columns: WaLeadColumn[] | null) =>
+      apiRequest<{ columns: WaLeadColumn[] | null }>("PUT", `/api/group-admin/groups/${selectedGroupId}/leads/whatsapp/table-columns`, { columns }),
+    onMutate: (columns) => {
+      const previous = queryClient.getQueryData(leadColumnsQueryKey);
+      queryClient.setQueryData(leadColumnsQueryKey, (old: any) => ({ ...(old || {}), whatsappColumns: columns }));
       return { previous };
     },
     onError: (_error, _columns, context) => {
@@ -1440,6 +1455,13 @@ export default function GroupAdminDashboard() {
                     />
                   </div>
 
+                  {showingWhatsapp && (
+                    <WhatsappColumnsPicker
+                      columns={waLeadColumns}
+                      onChange={(columns) => saveWaColumnsMutation.mutate(columns)}
+                      saving={saveWaColumnsMutation.isPending}
+                    />
+                  )}
                   {!showingWhatsapp && <LeadColumnsPicker
                     columns={leadTableColumns}
                     onChange={(columns) => saveLeadColumnsMutation.mutate(columns)}
@@ -1465,6 +1487,7 @@ export default function GroupAdminDashboard() {
                     onOpen={(lead) => setOpenWaLeadId(lead.id)}
                     onSync={(lead) => syncWaLeadMutation.mutate(lead)}
                     syncingId={syncWaLeadMutation.isPending ? syncWaLeadMutation.variables?.id ?? null : null}
+                    columns={waLeadColumns}
                   />
                 ) : loadingLeads ? (
                   <div className="flex flex-col items-center justify-center py-20">
