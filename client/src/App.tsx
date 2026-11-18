@@ -106,6 +106,8 @@ import ExitIntentSettings from "@/pages/ExitIntentSettings";
 import IdleTimeoutSettings from "@/pages/IdleTimeoutSettings";
 import JewelryShowcase from "@/pages/JewelryShowcase";
 import VistaInsights from "@/pages/VistaInsights";
+import DesignStudioRequests from "@/pages/DesignStudioRequests";
+import DesignStudioSetup from "@/pages/DesignStudioSetup";
 import Uploads from "@/pages/Uploads";
 import JewelryImageGenerator from "@/pages/JewelryImageGenerator";
 import GroupAdminDashboard from "@/pages/GroupAdminDashboard";
@@ -438,6 +440,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/smart-discounts/idle-timeout" component={IdleTimeoutSettings} />
                 <Route path="/jewelry-showcase" component={JewelryShowcase} />
                 <Route path="/vista-insights" component={VistaInsights} />
+                <Route path="/admin/design-studio" component={DesignStudioRequests} />
+                <Route path="/admin/design-studio/setup" component={DesignStudioSetup} />
                 <Route path="/admin/uploads" component={Uploads} />
                 <Route path="/admin/jewelry-image-generator" component={JewelryImageGenerator} />
                 <Route path="/admin/faqs" component={AdminFaqs} />

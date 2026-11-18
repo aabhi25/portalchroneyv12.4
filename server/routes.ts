@@ -121,6 +121,11 @@ import invoiceRoutes from "./routes/invoices";
 import answerCheckingRoutes from "./routes/answerChecking";
 import avatarRoutes from "./routes/avatar";
 import photoSearchRoutes from "./routes/photoSearch";
+import designStudioRoutes from "./routes/designStudio";
+import { wantsCustomDesign } from "@shared/designStudio";
+
+/** Added to the website chat's instructions when the account has the Design Studio on. */
+const DESIGN_STUDIO_CHAT_NOTE = `CUSTOM JEWELLERY: this shop lets shoppers design their own jewellery right here in the chat and have it made to order. When someone asks about custom, personalised, bespoke or made-to-order jewellery, or wants a design changed to their taste, say yes warmly in one or two sentences and tell them to tap the "Design your own" button that appears under your reply. Do not ask them design questions yourself and do not quote a price for a custom piece: the design tool does both.`;
 import { productHasGeminiFingerprint } from "./services/visualSearchEngine";
 import tutorRoutes from "./routes/tutor";
 import { getPublicTutorConfig } from "./services/tutor/settings";
@@ -676,6 +681,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // a previous process left open (billed to their last heartbeat).
   app.use(avatarRoutes);
   app.use(photoSearchRoutes);
+  app.use(designStudioRoutes);
   app.use(tutorRoutes);
   app.use(aiLanguageRoutes);
   app.use((await import("./routes/aiCalling")).default, (await import("./routes/callingWebhooks")).default, (await import("./routes/callingPlivo")).default); // AI Calling (B)
@@ -1907,6 +1913,8 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         }
       }
 
+      // Design Studio (shared/designStudio.ts): on for this account.
+      const designStudioOn = businessAccount.designStudioEnabled === 'true';
       let streamedConversationId: string | null = null;
       for await (const chunk of chatService.streamMessage(message, {
         existingConversationId: widgetExistingConversationId,
@@ -1919,7 +1927,9 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
         openaiApiKey,
         currency,
         currencySymbol,
-        customInstructions: settings?.customInstructions || undefined,
+        customInstructions: designStudioOn
+          ? [settings?.customInstructions, DESIGN_STUDIO_CHAT_NOTE].filter(Boolean).join('\n\n')
+          : settings?.customInstructions || undefined,
         preferredLanguage,
         replyLanguage,
         visitorSessionId: visitorSessionId || undefined,
@@ -1968,6 +1978,10 @@ NEVER use general world knowledge. You are a guidance assistant for this specifi
       })) {
         res.write(`data: ${JSON.stringify(chunk)}\n\n`);
         if ((chunk as any)?.type === 'conversation_id' && typeof (chunk as any).data === 'string') streamedConversationId = (chunk as any).data;
+      }
+      // The visitor asked for something made for them: the reply gets a "Design your own" button.
+      if (designStudioOn && wantsCustomDesign(String(message || ''))) {
+        res.write(`data: ${JSON.stringify({ type: 'design_studio_offer', data: '' })}\n\n`);
       }
       // First-touch landing page: fill it on this chat's lead (leads made by the AI tools or the
       // booking card during the turn included). Only when empty; never blocks the reply.
@@ -9802,6 +9816,13 @@ Return ONLY the refined instruction, nothing else.`
         updates.shopifyEnabled = shopifyEnabled ? "true" : "false";
       }
 
+      const { designStudioEnabled } = req.body; // Design Studio (shared/designStudio.ts)
+      if (designStudioEnabled !== undefined) {
+        if (typeof designStudioEnabled !== "boolean") {
+          return res.status(400).json({ error: "designStudioEnabled must be a boolean" });
+        }
+        updates.designStudioEnabled = designStudioEnabled ? "true" : "false";
+      }
       const { answerCheckingEnabled } = req.body; // AI assessment (pilot)
       if (answerCheckingEnabled !== undefined) {
         if (typeof answerCheckingEnabled !== "boolean") {
@@ -27589,6 +27610,10 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         jobPortalEnabled,
         k12EducationEnabled,
         k12ImageUploadEnabled,
+        // Design Studio switched on: the chat offers "Design your own jewellery" (shared/designStudio.ts).
+        designStudio: businessAccount?.designStudioEnabled === 'true'
+          ? await (await import('./services/designStudio')).getDesignStudioSettings(businessAccountId).then(d => ({ label: d.label, tagline: d.tagline }))
+          : null,
         requirePreChatOtp: preChatGate.active,
         phoneValidation: captchaGate.active ? captchaGate.phoneValidation : preChatGate.phoneValidation,
         // Task #3: expose OTP delivery channel options to the widget so the
@@ -28712,6 +28737,19 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       };
 
       const menuTree = buildTree(null);
+
+      // Design Studio on: its card joins the welcome screen (unless the brand placed its own, or hid it).
+      const { isDesignStudioOn, getDesignStudioSettings } = await import("./services/designStudio");
+      if (await isDesignStudioOn(businessAccountId) && !items.some(item => item.itemType === "design_studio")) {
+        const studio = await getDesignStudioSettings(businessAccountId);
+        if (studio.showOnWelcome) {
+          menuTree.push({
+            id: "design-studio", title: `✨ ${studio.label}`, subtitle: studio.tagline, icon: "gem",
+            iconBgColor: "#FCE7F3", iconColor: "#BE185D", itemType: "design_studio", actionValue: null, parentId: null,
+            sortOrder: 9999, children: [],
+          });
+        }
+      }
 
       res.json({
         enabled: true,

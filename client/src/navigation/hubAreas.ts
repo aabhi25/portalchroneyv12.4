@@ -2,7 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Globe, MessageCircle, Camera, Facebook, Phone, Gem, Contact, GraduationCap, Package, CalendarDays, PackageOpen,
   Palette, Sparkles, Mic, Video, Zap, ShoppingBag, UserPlus, KeyRound, Bell, Percent, Compass, LayoutList, Tag, Code,
-  Plug, ShieldCheck, Route, MessageSquareText, EyeOff, Clock, Link2, SlidersHorizontal, CircleUserRound,
+  Plug, ShieldCheck, Route, MessageSquareText, EyeOff, Clock, Link2, SlidersHorizontal, CircleUserRound, PenTool,
 } from "lucide-react";
 import type { MeResponseDto } from "@shared/dto";
 import { getWhatsappSections } from "@/components/whatsapp/sections";
@@ -22,7 +22,7 @@ import { SETTINGS_PATHS, integrationPath } from "@/pages/settings/settingsPaths"
  */
 
 export type HubAreaId =
-  | "website" | "whatsapp" | "instagram" | "facebook" | "calls" | "vista"
+  | "website" | "whatsapp" | "instagram" | "facebook" | "calls" | "vista" | "design"
   | "leads" | "training" | "products" | "appointments" | "orders";
 
 export interface HubAccess {
@@ -34,6 +34,8 @@ export interface HubAccess {
   facebook: boolean;
   calls: boolean;
   vista: boolean;
+  /** Design Studio: shoppers design their own jewellery in the website chat. */
+  designStudio: boolean;
   supportTickets: boolean;
   training: boolean;
   products: boolean;
@@ -70,6 +72,7 @@ export function getHubAccess(user: MeResponseDto | null | undefined, aiCallingEn
     facebook,
     calls: aiCallingEnabled,
     vista,
+    designStudio: ba?.designStudioEnabled === true,
     supportTickets: ba?.supportTicketsEnabled === true && fullFeatures,
     training: (website || whatsapp || instagram || facebook) && fullFeatures,
     products: website || whatsapp || jewelry,
@@ -369,6 +372,20 @@ export const HUB_AREAS: HubArea[] = [
     ],
   },
   {
+    id: "design",
+    label: "Design Studio",
+    kind: "AI agent · custom jewellery",
+    icon: PenTool,
+    tint: "bg-pink-600",
+    description: "Shoppers design their own jewellery in your chat and ask you to make it.",
+    isAgent: true,
+    visible: a => a.designStudio,
+    tabs: [
+      { key: "requests", label: "Requests", href: "/admin/design-studio", matches: exact("/admin/design-studio") },
+      { key: "setup", label: "Set-up", href: "/admin/design-studio/setup", matches: exact("/admin/design-studio/setup"), formerly: "Design kit · motifs · metals · price rules" },
+    ],
+  },
+  {
     id: "training",
     label: "Training",
     kind: "Shared by every agent",
@@ -427,7 +444,7 @@ export const HUB_AREAS: HubArea[] = [
 
 export const SIDEBAR_GROUPS: { label?: string; areas: HubAreaId[] }[] = [
   { areas: ["leads"] },
-  { label: "AI agents", areas: ["website", "whatsapp", "instagram", "facebook", "calls", "vista"] },
+  { label: "AI agents", areas: ["website", "whatsapp", "instagram", "facebook", "calls", "vista", "design"] },
   { label: "Shared by every agent", areas: ["training", "products", "appointments", "orders"] },
 ];
 

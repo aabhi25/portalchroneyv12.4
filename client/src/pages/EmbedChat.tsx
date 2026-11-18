@@ -48,6 +48,7 @@ import { hasOwnCard, isChoiceQuestion, isClosingStep } from "@/lib/formAnswer";
 import { ChatFormChoices } from "@/components/ChatFormChoices";
 import { scalePx, widgetUiScale } from "@/lib/widgetScale";
 const ProductCarousel = lazy(() => import("@/components/ProductCarousel").then(m => ({ default: m.ProductCarousel })));
+const DesignStudioPanel = lazy(() => import("@/components/designStudio/DesignStudioPanel").then(m => ({ default: m.DesignStudioPanel })));
 const ProductComparisonView = lazy(() => import("@/components/ProductComparisonView").then(m => ({ default: m.ProductComparisonView })));
 const ChatMenuNavigation = lazy(() => import("@/components/ChatMenuNavigation").then(m => ({ default: m.ChatMenuNavigation })));
 const JobCarousel = lazy(() => import("@/components/JobCarousel").then(m => ({ default: m.JobCarousel })));
@@ -188,6 +189,9 @@ interface ChatMessage {
   appointmentSlots?: AppointmentSlotsData;
   formStep?: FormStepData;
   tryOnResult?: string;
+  /** Design Studio: the reply offers "Design your own", or shows the design the shopper asked to have made. */
+  designStudioOffer?: boolean;
+  designImage?: string;
   jobs?: any[];
   applicantId?: string | null;
   orders?: any[];
@@ -203,6 +207,8 @@ interface ChatMessage {
 interface WidgetSettings {
   id: string;
   businessAccountId: string;
+  /** Design Studio switched on for the account (shared/designStudio.ts): the button's wording. */
+  designStudio?: { label: string; tagline: string } | null;
   /** Live AI avatar button (null unless a super admin enabled it and it can start). */
   liveAvatar?: {
     enabled: boolean; displayName: string; styleHint: string;
@@ -624,6 +630,7 @@ export default function EmbedChat() {
   const [showCropOverlay, setShowCropOverlay] = useState(false);
   const [pendingSearchImageUrl, setPendingSearchImageUrl] = useState<string | null>(null);
   const [showTryOnOverlay, setShowTryOnOverlay] = useState(false);
+  const [showDesignStudio, setShowDesignStudio] = useState(false);
   const [tryOnProduct, setTryOnProduct] = useState<{imageUrl: string; name: string; type?: string} | null>(null);
   const [expandedImageUrl, setExpandedImageUrl] = useState<string | null>(null);
   const [visitorSessionId, setVisitorSessionId] = useState<string | null>(null);
@@ -3726,6 +3733,10 @@ export default function EmbedChat() {
                   productsPagination = productResponse.pagination;
                   productsSearchQuery = productResponse.searchQuery;
                 }
+              } else if (data.type === 'design_studio_offer') {
+                setMessages(prev => prev.map(msg =>
+                  msg.id === aiMessageId ? { ...msg, designStudioOffer: true } : msg
+                ));
               } else if (data.type === 'order_lookup_options') {
                 lookupOptionsActive = true;
                 const lookupData = data.data ? (() => { try { return JSON.parse(data.data); } catch { return {}; } })() : {};
@@ -5207,6 +5218,7 @@ export default function EmbedChat() {
                 if (sendBtn) sendBtn.click();
               }, 100);
             }}
+            onOpenDesignStudio={() => setShowDesignStudio(true)}
             onStartJourney={async (journeyId) => {
               const cantStart = () => {
                 setIsMenuMode(false);
@@ -6654,6 +6666,31 @@ export default function EmbedChat() {
                   </Suspense>
                 )}
                 {/* Show try-on result image */}
+                {msg.designStudioOffer && settings?.designStudio && (
+                  <button
+                    type="button"
+                    onClick={() => setShowDesignStudio(true)}
+                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-sm"
+                    style={{ background: `linear-gradient(135deg, ${chatColor}, ${chatColorEnd || chatColor})` }}
+                    data-testid="button-design-studio-offer"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {settings.designStudio.label}
+                  </button>
+                )}
+                {msg.designImage && (
+                  <div className="mt-3">
+                    <img
+                      src={msg.designImage}
+                      alt="Your design"
+                      onClick={() => setExpandedImageUrl(msg.designImage!)}
+                      className="w-full max-h-[300px] cursor-pointer rounded-lg border-2 object-contain"
+                      style={{ borderColor: chatColor }}
+                      data-testid="img-design-request"
+                    />
+                    <p className="mt-1 text-center text-xs text-gray-400">Design preview · tap to enlarge</p>
+                  </div>
+                )}
                 {msg.tryOnResult && (
                   <div className="mt-3">
                     <div 
@@ -7305,6 +7342,22 @@ export default function EmbedChat() {
             onChange={handleImageSelect}
             className="hidden"
           />
+
+          {/* Design Studio: with no welcome menu to carry its card, the chat carries a small button */}
+          {settings?.designStudio && menuEnabled === false && (
+            <div className="mb-2 flex justify-center">
+              <button
+                type="button"
+                onClick={() => setShowDesignStudio(true)}
+                className="flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors hover:bg-gray-50"
+                style={{ borderColor: chatColor, color: chatColor }}
+                data-testid="button-design-studio"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {settings.designStudio.label}
+              </button>
+            </div>
+          )}
           
           <form 
             onSubmit={(e) => {
@@ -7594,6 +7647,35 @@ export default function EmbedChat() {
         )}
       </AnimatePresence>
 
+
+      {/* Design Studio: design your own jewellery (covers the chat while open) */}
+      <AnimatePresence>
+        {showDesignStudio && businessAccountId && (
+          <Suspense fallback={null}>
+            <DesignStudioPanel
+              businessAccountId={businessAccountId}
+              visitorToken={visitorSessionTokenRef.current}
+              conversationId={conversationIdRef.current}
+              pageUrl={parentPageUrl}
+              chatColor={chatColor}
+              chatColorEnd={chatColorEnd}
+              onClose={() => setShowDesignStudio(false)}
+              onRequested={({ url, summary }) => {
+                // The request shows in the chat, so the shopper finds it when they come back.
+                setIsMenuMode(false);
+                setIntroLoaded(true);
+                setMessages(prev => [...prev, {
+                  id: `design-${Date.now()}`,
+                  role: 'assistant' as const,
+                  content: `Your design request is with our designers${summary ? ` (${summary})` : ''}. We'll call you to confirm the final design and price.`,
+                  designImage: url,
+                  timestamp: new Date(),
+                }]);
+              }}
+            />
+          </Suspense>
+        )}
+      </AnimatePresence>
 
       {/* Conversation History Panel */}
       <AnimatePresence>

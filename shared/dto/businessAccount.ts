@@ -14,7 +14,7 @@ export const isVistaOn = (ba: { productTier: ProductTier | string | null | undef
 export type SystemMode = 'full' | 'essential';
 
 // BusinessAccountDto with normalized boolean feature flags for API/client
-export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "wooCommerceEnabled" | "answerCheckingEnabled" | "appointmentsEnabled" | "voiceModeEnabled" | "visualSearchEnabled" | "jewelryShowcaseEnabled" | "supportTicketsEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled" | "chroneyEnabled" | "k12EducationEnabled" | "k12ImageUploadEnabled" | "k12ContentOnlyMode" | "k12VerbatimContentMode" | "jobPortalEnabled" | "demoOrdersEnabled" | "whatsappMarketingEnabled" | "leadsExportEnabled" | "leadPhoneMaskingEnabled" | "aiCallingEnabled" | "systemMode"> & {
+export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "wooCommerceEnabled" | "answerCheckingEnabled" | "appointmentsEnabled" | "voiceModeEnabled" | "visualSearchEnabled" | "jewelryShowcaseEnabled" | "designStudioEnabled" | "supportTicketsEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled" | "chroneyEnabled" | "k12EducationEnabled" | "k12ImageUploadEnabled" | "k12ContentOnlyMode" | "k12VerbatimContentMode" | "jobPortalEnabled" | "demoOrdersEnabled" | "whatsappMarketingEnabled" | "leadsExportEnabled" | "leadPhoneMaskingEnabled" | "aiCallingEnabled" | "systemMode"> & {
   shopifyEnabled: boolean;
   wooCommerceEnabled: boolean;
   answerCheckingEnabled: boolean;
@@ -22,6 +22,7 @@ export type BusinessAccountDto = Omit<BusinessAccount, "shopifyEnabled" | "wooCo
   voiceModeEnabled: boolean;
   visualSearchEnabled: boolean;
   jewelryShowcaseEnabled: boolean;
+  designStudioEnabled: boolean;
   supportTicketsEnabled: boolean;
   whatsappEnabled: boolean;
   instagramEnabled: boolean;
@@ -56,6 +57,7 @@ export function toBusinessAccountDto(account: BusinessAccount): BusinessAccountD
     voiceModeEnabled: account.voiceModeEnabled === "true",
     visualSearchEnabled: account.visualSearchEnabled === "true",
     jewelryShowcaseEnabled: account.jewelryShowcaseEnabled === "true",
+    designStudioEnabled: account.designStudioEnabled === "true",
     supportTicketsEnabled: account.supportTicketsEnabled === "true",
     whatsappEnabled: account.whatsappEnabled === "true",
     instagramEnabled: account.instagramEnabled === "true",
@@ -87,6 +89,7 @@ export function fromBusinessAccountDto(dto: BusinessAccountDto): BusinessAccount
     voiceModeEnabled: dto.voiceModeEnabled ? "true" : "false",
     visualSearchEnabled: dto.visualSearchEnabled ? "true" : "false",
     jewelryShowcaseEnabled: dto.jewelryShowcaseEnabled ? "true" : "false",
+    designStudioEnabled: dto.designStudioEnabled ? "true" : "false",
     supportTicketsEnabled: dto.supportTicketsEnabled ? "true" : "false",
     whatsappEnabled: dto.whatsappEnabled ? "true" : "false",
     instagramEnabled: dto.instagramEnabled ? "true" : "false",

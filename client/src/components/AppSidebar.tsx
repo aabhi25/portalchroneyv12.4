@@ -78,7 +78,7 @@ function NavItem({ icon: Icon, label, onClick, isActive, badge, testId, gradient
 const AREA_TEST_IDS: Partial<Record<HubArea["id"], string>> = {
   leads: "link-leads", website: "link-website-agent", whatsapp: "link-whatsapp", instagram: "link-instagram",
   facebook: "link-facebook", calls: "link-calling", training: "link-training", products: "link-products",
-  appointments: "link-calendar", orders: "link-demo-orders", vista: "link-jewelry-showcase",
+  appointments: "link-calendar", orders: "link-demo-orders", vista: "link-jewelry-showcase", design: "link-design-studio",
 };
 
 /** One area (an AI agent, Leads, Training, …) in the sidebar, with its own coloured icon. */

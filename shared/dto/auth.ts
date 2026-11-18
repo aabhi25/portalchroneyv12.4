@@ -29,6 +29,7 @@ export type MeResponseDto = SafeUser & {
     appointmentsEnabled: boolean;
     voiceModeEnabled: boolean;
     jewelryShowcaseEnabled: boolean;
+    designStudioEnabled: boolean;
     supportTicketsEnabled: boolean;
     whatsappEnabled: boolean;
     instagramEnabled: boolean;
@@ -75,6 +76,7 @@ export function toMeResponseDto(
         appointmentsEnabled: businessAccount.appointmentsEnabled,
         voiceModeEnabled: businessAccount.voiceModeEnabled,
         jewelryShowcaseEnabled: businessAccount.jewelryShowcaseEnabled,
+        designStudioEnabled: businessAccount.designStudioEnabled,
         supportTicketsEnabled: businessAccount.supportTicketsEnabled,
         whatsappEnabled: businessAccount.whatsappEnabled,
         instagramEnabled: businessAccount.instagramEnabled,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Search, Phone, MessageCircle, MessageSquare, ExternalLink, FileText, Folder, BookOpen, GraduationCap, Briefcase, ShoppingBag, Star, Heart, HelpCircle, Loader2, Mic, Video } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search, Phone, MessageCircle, MessageSquare, ExternalLink, FileText, Folder, BookOpen, GraduationCap, Briefcase, ShoppingBag, Star, Heart, HelpCircle, Loader2, Mic, Video, Gem } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChatDetailsView, parseDetailsConfig } from "./ChatDetailsView";
 import { validatePhoneNumber } from "@shared/validation/phone";
@@ -77,6 +77,8 @@ interface ChatMenuNavigationProps {
   avatarLabel?: string;
   onSendMessage: (message: string, itemId: string) => void;
   onStartJourney?: (journeyId: string) => void;
+  /** Design Studio card ("Design your own jewellery"). */
+  onOpenDesignStudio?: () => void;
   onCallPhone?: (phone: string) => void;
   onOpenUrl?: (url: string) => void;
 }
@@ -103,6 +105,8 @@ const getIconComponent = (iconName?: string | null) => {
       return Star;
     case "heart":
       return Heart;
+    case "gem":
+      return Gem;
     case "help-circle":
       return HelpCircle;
     case "link":
@@ -129,6 +133,7 @@ export function ChatMenuNavigation({
   avatarLabel,
   onSendMessage,
   onStartJourney,
+  onOpenDesignStudio,
   onCallPhone,
   onOpenUrl,
   pageUrl: pageUrlProp,
@@ -347,6 +352,9 @@ export function ChatMenuNavigation({
         } else {
           onSendMessage(item.actionValue || `Start ${item.title} form`);
         }
+        break;
+      case "design_studio":
+        onOpenDesignStudio?.();
         break;
       case "lead_form":
         setLeadFormTitle(item.title || 'Get in Touch');

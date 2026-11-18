@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid, numeric, jsonb, customType, integer, index, uniqueIndex, boolean, date, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import type { DesignChoices, DesignImage, DesignStudioSettings } from "./designStudio";
 
 // Custom vector type for pgvector photo fingerprints (768 dimensions, Gemini Embedding 2)
 const vector768 = customType<{  data: number[];
@@ -58,6 +59,7 @@ export const businessAccounts = pgTable("business_accounts", {
   voiceModeEnabled: text("voice_mode_enabled").notNull().default("true"), // 'true' | 'false' - SuperAdmin toggle for Voice Mode feature (text for consistency with other flags)
   visualSearchEnabled: text("visual_search_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Visual Product Search feature (default OFF)
   jewelryShowcaseEnabled: text("jewelry_showcase_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Jewelry Showcase feature (default OFF)
+  designStudioEnabled: text("design_studio_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle: shoppers design their own jewellery in the website chat (shared/designStudio.ts)
   jewelryDetectionEnabled: text("jewelry_detection_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for AI Jewelry Detection & Cropping (premium feature, default OFF)
   supportTicketsEnabled: text("support_tickets_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for Support Tickets feature (default OFF)
   whatsappEnabled: text("whatsapp_enabled").notNull().default("false"), // 'true' | 'false' - SuperAdmin toggle for WhatsApp AI Agent feature (default OFF)
@@ -6096,3 +6098,39 @@ export type AnswerCheckRow = typeof answerChecks.$inferSelect;
 export type AnswerCheckImageRow = typeof answerCheckImages.$inferSelect;
 export type AnswerPaperRow = typeof answerPapers.$inferSelect;
 export type AnswerAssessmentRow = typeof answerAssessments.$inferSelect;
+
+// Design Studio (shared/designStudio.ts): the brand's design kit, one row per account.
+export const designStudioSettings = pgTable("design_studio_settings", {
+  businessAccountId: varchar("business_account_id").primaryKey().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  settings: jsonb("settings").$type<DesignStudioSettings>().notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// Design Studio: one row each time a shopper starts designing. It becomes a design request when
+// the shopper asks the brand to make a design (requested_at set, lead linked).
+export const designSessions = pgTable("design_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  conversationId: varchar("conversation_id"),
+  visitorToken: text("visitor_token"),
+  leadId: varchar("lead_id"), // contact details live on the lead only
+  choices: jsonb("choices").$type<DesignChoices>().notNull().default({}),
+  designs: jsonb("designs").$type<DesignImage[]>().notNull().default([]),
+  chosenDesignId: text("chosen_design_id"),
+  priceLow: integer("price_low"),
+  priceHigh: integer("price_high"),
+  renderCount: integer("render_count").notNull().default(0),
+  status: text("status").notNull().default("started"), // 'started' | 'designed' | 'requested' | 'contacted' | 'quoted' | 'ordered' | 'closed'
+  requestNote: text("request_note"), // the shopper's note with the request (size, date needed)
+  staffNotes: text("staff_notes"),
+  pageUrl: text("page_url"),
+  requestedAt: timestamp("requested_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("design_sessions_account_created_idx").on(table.businessAccountId, table.createdAt),
+  index("design_sessions_account_requested_idx").on(table.businessAccountId, table.requestedAt),
+]);
+
+export type DesignStudioSettingsRow = typeof designStudioSettings.$inferSelect;
+export type DesignSessionRow = typeof designSessions.$inferSelect;

@@ -9,6 +9,9 @@ import { GoogleGenAI } from '@google/genai';
  */
 export const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL?.trim() || 'gpt-image-2.5-sunburst';
 
+/** Google's image model for Vista Studio and the Design Studio (set GOOGLE_IMAGE_MODEL on the server to change it). */
+export const GOOGLE_IMAGE_MODEL = process.env.GOOGLE_IMAGE_MODEL?.trim() || 'gemini-3-pro-image-preview';
+
 export interface ImageGenerationResult {
   imageBuffer: Buffer;
   dataUrl: string;
@@ -21,6 +24,11 @@ export interface ImageGenerationProvider {
     prompt: string,
     size?: number
   ): Promise<ImageGenerationResult>;
+  /**
+   * A new image from a written brief, with any number of reference images (none is fine): the
+   * Design Studio's style photos and motif photo, or the design being changed. PNG buffers.
+   */
+  generateFromReferences(prompt: string, references: Buffer[]): Promise<ImageGenerationResult>;
 }
 
 export class OpenAIImageProvider implements ImageGenerationProvider {
@@ -69,6 +77,29 @@ export class OpenAIImageProvider implements ImageGenerationProvider {
 
     const dataUrl = `data:image/png;base64,${finalBuffer.toString('base64')}`;
     return { imageBuffer: finalBuffer, dataUrl };
+  }
+
+  async generateFromReferences(prompt: string, references: Buffer[]): Promise<ImageGenerationResult> {
+    const response = references.length > 0
+      ? await this.client.images.edit({
+          model: OPENAI_IMAGE_MODEL,
+          image: await Promise.all(references.map((b, i) => toFile(b, `reference-${i + 1}.png`, { type: 'image/png' }))) as any,
+          prompt,
+          size: '1024x1024',
+        })
+      : await this.client.images.generate({ model: OPENAI_IMAGE_MODEL, prompt, size: '1024x1024' });
+
+    const image = response.data?.[0];
+    let finalBuffer: Buffer;
+    if (image?.b64_json) {
+      finalBuffer = Buffer.from(image.b64_json, 'base64');
+    } else if (image?.url) {
+      const imageResponse = await fetchWithTimeout(image.url, undefined, LONG_FETCH_TIMEOUT_MS);
+      finalBuffer = Buffer.from(await imageResponse.arrayBuffer());
+    } else {
+      throw new Error(`No image returned from ${OPENAI_IMAGE_MODEL}`);
+    }
+    return { imageBuffer: finalBuffer, dataUrl: `data:image/png;base64,${finalBuffer.toString('base64')}` };
   }
 }
 
@@ -137,6 +168,34 @@ export class GoogleNanoBananaProvider implements ImageGenerationProvider {
     const dataUrl = `data:image/png;base64,${finalBuffer.toString('base64')}`;
 
     return { imageBuffer: finalBuffer, dataUrl };
+  }
+
+  async generateFromReferences(prompt: string, references: Buffer[]): Promise<ImageGenerationResult> {
+    const response = await this.client.models.generateContent({
+      model: GOOGLE_IMAGE_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            ...references.map(b => ({ inlineData: { mimeType: 'image/png', data: b.toString('base64') } })),
+            { text: prompt },
+          ],
+        },
+      ],
+      config: {
+        responseModalities: ['IMAGE', 'TEXT'],
+      },
+    });
+
+    const parts = response.candidates?.[0]?.content?.parts ?? [];
+    const imageData = parts.find(part => part.inlineData?.data)?.inlineData?.data;
+    if (!imageData) {
+      // The model answered in words only (usually a refusal): pass its reason on.
+      const said = parts.map(part => part.text || '').join(' ').trim();
+      throw new Error(said ? `The image AI did not draw this: ${said.slice(0, 200)}` : 'No image data in Google Nano Banana Pro response');
+    }
+    const finalBuffer = Buffer.from(imageData, 'base64');
+    return { imageBuffer: finalBuffer, dataUrl: `data:image/png;base64,${finalBuffer.toString('base64')}` };
   }
 }
 

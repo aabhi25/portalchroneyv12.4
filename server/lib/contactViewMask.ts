@@ -196,7 +196,7 @@ async function accountsFor(req: Request, path: string): Promise<string[] | null>
  * account's own users see. The page marks its requests with the account it is viewing; it can only
  * make the server hide more, never show more.
  */
-function inBusinessUserView(req: Request): boolean {
+export function inBusinessUserView(req: Request): boolean {
   const viewing = req.get("x-business-user-view");
   return !!viewing && viewing === (req.user?.activeBusinessAccountId || req.user?.businessAccountId);
 }

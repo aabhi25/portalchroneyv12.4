@@ -35,7 +35,7 @@ type FlagField =
   | "chroneyEnabled" | "whatsappEnabled" | "instagramEnabled" | "facebookEnabled"
   | "whatsappMarketingEnabled" | "voiceModeEnabled" | "supportTicketsEnabled"
   | "appointmentsEnabled" | "demoOrdersEnabled" | "shopifyEnabled" | "wooCommerceEnabled" | "visualSearchEnabled"
-  | "k12EducationEnabled" | "jobPortalEnabled" | "answerCheckingEnabled";
+  | "k12EducationEnabled" | "jobPortalEnabled" | "answerCheckingEnabled" | "designStudioEnabled";
 
 const accountKey = (id: string) => ["/api/business-accounts", id];
 const avatarKey = (id: string) => ["/api/super-admin/avatar/accounts", id];
@@ -351,6 +351,14 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           {setUpButton("visualSearch")}
           {spinner("vista")}
           <Switch checked={vistaOn(ba)} disabled={pending} onCheckedChange={setVista} aria-label="Jewelry Showcase (Vista)" data-testid="switch-feature-vista" />
+        </Row>
+        <Row
+          {...area("design")} label="Design Studio"
+          description="Shoppers design their own jewellery in the website chat: the AI suggests motifs, draws the design, and the request comes in as a lead"
+          hint={!ba.chroneyEnabled ? "Needs Website chat switched on to show up." : null}
+          below={ba.designStudioEnabled ? <p className="text-[12px] text-gray-500">Designs are drawn with this account's own Google Gemini (or OpenAI) key. The brand sets its motifs, metals and prices in Design Studio › Set-up.</p> : null}
+        >
+          {flagSwitch("designStudioEnabled", "Design Studio")}
         </Row>
       </Group>
 
