@@ -25,6 +25,12 @@ interface SearchableSelectProps {
   options?: SelectOption[]
   groups?: SelectOptionGroup[]
   emptyMessage?: string
+  /** Extra classes for the button (e.g. a fixed width in a filter bar). */
+  triggerClassName?: string
+  /** Shown before the chosen label. */
+  icon?: React.ReactNode
+  /** Extra classes for the list (e.g. wider than the button for long names). */
+  contentClassName?: string
 }
 
 export function SearchableSelect({
@@ -35,6 +41,9 @@ export function SearchableSelect({
   options,
   groups,
   emptyMessage = "No results found.",
+  triggerClassName,
+  icon,
+  contentClassName,
 }: SearchableSelectProps) {
   const [open, setOpen] = React.useState(false)
 
@@ -53,15 +62,16 @@ export function SearchableSelect({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className="w-full justify-between font-normal"
+          className={cn("w-full justify-between font-normal", triggerClassName)}
         >
-          <span className={cn("truncate", !value && "text-muted-foreground")}>
+          {icon}
+          <span className={cn("flex-1 truncate text-left", !value && "text-muted-foreground")}>
             {value ? selectedLabel : placeholder}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+      <PopoverContent className={cn("w-[--radix-popover-trigger-width] p-0", contentClassName)} align="start">
         <Command>
           <CommandInput placeholder={searchPlaceholder} />
           <CommandList>

@@ -35,6 +35,7 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
 import { Users, MessageSquare, TrendingUp, Building2, Phone, Mail, Download, Search, X, Calendar, ChevronLeft, ChevronRight, ChevronDown, Loader2, BarChart3, Contact, User, Bot, MapPin, ImageIcon, SlidersHorizontal, Sparkles, CheckCircle2, XCircle, MoreVertical, Info, Copy, Eye, FileText, GitBranch, UserCheck, RefreshCw, Upload, Trash2, AlertTriangle, Clock } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -241,6 +242,28 @@ function countUniqueLeads(leads: LeadItem[]): number {
 const GROUP_ALWAYS_SHOWN_COLUMNS: LeadColumnKey[] = ["captured"];
 const groupColumnWidth = (key: LeadColumnKey) =>
   key === "phone" ? "150px" : key === "email" ? "190px" : key === "city" ? "110px" : key === "topics" ? "210px" : key === "funnel" ? "120px" : "180px";
+
+/** "All Accounts" or one account of the group, with a search box (groups can have 40+ accounts). */
+function AccountPicker({ value, onChange, accounts, triggerClassName }: {
+  value: string;
+  onChange: (v: string) => void;
+  accounts: { businessAccountId: string; businessName: string }[];
+  triggerClassName?: string;
+}) {
+  return (
+    <SearchableSelect
+      value={value}
+      onValueChange={onChange}
+      placeholder="All Accounts"
+      searchPlaceholder="Search accounts…"
+      emptyMessage="No account with that name"
+      icon={<Building2 className="w-3.5 h-3.5 mr-1.5 shrink-0 text-gray-400" />}
+      triggerClassName={triggerClassName}
+      contentClassName="w-[300px]"
+      options={[{ value: "all", label: "All Accounts" }, ...accounts.map(a => ({ value: a.businessAccountId, label: a.businessName }))]}
+    />
+  );
+}
 
 export default function GroupAdminDashboard() {
   const { toast } = useToast();
@@ -1145,18 +1168,9 @@ export default function GroupAdminDashboard() {
     onChange: (v: string) => void;
     accounts: { businessAccountId: string; businessName: string }[];
   }) => (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="w-[180px]">
-        <Building2 className="w-4 h-4 mr-2" />
-        <SelectValue placeholder="All Accounts" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="all">All Accounts</SelectItem>
-        {accounts.map(a => (
-          <SelectItem key={a.businessAccountId} value={a.businessAccountId}>{a.businessName}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="w-[200px]">
+      <AccountPicker value={value} onChange={onChange} accounts={accounts} />
+    </div>
   );
 
   return (
@@ -1417,18 +1431,14 @@ export default function GroupAdminDashboard() {
                     </div>
                   )}
 
-                  <Select value={leadsAccountFilter} onValueChange={setLeadsAccountFilter}>
-                    <SelectTrigger className="w-[170px] h-9 text-sm border-gray-200 bg-gray-50/80 rounded-lg hover:border-purple-300 transition-colors">
-                      <Building2 className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
-                      <SelectValue placeholder="All Accounts" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Accounts</SelectItem>
-                      {accountsForFilter.map(a => (
-                        <SelectItem key={a.businessAccountId} value={a.businessAccountId}>{a.businessName}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="w-[200px]">
+                    <AccountPicker
+                      value={leadsAccountFilter}
+                      onChange={setLeadsAccountFilter}
+                      accounts={accountsForFilter}
+                      triggerClassName="h-9 text-sm border-gray-200 bg-gray-50/80 rounded-lg hover:border-purple-300 transition-colors"
+                    />
+                  </div>
 
                   {!showingWhatsapp && <LeadColumnsPicker
                     columns={leadTableColumns}
