@@ -569,8 +569,12 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
     }
     // designs
     const round = session.designs.filter(d => d.round === latestRound);
-    const earlier = session.designs.filter(d => d.round !== latestRound && d.status === "ready");
+    const earlier = session.designs.filter(d => d.round !== latestRound && d.status === "ready").sort((a, b) => b.round - a.round);
     const failedAll = round.length > 0 && round.every(d => d.status === "failed");
+    // Every design in one strip under the big picture, newest first: the latest set (also the ones still
+    // being drawn), then the earlier ones. Tapping one shows it big in the same place.
+    const gallery = [...round, ...earlier];
+    const showGallery = gallery.length > 1 || gallery.some(d => d.status !== "ready");
     return (
       <>
         {guide(
@@ -578,36 +582,53 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
             : failedAll ? "Sorry, I couldn't draw that. Please try again."
               : selected?.original ? `What would you like to change about this ${pieceOf(session.choices.piece)?.name.toLowerCase() || "piece"}? Pick one below, or tell me in your own words.`
                 : selected ? "Like it? I can change anything: just tell me what. When it feels right, tap “Make this for me”."
-                  : "Here are your designs. Tap one to see it bigger.",
+                  : "Here are your designs. Tap one to see it.",
         )}
-        {/* One finished design on its own is already shown big below: no need for its tile too. */}
-        {!(round.length === 1 && round[0].status === "ready" && selectedId === round[0].id) && <div className={`grid gap-2 ${round.length > 1 ? "grid-cols-3" : "grid-cols-1"}`}>
-          {round.map(d => (
-            <button
-              key={d.id} type="button" disabled={d.status !== "ready"} onClick={() => { setSelectedId(d.id); setError(null); }} data-testid={`design-tile-${d.status}`}
-              className={`relative overflow-hidden rounded-xl border bg-gray-50 ${round.length > 1 ? "aspect-square" : "mx-auto aspect-square w-2/3"} ${selectedId === d.id ? "" : "border-gray-200"}`}
-              style={selectedId === d.id ? { borderColor: chatColor, boxShadow: `0 0 0 2px ${chatColor}` } : undefined}
-            >
-              {d.status === "ready" && d.url && <img src={d.url} alt={d.note} className="h-full w-full object-cover" />}
-              {d.status === "pending" && (
-                <span className="absolute inset-0 grid animate-pulse place-items-center bg-gradient-to-br from-gray-100 to-gray-200">
-                  <Sparkles className="h-6 w-6" style={{ color: chatColor }} />
-                </span>
-              )}
-              {d.status === "failed" && <span className="absolute inset-0 grid place-items-center px-2 text-center text-[11px] text-gray-500">Couldn't draw this one</span>}
-              {voteBadge(d.id)}
-            </button>
-          ))}
-        </div>}
+        {selected?.url ? (
+          <motion.div key={selected.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="relative overflow-hidden rounded-2xl border border-gray-200 bg-gray-50">
+            <img src={selected.url} alt={selected.note} className="w-full" data-testid="design-selected" />
+            <span className="absolute left-2 top-2 rounded-full bg-black/55 px-2 py-0.5 text-[10.5px] font-medium text-white">{selected.original ? "The original" : "Design preview"}</span>
+          </motion.div>
+        ) : drawing ? (
+          <div className="grid aspect-square w-full animate-pulse place-items-center rounded-2xl border border-gray-200 bg-gradient-to-br from-gray-100 to-gray-200" data-testid="design-drawing">
+            <Sparkles className="h-8 w-8" style={{ color: chatColor }} />
+          </div>
+        ) : null}
+
+        {showGallery && (
+          <div className="mt-2.5">
+            <p className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-gray-500">Your designs{gallery.length > 3 ? ` (${gallery.filter(d => d.status === "ready").length})` : ""}</p>
+            <div className="-mx-3 flex gap-2 overflow-x-auto px-3 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="design-gallery">
+              {gallery.map(d => {
+                const active = selectedId === d.id;
+                const tag = d.original ? "Original" : d.status === "ready" && d.round === latestRound && earlier.length > 0 ? "New" : null;
+                return (
+                  <button
+                    key={d.id} type="button" disabled={d.status !== "ready"} onClick={() => { setSelectedId(d.id); setError(null); }} data-testid={`design-tile-${d.status}`}
+                    aria-label={d.note || "Design"} aria-pressed={active}
+                    className={`relative h-[72px] w-[72px] shrink-0 overflow-hidden rounded-xl border bg-gray-50 transition-opacity ${active ? "" : "border-gray-200 opacity-75 hover:opacity-100"}`}
+                    style={active ? { borderColor: chatColor, boxShadow: `0 0 0 2px ${chatColor}` } : undefined}
+                  >
+                    {d.status === "ready" && d.url && <img src={d.url} alt="" className="h-full w-full object-cover" />}
+                    {d.status === "pending" && (
+                      <span className="absolute inset-0 grid animate-pulse place-items-center bg-gradient-to-br from-gray-100 to-gray-200">
+                        <Sparkles className="h-5 w-5" style={{ color: chatColor }} />
+                      </span>
+                    )}
+                    {d.status === "failed" && <span className="absolute inset-0 grid place-items-center px-1 text-center text-[10px] leading-tight text-gray-500">Couldn't draw this one</span>}
+                    {tag && <span className="absolute bottom-1 left-1 rounded-full bg-black/55 px-1.5 py-px text-[9.5px] font-medium text-white">{tag}</span>}
+                    {voteBadge(d.id)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {failedAll && <div className="mt-3">{primary("Try again", drawDesigns, false, "design-retry")}</div>}
 
         {selected?.url && (
-          <motion.div key={selected.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-3">
-            <div className="relative overflow-hidden rounded-2xl border border-gray-200 bg-gray-50">
-              <img src={selected.url} alt={selected.note} className="w-full" data-testid="design-selected" />
-              <span className="absolute left-2 top-2 rounded-full bg-black/55 px-2 py-0.5 text-[10.5px] font-medium text-white">{selected.original ? "The original" : "Design preview"}</span>
-            </div>
-            <p className="mt-2 text-[13px] text-gray-700">{selected.note}</p>
+          <div className="mt-2">
+            <p className="text-[13px] text-gray-700">{selected.note}</p>
             {!selected.original && <p className="mt-0.5 text-[12px] text-gray-500">{summaryText}</p>}
             {session.votes[selected.id] && (
               <p className="mt-1.5 flex items-center gap-1.5 text-[12.5px] font-medium" style={{ color: chatColor }} data-testid="design-votes">
@@ -688,22 +709,9 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
             {session.rendersLeft <= 3 && <p className="mt-1 text-[11px] text-gray-500">{session.rendersLeft === 0 ? "You've used all the designs for this session." : `${session.rendersLeft} more design${session.rendersLeft === 1 ? "" : "s"} left in this session.`}</p>}
 
             <div className="mt-4">{similarBlock()}</div>
-          </motion.div>
+          </div>
         )}
 
-        {earlier.length > 0 && (
-          <>
-            <p className="mb-1.5 mt-4 text-[12px] font-semibold uppercase tracking-wide text-gray-500">Earlier designs</p>
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {earlier.map(d => (
-                <button key={d.id} type="button" onClick={() => setSelectedId(d.id)} className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-gray-200" style={selectedId === d.id ? { borderColor: chatColor } : undefined}>
-                  <img src={d.url} alt={d.note} className="h-full w-full object-cover" />
-                  {voteBadge(d.id)}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
         {!drawing && (
           <button type="button" onClick={() => setStep("piece")} className="mt-4 flex items-center gap-1.5 text-[12.5px] font-medium text-gray-600 hover:text-gray-900" data-testid="design-start-over">
             <RefreshCw className="h-3.5 w-3.5" /> {base ? "Design something from scratch" : "Start a different design"}
