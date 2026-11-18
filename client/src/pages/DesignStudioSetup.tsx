@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import {
   MAX_CUSTOM_MOTIFS, MAX_STYLE_PHOTOS, OCCASIONS, PIECES, TIERS, estimatePrice, formatPriceRange,
-  type DesignStudioSettings, type Motif, type PieceId,
+  type DesignStudioSettings, type Motif, type PieceId, type StudioProductPhotos,
 } from "@shared/designStudio";
 
 /**
@@ -25,6 +25,8 @@ interface SettingsResponse {
   settings: DesignStudioSettings;
   imageAi: { ready: boolean; provider: "google" | "openai" | null };
   library: Motif[];
+  /** The product photos the piece and motif tiles show when the brand hasn't put its own. */
+  productPhotos?: StudioProductPhotos;
 }
 
 const KEY = ["/api/design-studio/settings"];
@@ -58,6 +60,10 @@ export default function DesignStudioSetup() {
   const styleInput = useRef<HTMLInputElement>(null);
   const motifInput = useRef<HTMLInputElement>(null);
   const motifTarget = useRef<number | null>(null);
+  const pieceInput = useRef<HTMLInputElement>(null);
+  const pieceTarget = useRef<PieceId | null>(null);
+  const motifPhotoInput = useRef<HTMLInputElement>(null);
+  const motifPhotoTarget = useRef<string | null>(null);
 
   useEffect(() => { if (data && !dirty) setForm(data.settings); }, [data, dirty]);
 
@@ -90,12 +96,17 @@ export default function DesignStudioSetup() {
     return range ? `A ${TIERS[1].name.toLowerCase()} ${PIECES.find(p => p.id === piece)!.name.toLowerCase()} in ${metal.name} with no stones would show as ${formatPriceRange(form.currencySymbol, range)}.` : null;
   })();
 
-  const addPhoto = async (file: File | undefined, where: "style" | "motif") => {
+  const addPhoto = async (file: File | undefined, where: "style" | "motif" | "piece" | "motifPhoto") => {
     if (!file) return;
     setUploading(where);
     try {
       const url = await uploadPhoto(file);
       if (where === "style") set({ stylePhotos: [...form.stylePhotos, url].slice(0, MAX_STYLE_PHOTOS) });
+      else if (where === "piece") {
+        if (pieceTarget.current) set({ piecePhotos: { ...form.piecePhotos, [pieceTarget.current]: url } });
+      } else if (where === "motifPhoto") {
+        if (motifPhotoTarget.current) set({ motifPhotos: { ...form.motifPhotos, [motifPhotoTarget.current]: url } });
+      }
       else if (motifTarget.current !== null) {
         set({ customMotifs: form.customMotifs.map((m, i) => (i === motifTarget.current ? { ...m, imageUrl: url } : m)) });
       }
@@ -144,24 +155,77 @@ export default function DesignStudioSetup() {
                 }}
                 className={`rounded-full border px-3 py-1.5 text-[13px] font-medium ${on ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-600"}`}
               >
-                {p.emoji} {p.name}
+                {p.name}
               </button>
             );
           })}
         </div>
+        <div>
+          <p className="text-[13.5px] font-medium text-gray-800">Photos shoppers tap</p>
+          <p className="mt-0.5 text-[12.5px] text-gray-500">Each piece shows a photo of one of your products. Put your own photo on any of them.</p>
+          <input ref={pieceInput} type="file" accept="image/*" className="hidden" onChange={e => { addPhoto(e.target.files?.[0], "piece"); e.target.value = ""; }} />
+          <div className="mt-3 grid grid-cols-3 gap-3 sm:grid-cols-4">
+            {PIECES.filter(p => form.pieces.includes(p.id)).map(p => {
+              const own = form.piecePhotos[p.id];
+              const photo = own || data!.productPhotos?.pieces?.[p.id];
+              const busy = uploading === "piece" && pieceTarget.current === p.id;
+              return (
+                <div key={p.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white" data-testid={`card-design-piece-photo-${p.id}`}>
+                  <div className="grid aspect-square w-full place-items-center bg-gray-50 text-gray-400">
+                    {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : photo ? <img src={photo} alt="" className="h-full w-full object-cover" /> : <ImagePlus className="h-6 w-6" />}
+                  </div>
+                  <div className="px-2 py-2">
+                    <p className="text-[13px] font-medium text-gray-800">{p.name}</p>
+                    <p className="text-[11.5px] text-gray-500">{own ? "Your photo" : photo ? "From your products" : "No product photo found"}</p>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] font-medium">
+                      <button type="button" className="text-blue-600 hover:underline" data-testid={`button-design-piece-photo-${p.id}`} onClick={() => { pieceTarget.current = p.id; pieceInput.current?.click(); }}>
+                        {own ? "Change" : "Use my photo"}
+                      </button>
+                      {own && (
+                        <button type="button" className="text-gray-500 hover:underline" data-testid={`button-design-piece-photo-reset-${p.id}`} onClick={() => { const { [p.id]: _removed, ...rest } = form.piecePhotos; set({ piecePhotos: rest }); }}>
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </Section>
 
-      <Section title="Motifs" hint="The AI suggests from these. Switch off the ones you don't make, and add your own signature motifs with a photo.">
+      <Section title="Motifs" hint="The AI suggests from these. Switch off the ones you don't make, and add your own signature motifs with a photo. Each motif shows a photo of one of your products that has it; tap a picture to put your own.">
         <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
-          {data!.library.map(m => (
-            <label key={m.id} className="flex items-center justify-between gap-3 text-[13.5px] text-gray-700">
-              <span>{m.emoji} {m.name}</span>
-              <Switch
-                checked={!hidden.has(m.id)} data-testid={`switch-design-motif-${m.id}`}
-                onCheckedChange={v => set({ hiddenMotifs: v ? form.hiddenMotifs.filter(x => x !== m.id) : [...form.hiddenMotifs, m.id] })}
-              />
-            </label>
-          ))}
+          {data!.library.map(m => {
+            const own = form.motifPhotos[m.id];
+            const photo = own || data!.productPhotos?.motifs?.[m.id]?.any;
+            const busy = uploading === "motifPhoto" && motifPhotoTarget.current === m.id;
+            return (
+              <div key={m.id} className="flex items-center gap-3 text-[13.5px] text-gray-700" data-testid={`row-design-motif-${m.id}`}>
+                <button
+                  type="button" onClick={() => { motifPhotoTarget.current = m.id; motifPhotoInput.current?.click(); }} data-testid={`button-design-motif-photo-${m.id}`}
+                  className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border border-gray-200 bg-gray-50 text-gray-400"
+                  aria-label={`Put your own photo for ${m.name}`} title={own ? "Your photo. Tap to change it." : photo ? "From your products. Tap to use your own photo." : "No product photo found. Tap to add your own."}
+                >
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : photo ? <img src={photo} alt="" className="h-full w-full object-cover" /> : <ImagePlus className="h-4 w-4" />}
+                </button>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{m.name}</span>
+                  {own && (
+                    <button type="button" className="block text-[11.5px] font-medium text-gray-500 hover:underline" data-testid={`button-design-motif-photo-reset-${m.id}`} onClick={() => { const { [m.id]: _removed, ...rest } = form.motifPhotos; set({ motifPhotos: rest }); }}>
+                      Remove my photo
+                    </button>
+                  )}
+                </span>
+                <Switch
+                  checked={!hidden.has(m.id)} data-testid={`switch-design-motif-${m.id}`} aria-label={`Offer ${m.name}`}
+                  onCheckedChange={v => set({ hiddenMotifs: v ? form.hiddenMotifs.filter(x => x !== m.id) : [...form.hiddenMotifs, m.id] })}
+                />
+              </div>
+            );
+          })}
+          <input ref={motifPhotoInput} type="file" accept="image/*" className="hidden" onChange={e => { addPhoto(e.target.files?.[0], "motifPhoto"); e.target.value = ""; }} />
         </div>
         <div className="space-y-3 border-t border-gray-100 pt-4">
           <p className="text-[13px] font-medium text-gray-800">Your own motifs</p>

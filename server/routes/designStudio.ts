@@ -5,7 +5,7 @@ import { MOTIF_LIBRARY, toPublicConfig } from "@shared/designStudio";
 import {
   DesignStudioError, castVote, designFunnel, getDesignStudioSettings, getSession, getSharedDesigns, imageAiStatus, isDesignStudioOn,
   listRequests, prepareUploadedPhoto, requestDesign, saveContact, saveDesignStudioSettings, shareSession, similarProducts, startChange,
-  startDesigns, startSession, storeStudioImage, suggestMotifs, toPublicSession, tryOnDesign, updateRequest,
+  startDesigns, startSession, storeStudioImage, studioProductPhotos, suggestMotifs, toPublicSession, tryOnDesign, updateRequest,
 } from "../services/designStudio";
 import { hideContactsForView, hidesContactsFromView, inBusinessUserView } from "../lib/contactViewMask";
 
@@ -51,7 +51,8 @@ router.get("/api/design-studio/public/config", async (req, res) => {
     if (typeof id !== "string" || !id) return res.status(400).json({ error: "businessAccountId is required" });
     const enabled = await isDesignStudioOn(id);
     if (!enabled) return res.json({ enabled: false });
-    res.json(toPublicConfig(await getDesignStudioSettings(id), true));
+    const settings = await getDesignStudioSettings(id);
+    res.json(toPublicConfig(settings, true, await studioProductPhotos(id, settings)));
   } catch (error) {
     fail(res, error, "config");
   }
@@ -190,7 +191,8 @@ const portalAccount = async (req: Request): Promise<string> => {
 router.get("/api/design-studio/settings", ...portal, async (req, res) => {
   try {
     const id = await portalAccount(req);
-    res.json({ settings: await getDesignStudioSettings(id), imageAi: await imageAiStatus(id), library: MOTIF_LIBRARY });
+    const settings = await getDesignStudioSettings(id);
+    res.json({ settings, imageAi: await imageAiStatus(id), library: MOTIF_LIBRARY, productPhotos: await studioProductPhotos(id, settings, true) });
   } catch (error) {
     fail(res, error, "settings");
   }
@@ -199,7 +201,8 @@ router.get("/api/design-studio/settings", ...portal, async (req, res) => {
 router.put("/api/design-studio/settings", ...portal, async (req, res) => {
   try {
     const id = await portalAccount(req);
-    res.json({ settings: await saveDesignStudioSettings(id, req.body?.settings), imageAi: await imageAiStatus(id), library: MOTIF_LIBRARY });
+    const settings = await saveDesignStudioSettings(id, req.body?.settings);
+    res.json({ settings, imageAi: await imageAiStatus(id), library: MOTIF_LIBRARY, productPhotos: await studioProductPhotos(id, settings) });
   } catch (error) {
     fail(res, error, "save settings");
   }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, Heart, Loader2, RefreshCw, Send, Share2, Sparkles, User, X } from "lucide-react";
-import type { DesignChoices, DesignImage, DesignStudioPublicConfig, MotifSuggestion, PieceId, PriceRange, TierId, VoteTally } from "@shared/designStudio";
+import { ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, Gem, Heart, Loader2, RefreshCw, Send, Share2, Sparkles, User, X } from "lucide-react";
+import { motifTilePhoto, type DesignChoices, type DesignImage, type DesignStudioPublicConfig, type MotifSuggestion, type PieceId, type PriceRange, type TierId, type VoteTally } from "@shared/designStudio";
 
 /**
  * Design Studio in the website chat (shared/designStudio.ts): the shopper picks a piece, who it is
@@ -66,6 +66,8 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
   const [config, setConfig] = useState<DesignStudioPublicConfig | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [step, setStep] = useState<Step>("piece");
+  /** Piece and motif tiles whose photo didn't load: they show the plain icon. */
+  const [brokenPhotos, setBrokenPhotos] = useState<Set<string>>(new Set());
   const [choices, setChoices] = useState<DesignChoices>({});
   const [advice, setAdvice] = useState<{ intro: string; suggestions: MotifSuggestion[] } | null>(null);
   const [adviceLoading, setAdviceLoading] = useState(false);
@@ -382,14 +384,18 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
     const m = motifOf(id);
     if (!m) return null;
     const active = choices.motifId === id;
+    // The brand's own photo of the motif, else one of its products with the motif (in the piece being designed when there is one).
+    const photo = brokenPhotos.has(`motif:${id}`) ? null : motifTilePhoto(m, choices.piece);
     return (
       <button
         key={id} type="button" onClick={() => set({ motifId: id })} data-testid={`design-motif-${id}`}
         className={`flex items-center gap-3 rounded-xl border bg-white p-2.5 text-left transition-all ${active ? "shadow-sm" : "border-gray-200 hover:border-gray-400"}`}
         style={active ? { borderColor: chatColor, boxShadow: `0 0 0 1px ${chatColor}` } : undefined}
       >
-        <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-lg bg-gray-50 text-2xl">
-          {m.imageUrl ? <img src={m.imageUrl} alt="" className="h-full w-full object-cover" /> : m.emoji || "✨"}
+        <span className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-lg bg-gray-50">
+          {photo
+            ? <img src={photo} alt="" loading="lazy" className="h-full w-full object-cover" onError={() => setBrokenPhotos(prev => new Set(prev).add(`motif:${id}`))} />
+            : <Sparkles className="h-5 w-5" style={{ color: chatColor }} strokeWidth={1.5} />}
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-[13.5px] font-semibold text-gray-900">{m.name}</span>
@@ -411,11 +417,16 @@ export function DesignStudioPanel({ businessAccountId, visitorToken, conversatio
               <button
                 key={p.id} type="button" data-testid={`design-piece-${p.id}`}
                 onClick={() => { set({ piece: p.id }); setStep("who"); }}
-                className="flex flex-col items-center gap-1 rounded-xl border border-gray-200 bg-white px-2 py-4 transition-all hover:border-gray-400 hover:shadow-sm active:scale-[0.97]"
-                style={choices.piece === p.id ? { borderColor: chatColor } : undefined}
+                className="flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white transition-all hover:border-gray-400 hover:shadow-sm active:scale-[0.97]"
+                style={choices.piece === p.id ? { borderColor: chatColor, boxShadow: `0 0 0 1px ${chatColor}` } : undefined}
               >
-                <span className="text-2xl">{p.emoji}</span>
-                <span className="text-[13px] font-medium text-gray-800">{p.name}</span>
+                {/* One of the brand's own products (or its own photo); a plain icon when there is none. */}
+                <span className="grid aspect-square w-full place-items-center bg-gray-50">
+                  {p.imageUrl && !brokenPhotos.has(p.id)
+                    ? <img src={p.imageUrl} alt="" loading="lazy" className="h-full w-full object-cover" onError={() => setBrokenPhotos(prev => new Set(prev).add(p.id))} />
+                    : <Gem className="h-7 w-7" style={{ color: chatColor }} strokeWidth={1.5} />}
+                </span>
+                <span className="px-1 py-2 text-[13px] font-medium text-gray-800">{p.name}</span>
               </button>
             ))}
           </div>

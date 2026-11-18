@@ -7,7 +7,7 @@
  */
 import {
   MOTIF_LIBRARY, availableMotifs, buildChangePrompt, buildCustomisePrompt, buildDesignPrompt, canCustomiseProduct, changeTrail, cleanChoices,
-  defaultDesignStudioSettings, describeChoices, estimatePrice, formatPriceRange, missingChoices, normalizeDesignStudioSettings, pieceForProduct,
+  defaultDesignStudioSettings, describeChoices, estimatePrice, formatPriceRange, missingChoices, MOTIF_LIBRARY, motifNamePattern, motifTilePhoto, normalizeDesignStudioSettings, notJewellery, pieceForProduct, pieceNamePattern,
   rankMotifs, roundPrice, tallyVotes, toPublicConfig, tryOnTypeFor, wantsCustomDesign, type DesignImage,
 } from "@shared/designStudio";
 
@@ -141,6 +141,40 @@ expect(changeTrail(made, "c").join(" | ") === "make it rose gold | add the initi
 const tally = tallyVotes([{ designId: "b", voterId: "v1", name: "Mom", at }, { designId: "b", voterId: "v2", at }, { designId: "c", voterId: "v3", name: "Riya", at }]);
 expect(tally.b.count === 2 && tally.b.names.join() === "Mom" && tally.c.count === 1 && !tally.a && Object.keys(tallyVotes(null)).length === 0, "votes counted per design, with the names given", tally);
 expect(tryOnTypeFor("mangalsutra") === "necklace" && tryOnTypeFor("ring") === "ring" && tryOnTypeFor(undefined) === "jewellery", "try-on knows a mangalsutra as a necklace");
+
+// ── photos on the piece tiles ──────────────────────────────────────────────
+expect(pieceForProduct("Ring Sizer") === null, "a ring sizer isn't a ring");
+expect(pieceNamePattern("ring") === "\\yrings?\\y|\\ybands?\\y" && pieceNamePattern("mangalsutra") === "\\ymangal\\s?sutra", "a piece's name words in the database's spelling", pieceNamePattern("ring"));
+const withPhotos = normalizeDesignStudioSettings({ piecePhotos: { ring: "/uploads/design-studio/a/ring.jpg", pendant: "javascript:alert(1)", tiara: "/uploads/x.jpg" } });
+expect(Object.keys(withPhotos.piecePhotos).join() === "ring" && Object.keys(normalizeDesignStudioSettings({ piecePhotos: "x" }).piecePhotos).length === 0 && Object.keys(defaultDesignStudioSettings().piecePhotos).length === 0,
+  "the brand's own tile photos: only real addresses, only pieces we know", withPhotos.piecePhotos);
+const tiles = toPublicConfig(withPhotos, true, { pieces: { ring: "https://shop.example.com/ring.jpg", pendant: "https://shop.example.com/pendant.jpg" } }).pieces;
+expect(tiles.find(p => p.id === "ring")?.imageUrl === "/uploads/design-studio/a/ring.jpg" && tiles.find(p => p.id === "pendant")?.imageUrl === "https://shop.example.com/pendant.jpg"
+  && tiles.find(p => p.id === "necklace")?.imageUrl === null && toPublicConfig(withPhotos, true).pieces.find(p => p.id === "pendant")?.imageUrl === null,
+  "a tile shows the brand's own photo, else a product photo, else none");
+
+// ── photos on the motif tiles ──────────────────────────────────────────────
+expect(MOTIF_LIBRARY.every(m => !!m.nameWords && new RegExp(m.nameWords).test(m.name.toLowerCase().replace("flowers", "flower"))), "every ready motif has name words that find its own name",
+  MOTIF_LIBRARY.filter(m => !m.nameWords || !new RegExp(m.nameWords).test(m.name.toLowerCase())).map(m => m.id));
+const words = (id: string) => new RegExp(MOTIF_LIBRARY.find(m => m.id === id)!.nameWords!);
+expect(words("floral").test("rose gold daisy studs") && !words("floral").test("rose gold ring") && !words("sun").test("sunday ring") && !words("bow").test("rainbow pendant") && !words("om").test("some ring")
+  && words("butterfly").test("silver butterflies earrings") && words("evil-eye").test("evil eye bracelet"), "name words match whole words only (rose gold isn't a flower, a rainbow isn't a bow)");
+expect(motifNamePattern(MOTIF_LIBRARY.find(m => m.id === "heart")!) === "\\yhearts?\\y" && motifNamePattern({ name: "Jaipur jaali (signature)" }) === "\\yjaipur\\s+jaali\\y"
+  && motifNamePattern({ name: "A.*" }) === null && motifNamePattern({ name: "" }) === null, "a motif's name words in the database's spelling; a brand's own motif by its name", motifNamePattern({ name: "Jaipur jaali (signature)" }));
+expect(notJewellery("Heart Gift Box") && !notJewellery("Heart Anklet"), "a gift box isn't jewellery; an anklet is");
+const ownMotif = normalizeDesignStudioSettings({
+  customMotifs: [{ name: "Swan", meaning: "Ours", imageUrl: "/uploads/design-studio/a/swan.jpg", nameWords: ".*" }],
+  motifPhotos: { lotus: "/uploads/design-studio/a/lotus.jpg", swan: "/uploads/x.jpg", heart: "ftp://x" },
+});
+expect(Object.keys(ownMotif.motifPhotos).join() === "lotus" && ownMotif.customMotifs[0].nameWords === undefined && Object.keys(defaultDesignStudioSettings().motifPhotos).length === 0,
+  "the brand's own motif photos: ready-list motifs only, and a browser can't set name words", ownMotif.motifPhotos);
+const motifTiles = toPublicConfig(ownMotif, true, { motifs: { lotus: { any: "https://shop.example.com/lotus.jpg" }, heart: { pendant: "https://shop.example.com/heart-pendant.jpg", any: "https://shop.example.com/heart-ring.jpg" } } }).motifs;
+const mt = (id: string) => motifTiles.find(m => m.id === id)!;
+expect(motifTilePhoto(mt("lotus"), "ring") === "/uploads/design-studio/a/lotus.jpg" && motifTilePhoto(mt(ownMotif.customMotifs[0].id)) === "/uploads/design-studio/a/swan.jpg", "a motif tile shows the brand's own photo first");
+expect(motifTilePhoto(mt("heart"), "pendant") === "https://shop.example.com/heart-pendant.jpg" && motifTilePhoto(mt("heart"), "bangle") === "https://shop.example.com/heart-ring.jpg"
+  && motifTilePhoto(mt("heart")) === "https://shop.example.com/heart-ring.jpg" && motifTilePhoto(mt("peacock"), "ring") === null,
+  "else a product with the motif in the piece being designed, else any product with it, else none");
+expect(!availableMotifs(ownMotif).find(m => m.id === "lotus")!.imageUrl, "a tile photo on a ready motif is never the image AI's reference");
 
 if (failed) { console.error(`\n${failed} failed`); process.exit(1); }
 console.log("\nAll Design Studio checks passed");

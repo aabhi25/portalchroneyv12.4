@@ -359,6 +359,48 @@ async function main() {
     const startCustom = await fetch(`${base2}/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ businessAccountId: B, visitorToken: "visitor-4", productId: pendant.id }) });
     const startCustomBody = await startCustom.json() as any;
     expect(startCustom.status === 200 && startCustomBody.session.designs[0].original === true && startCustomBody.session.choices.base.productId === pendant.id, "web: a session started from a product");
+
+    // ── photos on the piece tiles: one of the brand's products for each piece ──
+    const shot = (name: string) => `https://shop.example.com/${name}.jpg`;
+    await db.insert(schema.products).values([
+      { businessAccountId: B, name: "Rose Gold Hoop Earrings", description: "x", imageUrl: shot("hoops") },
+      { businessAccountId: B, name: "Earring Box", description: "x", imageUrl: shot("box") },
+      { businessAccountId: B, name: "Solitaire Ring", description: "x", imageUrl: shot("sold-out-ring"), stockStatus: "out_of_stock" },
+      { businessAccountId: B, name: "Classic Gold Ring", description: "x", imageUrl: shot("ring") },
+    ] as any);
+    const tilePhotos = await studio.pieceProductPhotos(B, true);
+    expect(tilePhotos.pendant === productPhoto && tilePhotos.earrings === shot("hoops") && tilePhotos.mangalsutra === productPhoto, "each piece gets a photo of a product of that kind", tilePhotos);
+    expect(tilePhotos.ring === shot("ring"), "an in-stock product before a sold-out one, and earrings never stand in for a ring", tilePhotos.ring);
+    expect(!tilePhotos.necklace && !tilePhotos.bangle && !tilePhotos.bracelet, "a piece with no such product gets no photo");
+    await db.insert(schema.products).values({ businessAccountId: B, name: "Gold Kada", description: "x", imageUrl: shot("kada") } as any);
+    expect(!(await studio.pieceProductPhotos(B)).bangle && (await studio.pieceProductPhotos(B, true)).bangle === shot("kada"), "the picks are kept for a while; the Set-up page reads them again");
+    const ownPhoto = `/uploads/design-studio/${B}/product.jpg`;
+    const savedPhotos = await studio.saveDesignStudioSettings(B, { ...(await studio.getDesignStudioSettings(B)), piecePhotos: { ring: ownPhoto, earrings: "https://elsewhere.example.com/e.jpg" } });
+    expect(savedPhotos.piecePhotos.ring === ownPhoto && !savedPhotos.piecePhotos.earrings, "the brand's own tile photo is kept only when it was uploaded here", savedPhotos.piecePhotos);
+    const webConfig = await (await fetch(`${base2}/config?businessAccountId=${B}`)).json() as any;
+    const tile = (id: string) => webConfig.pieces.find((p: any) => p.id === id)?.imageUrl;
+    expect(tile("ring") === ownPhoto && tile("earrings") === shot("hoops") && tile("necklace") === null, "web: the chat gets a photo for each tile, the brand's own first", webConfig.pieces);
+
+    // ── photos on the motif tiles: a product that has the motif, in the piece being designed ──
+    await db.insert(schema.products).values([
+      { businessAccountId: B, name: "Lotus Stud Earrings", description: "x", imageUrl: shot("lotus-studs") },
+      { businessAccountId: B, name: "Heart Gift Box", description: "x", imageUrl: shot("heart-box") },
+      { businessAccountId: B, name: "Golden Heart Ring", description: "x", imageUrl: shot("heart-ring") },
+      { businessAccountId: B, name: "Peacock Anklet", description: "x", imageUrl: shot("peacock-anklet") },
+      { businessAccountId: B, name: "Jaipur Jaali Bangle", description: "x", imageUrl: shot("jaali-bangle") },
+    ] as any);
+    const withOwn = await studio.saveDesignStudioSettings(B, { ...(await studio.getDesignStudioSettings(B)), customMotifs: [{ name: "Jaipur jaali", meaning: "Ours" }], motifPhotos: { lotus: ownPhoto, heart: "https://elsewhere.example.com/h.jpg" } });
+    const jaali = withOwn.customMotifs[0].id;
+    expect(withOwn.motifPhotos.lotus === ownPhoto && !withOwn.motifPhotos.heart, "the brand's own motif photo is kept only when it was uploaded here", withOwn.motifPhotos);
+    const motifShots = await studio.motifProductPhotos(B, withOwn, true);
+    expect(motifShots.heart?.pendant === productPhoto && motifShots.heart?.ring === shot("heart-ring") && !motifShots.heart?.earrings && !!motifShots.heart?.any
+      && ![motifShots.heart?.pendant, motifShots.heart?.ring, motifShots.heart?.any].includes(shot("heart-box")), "a motif gets a product photo for each piece it comes in, never a gift box", motifShots.heart);
+    expect(motifShots.lotus?.earrings === shot("lotus-studs") && motifShots.peacock?.any === shot("peacock-anklet") && !motifShots.peacock?.ring && !motifShots.om && motifShots[jaali]?.bangle === shot("jaali-bangle"),
+      "also for a piece we don't design (an anklet) and for the brand's own motif by its name; none when no product has the motif", motifShots);
+    const webMotifs = (await (await fetch(`${base2}/config?businessAccountId=${B}`)).json() as any).motifs;
+    const webMotif = (id: string) => webMotifs.find((m: any) => m.id === id);
+    expect(webMotif("lotus").imageUrl === ownPhoto && webMotif("heart").productPhotos.ring === shot("heart-ring") && webMotif("heart").imageUrl === null && Object.keys(webMotif("om").productPhotos).length === 0,
+      "web: the chat gets the motif photos, the brand's own first", webMotif("heart"));
     await new Promise(r => web2.close(() => r(null)));
   } finally {
     await db.delete(schema.businessAccounts).where(eq(schema.businessAccounts.id, B)).catch(() => undefined);

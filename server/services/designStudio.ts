@@ -25,10 +25,10 @@ import { db } from "../db";
 import { storage } from "../storage";
 import { businessAccounts, designSessions, designStudioSettings, leads, type BusinessAccount, type DesignSessionRow } from "@shared/schema";
 import {
-  ANGLES, DESIGNS_PER_ROUND, MAX_VOTES, PIECES, RENDER_STALE_MS, REQUEST_STATUSES, availableMotifs, buildChangePrompt, buildCustomisePrompt,
+  ANGLES, DESIGNS_PER_ROUND, MAX_VOTES, MOTIF_LIBRARY, PIECES, RENDER_STALE_MS, REQUEST_STATUSES, availableMotifs, buildChangePrompt, buildCustomisePrompt,
   buildDesignPrompt, changeTrail, cleanChoices, defaultDesignStudioSettings, describeChoices, estimatePrice, formatPriceRange, missingChoices,
-  normalizeDesignStudioSettings, pieceForProduct, rankMotifs, tallyVotes, tryOnTypeFor,
-  type DesignChoices, type DesignImage, type DesignSessionStatus, type DesignStudioSettings, type DesignVote, type MotifSuggestion,
+  motifNamePattern, normalizeDesignStudioSettings, notJewellery, pieceForProduct, pieceNamePattern, rankMotifs, tallyVotes, tryOnTypeFor,
+  type DesignChoices, type DesignImage, type DesignSessionStatus, type DesignStudioSettings, type DesignVote, type MotifProductPhotos, type MotifSuggestion, type PieceId, type StudioProductPhotos,
   type PriceRange, type VoteTally,
 } from "@shared/designStudio";
 import { validatePhoneNumber } from "@shared/validation/phone";
@@ -38,6 +38,7 @@ import { createImageProvider } from "./imageGenerationProviders";
 import { decrypt } from "./encryptionService";
 import { openAccountGeminiKey } from "./geminiKeys";
 import { r2Storage } from "./r2StorageService";
+import { getLiveProductSource } from "./productSourceSwitch";
 import { upsertConversationLead } from "./leadCapture/leadStore";
 import { syncConversationLeadIfReady } from "./leadCapture/crmGate";
 import { hybridProductSearch } from "./productHybridSearch";
@@ -74,9 +75,109 @@ export async function saveDesignStudioSettings(businessAccountId: string, raw: u
   const isOwn = (url?: string | null) => !!url && ownPrefixes.some(p => url.startsWith(p));
   settings.stylePhotos = settings.stylePhotos.filter(isOwn);
   settings.customMotifs = settings.customMotifs.map(m => ({ ...m, imageUrl: isOwn(m.imageUrl) ? m.imageUrl : null }));
+  settings.piecePhotos = Object.fromEntries(Object.entries(settings.piecePhotos).filter(([, url]) => isOwn(url)));
+  settings.motifPhotos = Object.fromEntries(Object.entries(settings.motifPhotos).filter(([, url]) => isOwn(url)));
   await db.insert(designStudioSettings).values({ businessAccountId, settings })
     .onConflictDoUpdate({ target: designStudioSettings.businessAccountId, set: { settings, updatedAt: new Date() } });
+  motifPhotoCache.delete(businessAccountId); // the brand's own motifs may have changed
   return settings;
+}
+
+// ---------------------------------------------------------------------------
+// Tiles: real product photos on the piece tiles and the motif tiles
+// ---------------------------------------------------------------------------
+
+const TILE_PHOTO_CACHE_MS = 10 * 60 * 1000;
+const piecePhotoCache = new Map<string, { at: number; photos: Partial<Record<PieceId, string>> }>();
+
+/**
+ * One product photo per piece, from the account's own products: a product whose name says it is that
+ * piece ("Silver Heart Pendant" → Pendant), in-stock first, no product twice, the same pick every time.
+ * Pieces with no such product get nothing (the tile shows a plain icon). Kept for ten minutes; `fresh`
+ * reads again (the Set-up page). The brand's own tile photos (settings.piecePhotos) go on top of these.
+ */
+export async function pieceProductPhotos(businessAccountId: string, fresh = false): Promise<Partial<Record<PieceId, string>>> {
+  const hit = piecePhotoCache.get(businessAccountId);
+  if (!fresh && hit && Date.now() - hit.at < TILE_PHOTO_CACHE_MS) return hit.photos;
+  const photos: Partial<Record<PieceId, string>> = {};
+  try {
+    const live = (await getLiveProductSource(businessAccountId)) === "woocommerce" ? sql`p.source = 'woocommerce'` : sql`p.source <> 'woocommerce'`;
+    const used = new Set<string>();
+    for (const piece of PIECES) {
+      const rows = (await db.execute(sql`
+        SELECT p.id, p.name, p.image_url FROM products p
+         WHERE p.business_account_id = ${businessAccountId} AND ${live}
+           AND p.image_url IS NOT NULL AND p.image_url <> ''
+           AND p.name ~* ${pieceNamePattern(piece.id)}
+         ORDER BY (coalesce(p.stock_status, 'in_stock') IN ('out_of_stock', 'outofstock')), md5(p.id)
+         LIMIT 12
+      `)).rows as any[];
+      // The name check again in code: it knows "Earring Box" isn't earrings and "Earrings" aren't a ring.
+      const pick = rows.find(r => !used.has(String(r.id)) && pieceForProduct(r.name) === piece.id);
+      if (!pick) continue;
+      used.add(String(pick.id));
+      photos[piece.id] = String(pick.image_url);
+    }
+  } catch (e: any) {
+    console.warn("[Design Studio] Piece photos couldn't be read:", e?.message);
+    return hit?.photos ?? {};
+  }
+  piecePhotoCache.set(businessAccountId, { at: Date.now(), photos });
+  return photos;
+}
+
+const motifPhotoCache = new Map<string, { at: number; photos: Record<string, MotifProductPhotos> }>();
+
+/**
+ * Product photos for the motif tiles: for each motif, products whose name has the motif ("Lotus
+ * Pendant"), one for each piece there is one in and one for "any" piece, so a shopper designing a ring
+ * sees the motif on a ring when the brand has such a ring. In-stock first, the same pick every time,
+ * and for one piece no product stands for two motifs. Motifs with no such product get nothing.
+ */
+export async function motifProductPhotos(businessAccountId: string, settings: DesignStudioSettings, fresh = false): Promise<Record<string, MotifProductPhotos>> {
+  const hit = motifPhotoCache.get(businessAccountId);
+  if (!fresh && hit && Date.now() - hit.at < TILE_PHOTO_CACHE_MS) return hit.photos;
+  const photos: Record<string, MotifProductPhotos> = {};
+  try {
+    const live = (await getLiveProductSource(businessAccountId)) === "woocommerce" ? sql`p.source = 'woocommerce'` : sql`p.source <> 'woocommerce'`;
+    const used = new Set<string>(); // "<piece>:<product id>"
+    // Every ready-list motif (the Set-up page shows the hidden ones too) and the brand's own.
+    for (const motif of [...settings.customMotifs, ...MOTIF_LIBRARY]) {
+      const pattern = motifNamePattern(motif);
+      if (!pattern) continue;
+      const rows = (await db.execute(sql`
+        SELECT p.id, p.name, p.image_url FROM products p
+         WHERE p.business_account_id = ${businessAccountId} AND ${live}
+           AND p.image_url IS NOT NULL AND p.image_url <> ''
+           AND p.name ~* ${pattern}
+         ORDER BY (coalesce(p.stock_status, 'in_stock') IN ('out_of_stock', 'outofstock')), md5(p.id)
+         LIMIT 40
+      `)).rows as any[];
+      const found: MotifProductPhotos = {};
+      const take = (key: PieceId | "any", row: any) => {
+        if (!row) return;
+        used.add(`${key}:${row.id}`);
+        found[key] = String(row.image_url);
+      };
+      const jewellery = rows.filter(r => !notJewellery(r.name));
+      for (const piece of PIECES) take(piece.id, jewellery.find(r => pieceForProduct(r.name) === piece.id && !used.has(`${piece.id}:${r.id}`)));
+      // "Any": a piece we know before anything else (an anklet, a set).
+      const free = jewellery.filter(r => !used.has(`any:${r.id}`));
+      take("any", free.find(r => pieceForProduct(r.name)) ?? free[0]);
+      if (Object.keys(found).length) photos[motif.id] = found;
+    }
+  } catch (e: any) {
+    console.warn("[Design Studio] Motif photos couldn't be read:", e?.message);
+    return hit?.photos ?? {};
+  }
+  motifPhotoCache.set(businessAccountId, { at: Date.now(), photos });
+  return photos;
+}
+
+/** The product photos for all the studio's tiles (kept for ten minutes; `fresh` reads again). */
+export async function studioProductPhotos(businessAccountId: string, settings: DesignStudioSettings, fresh = false): Promise<StudioProductPhotos> {
+  const [pieces, motifs] = await Promise.all([pieceProductPhotos(businessAccountId, fresh), motifProductPhotos(businessAccountId, settings, fresh)]);
+  return { pieces, motifs };
 }
 
 // ---------------------------------------------------------------------------

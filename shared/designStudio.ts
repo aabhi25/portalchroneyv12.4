@@ -47,28 +47,30 @@ export interface Motif {
   imageUrl?: string | null;
   /** Extra words for the image AI. */
   promptHint?: string;
+  /** Words in a product's name that show it has this motif ("Lotus Pendant"): how its tile gets a product photo. */
+  nameWords?: string;
 }
 
 /** Ready list of motifs every brand starts with. Brands hide the ones they don't make and add their own. */
 export const MOTIF_LIBRARY: Motif[] = [
-  { id: "lotus", name: "Lotus", emoji: "🪷", meaning: "Purity and new beginnings", occasions: ["Wedding", "Festival", "Birthday", "Just because"], promptHint: "a lotus flower with layered petals" },
-  { id: "peacock", name: "Peacock", emoji: "🦚", meaning: "Grace and beauty, a wedding classic", occasions: ["Wedding", "Engagement", "Festival"], promptHint: "a peacock with a fanned tail" },
-  { id: "paisley", name: "Paisley (ambi)", emoji: "🥭", meaning: "The mango shape of prosperity and good luck", occasions: ["Wedding", "Festival"], promptHint: "a paisley (ambi, mango-shaped) motif" },
-  { id: "temple", name: "Temple", emoji: "🛕", meaning: "Traditional temple work, rich and auspicious", occasions: ["Wedding", "Festival"], promptHint: "South Indian temple jewellery detailing with small domes and coin-like discs" },
-  { id: "floral", name: "Flowers", emoji: "🌸", meaning: "Soft, feminine and easy to wear", occasions: ["Birthday", "Daily wear", "Anniversary", "Just because"], promptHint: "small blossoms with rounded petals" },
-  { id: "leaf", name: "Leaf & vine", emoji: "🌿", meaning: "Growth and fresh starts", occasions: ["Daily wear", "Birthday", "Just because"], promptHint: "curling leaves on a fine vine" },
-  { id: "heart", name: "Heart", emoji: "❤️", meaning: "Love, said simply", occasions: ["Anniversary", "Engagement", "Birthday", "Just because"], promptHint: "a clean heart shape" },
-  { id: "infinity", name: "Infinity", emoji: "♾️", meaning: "Forever: a promise that doesn't end", occasions: ["Anniversary", "Engagement", "Wedding"], promptHint: "an infinity loop" },
-  { id: "solitaire", name: "Solitaire", emoji: "💎", meaning: "One stone at the centre, timeless", occasions: ["Engagement", "Anniversary", "Wedding"], promptHint: "a single centre stone as the hero, in a simple setting" },
-  { id: "evil-eye", name: "Evil eye", emoji: "🧿", meaning: "Protection for someone you care about", occasions: ["Daily wear", "Birthday", "Just because"], promptHint: "an evil-eye (nazar) motif" },
-  { id: "moon-star", name: "Moon & stars", emoji: "🌙", meaning: "Dreams and guidance", occasions: ["Birthday", "Daily wear", "Just because"], promptHint: "a crescent moon with small stars" },
-  { id: "sun", name: "Sun", emoji: "☀️", meaning: "Energy and warmth", occasions: ["Festival", "Birthday", "Daily wear"], promptHint: "a radiant sun with fine rays" },
-  { id: "butterfly", name: "Butterfly", emoji: "🦋", meaning: "Change and joy", occasions: ["Birthday", "Daily wear", "Just because"], promptHint: "a butterfly with open wings" },
-  { id: "elephant", name: "Elephant", emoji: "🐘", meaning: "Strength, wisdom and good fortune", occasions: ["Festival", "Wedding", "Just because"], promptHint: "a small decorated elephant" },
-  { id: "om", name: "Om", emoji: "🕉️", meaning: "Peace and blessings", occasions: ["Festival", "Daily wear"], promptHint: "the Om symbol" },
-  { id: "initial", name: "Initial or name", emoji: "🔤", meaning: "Their letter or name, made just for them", occasions: ["Birthday", "Anniversary", "Daily wear", "Just because"], promptHint: "a single elegant letter (use the letter or name the shopper gives; if none, a graceful monogram shape)" },
-  { id: "geometric", name: "Geometric", emoji: "🔷", meaning: "Clean modern lines", occasions: ["Daily wear", "Birthday", "Just because"], promptHint: "clean geometric shapes (art-deco lines, hexagons or bars)" },
-  { id: "bow", name: "Bow", emoji: "🎀", meaning: "Playful and pretty", occasions: ["Birthday", "Just because"], promptHint: "a small ribbon bow" },
+  { id: "lotus", name: "Lotus", emoji: "🪷", meaning: "Purity and new beginnings", occasions: ["Wedding", "Festival", "Birthday", "Just because"], promptHint: "a lotus flower with layered petals", nameWords: "\\blotus\\b|\\bkamal\\b" },
+  { id: "peacock", name: "Peacock", emoji: "🦚", meaning: "Grace and beauty, a wedding classic", occasions: ["Wedding", "Engagement", "Festival"], promptHint: "a peacock with a fanned tail", nameWords: "\\bpeacocks?\\b|\\bmayur\\b" },
+  { id: "paisley", name: "Paisley (ambi)", emoji: "🥭", meaning: "The mango shape of prosperity and good luck", occasions: ["Wedding", "Festival"], promptHint: "a paisley (ambi, mango-shaped) motif", nameWords: "\\bpaisley\\b|\\bambi\\b" },
+  { id: "temple", name: "Temple", emoji: "🛕", meaning: "Traditional temple work, rich and auspicious", occasions: ["Wedding", "Festival"], promptHint: "South Indian temple jewellery detailing with small domes and coin-like discs", nameWords: "\\btemple\\b" },
+  { id: "floral", name: "Flowers", emoji: "🌸", meaning: "Soft, feminine and easy to wear", occasions: ["Birthday", "Daily wear", "Anniversary", "Just because"], promptHint: "small blossoms with rounded petals", nameWords: "\\bflorals?\\b|\\bflowers?\\b|\\bblossoms?\\b|\\bblooms?\\b|\\bdais(y|ies)\\b" },
+  { id: "leaf", name: "Leaf & vine", emoji: "🌿", meaning: "Growth and fresh starts", occasions: ["Daily wear", "Birthday", "Just because"], promptHint: "curling leaves on a fine vine", nameWords: "\\bleaf\\b|\\bleaves\\b|\\bleafy\\b|\\bvines?\\b" },
+  { id: "heart", name: "Heart", emoji: "❤️", meaning: "Love, said simply", occasions: ["Anniversary", "Engagement", "Birthday", "Just because"], promptHint: "a clean heart shape", nameWords: "\\bhearts?\\b" },
+  { id: "infinity", name: "Infinity", emoji: "♾️", meaning: "Forever: a promise that doesn't end", occasions: ["Anniversary", "Engagement", "Wedding"], promptHint: "an infinity loop", nameWords: "\\binfinity\\b" },
+  { id: "solitaire", name: "Solitaire", emoji: "💎", meaning: "One stone at the centre, timeless", occasions: ["Engagement", "Anniversary", "Wedding"], promptHint: "a single centre stone as the hero, in a simple setting", nameWords: "\\bsolitaires?\\b" },
+  { id: "evil-eye", name: "Evil eye", emoji: "🧿", meaning: "Protection for someone you care about", occasions: ["Daily wear", "Birthday", "Just because"], promptHint: "an evil-eye (nazar) motif", nameWords: "\\bevil\\s?-?eye\\b|\\bnazar\\b" },
+  { id: "moon-star", name: "Moon & stars", emoji: "🌙", meaning: "Dreams and guidance", occasions: ["Birthday", "Daily wear", "Just because"], promptHint: "a crescent moon with small stars", nameWords: "\\bmoon\\b|\\bcrescent\\b|\\bstars?\\b|\\bcelestial\\b" },
+  { id: "sun", name: "Sun", emoji: "☀️", meaning: "Energy and warmth", occasions: ["Festival", "Birthday", "Daily wear"], promptHint: "a radiant sun with fine rays", nameWords: "\\bsun\\b|\\bsunburst\\b|\\bsunshine\\b|\\bsurya\\b" },
+  { id: "butterfly", name: "Butterfly", emoji: "🦋", meaning: "Change and joy", occasions: ["Birthday", "Daily wear", "Just because"], promptHint: "a butterfly with open wings", nameWords: "\\bbutterfl(y|ies)\\b" },
+  { id: "elephant", name: "Elephant", emoji: "🐘", meaning: "Strength, wisdom and good fortune", occasions: ["Festival", "Wedding", "Just because"], promptHint: "a small decorated elephant", nameWords: "\\belephants?\\b|\\bhaathi\\b" },
+  { id: "om", name: "Om", emoji: "🕉️", meaning: "Peace and blessings", occasions: ["Festival", "Daily wear"], promptHint: "the Om symbol", nameWords: "\\bom\\b|\\baum\\b" },
+  { id: "initial", name: "Initial or name", emoji: "🔤", meaning: "Their letter or name, made just for them", occasions: ["Birthday", "Anniversary", "Daily wear", "Just because"], promptHint: "a single elegant letter (use the letter or name the shopper gives; if none, a graceful monogram shape)", nameWords: "\\binitials?\\b|\\balphabets?\\b|\\bletters?\\b|\\bmonogram\\b|\\bname\\b" },
+  { id: "geometric", name: "Geometric", emoji: "🔷", meaning: "Clean modern lines", occasions: ["Daily wear", "Birthday", "Just because"], promptHint: "clean geometric shapes (art-deco lines, hexagons or bars)", nameWords: "\\bgeometric\\b|\\bhexagon(al)?\\b|\\bart\\s?deco\\b" },
+  { id: "bow", name: "Bow", emoji: "🎀", meaning: "Playful and pretty", occasions: ["Birthday", "Just because"], promptHint: "a small ribbon bow", nameWords: "\\bbows?\\b" },
 ];
 
 export interface MetalOption {
@@ -126,6 +128,10 @@ export interface DesignStudioSettings {
   familyVote: boolean;
   /** "Customise this" on product cards in the chat, for the pieces the brand makes. */
   customiseProducts: boolean;
+  /** The brand's own photo for a piece's tile on the first screen. Pieces without one show one of its products. */
+  piecePhotos: Partial<Record<PieceId, string>>;
+  /** The brand's own photo for a ready-list motif's tile (motif id → photo). Shown to shoppers only, never given to the image AI. */
+  motifPhotos: Record<string, string>;
 }
 
 export const MAX_STYLE_PHOTOS = 5;
@@ -183,6 +189,8 @@ export function defaultDesignStudioSettings(): DesignStudioSettings {
     tryOn: true,
     familyVote: true,
     customiseProducts: false,
+    piecePhotos: {},
+    motifPhotos: {},
   };
 }
 
@@ -275,6 +283,8 @@ export function normalizeDesignStudioSettings(raw: unknown): DesignStudioSetting
     tryOn: r.tryOn !== false,
     familyVote: r.familyVote !== false,
     customiseProducts: r.customiseProducts === true,
+    piecePhotos: Object.fromEntries(PIECES.filter(p => isHttpUrl(r.piecePhotos?.[p.id])).map(p => [p.id, r.piecePhotos[p.id].trim()])),
+    motifPhotos: Object.fromEntries(MOTIF_LIBRARY.filter(m => isHttpUrl(r.motifPhotos?.[m.id])).map(m => [m.id, r.motifPhotos[m.id].trim()])),
   };
 }
 
@@ -308,20 +318,48 @@ export interface BaseProduct {
   productUrl?: string | null;
 }
 
+/**
+ * Words in a product's name that say which piece it is. The more specific first: "earring" before
+ * "ring", "mangalsutra" before "pendant" and "chain".
+ */
+const PIECE_NAME_PATTERNS: [PieceId, string][] = [
+  ["mangalsutra", "\\bmangal\\s?sutra"],
+  ["earrings", "\\bear\\s?-?rings?\\b|\\bjhumk[ai]s?\\b|\\bstuds?\\b|\\bhoops?\\b|\\bdanglers?\\b|\\btops\\b|\\bbalis?\\b"],
+  ["pendant", "\\bpendants?\\b|\\blockets?\\b"],
+  ["necklace", "\\bnecklaces?\\b|\\bchokers?\\b|\\bhaar\\b|\\bchains?\\b"],
+  ["bangle", "\\bbangles?\\b|\\bkadas?\\b|\\bkangans?\\b"],
+  ["bracelet", "\\bbracelets?\\b"],
+  ["ring", "\\brings?\\b|\\bbands?\\b"],
+];
+const PIECE_NAME_TESTS = PIECE_NAME_PATTERNS.map(([id, pattern]) => [id, new RegExp(pattern)] as const);
+
 /** Which piece a product is, read from its name ("Silver Heart Pendant" → pendant). Null when it isn't clear. */
 export function pieceForProduct(name: string | null | undefined): PieceId | null {
   const n = (name || "").toLowerCase();
-  // Things sold alongside jewellery that aren't jewellery.
-  if (/\b(box|case|pouch|cleaner|cloth|polish|stand|organi[sz]er|voucher|gift\s?card)\b/.test(n)) return null;
-  // The more specific words first: "earring" before "ring", "mangalsutra" before "pendant" and "chain".
-  if (/\bmangal\s?sutra/.test(n)) return "mangalsutra";
-  if (/\bear\s?-?rings?\b|\bjhumk[ai]s?\b|\bstuds?\b|\bhoops?\b|\bdanglers?\b|\btops\b|\bbalis?\b/.test(n)) return "earrings";
-  if (/\bpendants?\b|\blockets?\b/.test(n)) return "pendant";
-  if (/\bnecklaces?\b|\bchokers?\b|\bhaar\b|\bchains?\b/.test(n)) return "necklace";
-  if (/\bbangles?\b|\bkadas?\b|\bkangans?\b/.test(n)) return "bangle";
-  if (/\bbracelets?\b/.test(n)) return "bracelet";
-  if (/\brings?\b|\bbands?\b/.test(n)) return "ring";
+  if (notJewellery(n)) return null;
+  for (const [id, test] of PIECE_NAME_TESTS) if (test.test(n)) return id;
   return null;
+}
+
+/** Things sold alongside jewellery that aren't jewellery ("Earring Box", "Gift Card"). */
+export function notJewellery(name: string | null | undefined): boolean {
+  return /\b(box|case|pouch|cleaner|cloth|polish|stand|organi[sz]er|sizer|voucher|gift\s?card)\b/.test((name || "").toLowerCase());
+}
+
+/** A piece's name words as a Postgres pattern (a word's edge is \y there), to find its products in the database. */
+export function pieceNamePattern(piece: PieceId): string {
+  return PIECE_NAME_PATTERNS.find(([id]) => id === piece)![1].replace(/\\b/g, "\\y");
+}
+
+/**
+ * A motif's name words as a Postgres pattern, to find products that have it: the ready list's own
+ * words, or for a brand's own motif its name as it is written ("Jaipur jaali"). Null when there is
+ * nothing to look for.
+ */
+export function motifNamePattern(motif: Pick<Motif, "name" | "nameWords">): string | null {
+  if (motif.nameWords) return motif.nameWords.replace(/\\b/g, "\\y");
+  const words = motif.name.toLowerCase().replace(/\(.*?\)/g, " ").split(/[^a-z0-9]+/).filter(Boolean);
+  return words.join("").length >= 3 ? `\\y${words.join("\\s+")}\\y` : null;
 }
 
 /** "Customise this" is offered on a product when the brand has it on and makes that kind of piece. */
@@ -611,10 +649,15 @@ export interface DesignStudioPublicConfig {
   label: string;
   tagline: string;
   showOnWelcome: boolean;
-  pieces: { id: PieceId; name: string; emoji: string; needsSize?: string }[];
+  /** imageUrl: the photo on the piece's tile (the brand's own, else one of its products). */
+  pieces: { id: PieceId; name: string; emoji: string; needsSize?: string; imageUrl?: string | null }[];
   recipients: string[];
   occasions: string[];
-  motifs: { id: string; name: string; emoji?: string; meaning: string; imageUrl?: string | null }[];
+  /**
+   * imageUrl: the brand's own photo of the motif. productPhotos: one of its products with the motif,
+   * for each piece it has one in ("any": whichever piece), so a ring shopper sees it on a ring.
+   */
+  motifs: { id: string; name: string; emoji?: string; meaning: string; imageUrl?: string | null; productPhotos?: MotifProductPhotos }[];
   metals: { id: string; name: string }[];
   stones: { id: string; name: string }[];
   tiers: { id: TierId; name: string; line: string }[];
@@ -628,16 +671,30 @@ export interface DesignStudioPublicConfig {
   familyVote: boolean;
 }
 
-export function toPublicConfig(settings: DesignStudioSettings, enabled: boolean): DesignStudioPublicConfig {
+/** Photos of the brand's products for the tiles: one per piece, and per motif one for each piece. */
+export type MotifProductPhotos = Partial<Record<PieceId | "any", string>>;
+export interface StudioProductPhotos {
+  pieces?: Partial<Record<PieceId, string>>;
+  motifs?: Record<string, MotifProductPhotos>;
+}
+
+/** The photo on a motif's tile for the piece being designed: the brand's own, else a product of that piece, else any product. */
+export function motifTilePhoto(motif: { imageUrl?: string | null; productPhotos?: MotifProductPhotos }, piece?: PieceId): string | null {
+  return motif.imageUrl || (piece && motif.productPhotos?.[piece]) || motif.productPhotos?.any || null;
+}
+
+export function toPublicConfig(settings: DesignStudioSettings, enabled: boolean, photos: StudioProductPhotos = {}): DesignStudioPublicConfig {
   return {
     enabled,
     label: settings.label,
     tagline: settings.tagline,
     showOnWelcome: settings.showOnWelcome,
-    pieces: PIECES.filter(p => settings.pieces.includes(p.id)).map(({ id, name, emoji, needsSize }) => ({ id, name, emoji, needsSize })),
+    pieces: PIECES.filter(p => settings.pieces.includes(p.id)).map(({ id, name, emoji, needsSize }) => ({ id, name, emoji, needsSize, imageUrl: settings.piecePhotos[id] || photos.pieces?.[id] || null })),
     recipients: [...RECIPIENTS],
     occasions: [...OCCASIONS],
-    motifs: availableMotifs(settings).map(({ id, name, emoji, meaning, imageUrl }) => ({ id, name, emoji, meaning, imageUrl })),
+    motifs: availableMotifs(settings).map(({ id, name, emoji, meaning, imageUrl }) => ({
+      id, name, emoji, meaning, imageUrl: imageUrl || settings.motifPhotos[id] || null, productPhotos: photos.motifs?.[id] || {},
+    })),
     metals: settings.metals.filter(m => m.enabled).map(({ id, name }) => ({ id, name })),
     stones: settings.stones.filter(s => s.enabled).map(({ id, name }) => ({ id, name })),
     tiers: TIERS.map(({ id, name, line }) => ({ id, name, line })),
