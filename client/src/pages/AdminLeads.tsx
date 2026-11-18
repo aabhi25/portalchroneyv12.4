@@ -36,7 +36,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Download, Contact, Mail, Phone, MessageSquare, Calendar, User, Eye, ChevronLeft, ChevronRight, Search, X, CheckCircle2, RefreshCw, Loader2, Users, GitBranch, MoreVertical, MapPin, Trash2, Upload, Info, Bot, Sparkles, Image as ImageIcon, FileText, Filter } from "lucide-react";
+import { Download, Contact, Mail, Phone, MessageSquare, MessageCircle, Calendar, User, Eye, ChevronLeft, ChevronRight, Search, X, CheckCircle2, RefreshCw, Loader2, Users, GitBranch, MoreVertical, MapPin, Trash2, Upload, Info, Bot, Sparkles, Image as ImageIcon, FileText, Filter } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -72,6 +72,7 @@ import {
 } from "@/components/leads/UnifiedLeadParts";
 import { LeadCrmCell, type CrmTarget } from "@/components/leads/LeadCrm";
 import { LeadDetailsSheet, websiteRowFromLead } from "@/components/leads/LeadDetailsSheet";
+import { WhatsappChatDialog } from "@/components/leads/WhatsappChatDialog";
 
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import * as XLSX from "xlsx";
@@ -165,6 +166,8 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
   const { toast } = useToast();
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
+  // WhatsApp chat shown in a popup over the list (row menu, details panel, timeline).
+  const [whatsappChat, setWhatsappChat] = useState<{ leadId: string; name?: string | null; phone?: string | null } | null>(null);
   // Today's leads first; "All Time" is one click away.
   const [datePreset, setDatePreset] = useState<DatePreset>('today');
   const [fromDate, setFromDate] = useState<Date | undefined>(undefined);
@@ -965,7 +968,13 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
                 <Info className="h-4 w-4 mr-2 text-blue-600" />
                 View Details
               </DropdownMenuItem>
-              {CHANNEL_META[row.channel].page && channel !== row.channel && (
+              {row.channel === 'whatsapp' ? (
+                // Opened after the menu has closed: otherwise the menu's focus return closes the popup at once.
+                <DropdownMenuItem onClick={() => setTimeout(() => setWhatsappChat({ leadId: row.id, name: row.name, phone: row.phone }), 0)} className="cursor-pointer" data-testid="menu-view-whatsapp-chat">
+                  <MessageCircle className="h-4 w-4 mr-2 text-green-600" />
+                  View WhatsApp chat
+                </DropdownMenuItem>
+              ) : CHANNEL_META[row.channel].page && channel !== row.channel && (
                 <DropdownMenuItem onClick={() => setLocation(CHANNEL_META[row.channel].page!)} className="cursor-pointer">
                   <Eye className="h-4 w-4 mr-2 text-purple-600" />
                   Open in {CHANNEL_META[row.channel].label}
@@ -1782,7 +1791,15 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
         onOpenChannelPage={liveDetailsRow && CHANNEL_META[liveDetailsRow.channel].page && channel !== liveDetailsRow.channel ? () => { const page = CHANNEL_META[liveDetailsRow.channel].page!; setDetailsRow(null); setLocation(page); } : undefined}
         onDelete={liveDetailsLead && isSuperAdminImpersonating ? () => { const lead = liveDetailsLead; setDetailsRow(null); handleDeleteLead(lead); } : undefined}
         onOpenConversation={handleViewConversation}
+        onViewWhatsappChat={(id) => setWhatsappChat({ leadId: id, name: liveDetailsRow?.channel === 'whatsapp' ? liveDetailsRow.name : null, phone: liveDetailsRow?.channel === 'whatsapp' ? liveDetailsRow.phone : null })}
         showInternalIds
+      />
+
+      <WhatsappChatDialog
+        leadId={whatsappChat?.leadId ?? null}
+        name={whatsappChat?.name}
+        phone={whatsappChat?.phone}
+        onClose={() => setWhatsappChat(null)}
       />
 
       <Dialog open={chatDialogOpen} onOpenChange={(open) => { setChatDialogOpen(open); if (!open) setChatDialogConversationId(null); }}>

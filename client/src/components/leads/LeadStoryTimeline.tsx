@@ -24,11 +24,13 @@ const timelineKey = (channel: string, id: string) => ["/api/leads/timeline", cha
  * touchpoint (website chat, WhatsApp, AI calls, DMs, CRM syncs), oldest first. The story is
  * written on first open and rewritten when the person has done something new since.
  */
-export function LeadStoryTimeline({ channel, id, onOpenConversation, onOpenCall }: {
+export function LeadStoryTimeline({ channel, id, onOpenConversation, onOpenCall, onOpenWhatsapp }: {
   channel: "website" | "whatsapp";
   id: string;
   onOpenConversation?: (conversationId: string) => void;
   onOpenCall?: (callId: string) => void;
+  /** Open a WhatsApp chat (id: one of its WhatsApp message rows). */
+  onOpenWhatsapp?: (whatsappLeadId: string) => void;
 }) {
   const [, setLocation] = useLocation();
   const openCall = onOpenCall ?? ((callId: string) => setLocation(`/admin/calling/calls/${callId}`));
@@ -70,7 +72,7 @@ export function LeadStoryTimeline({ channel, id, onOpenConversation, onOpenCall 
           <Sparkles className="h-3.5 w-3.5" /> Across channels
         </h3>
         <ol className="space-y-3">
-          {events.map((e) => <EventRow key={e.id} event={e} onOpenConversation={onOpenConversation} onOpenCall={openCall} />)}
+          {events.map((e) => <EventRow key={e.id} event={e} onOpenConversation={onOpenConversation} onOpenCall={openCall} onOpenWhatsapp={onOpenWhatsapp} />)}
         </ol>
       </section>
     </div>
@@ -136,11 +138,12 @@ function StoryCard({ story, writing, failed, stale, onRefresh }: { story: LeadSt
   );
 }
 
-function EventRow({ event: e, onOpenConversation, onOpenCall }: { event: TimelineEvent; onOpenConversation?: (id: string) => void; onOpenCall?: (id: string) => void }) {
+function EventRow({ event: e, onOpenConversation, onOpenCall, onOpenWhatsapp }: { event: TimelineEvent; onOpenConversation?: (id: string) => void; onOpenCall?: (id: string) => void; onOpenWhatsapp?: (id: string) => void }) {
   const look = CHANNEL_LOOK[e.channel];
   const Icon = look.icon;
   const open = e.link?.type === "conversation" && onOpenConversation ? () => onOpenConversation(e.link!.id)
-    : e.link?.type === "call" && onOpenCall ? () => onOpenCall(e.link!.id) : undefined;
+    : e.link?.type === "call" && onOpenCall ? () => onOpenCall(e.link!.id)
+    : e.link?.type === "whatsapp" && onOpenWhatsapp ? () => onOpenWhatsapp(e.link!.id) : undefined;
   const body = (
     <>
       <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${look.className}`}><Icon className="h-4 w-4" /></span>

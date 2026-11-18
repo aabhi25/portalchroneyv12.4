@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { Copy, Eye, FileText, GitBranch, Loader2, RefreshCw, Trash2, ExternalLink } from "lucide-react";
+import { Copy, Eye, FileText, GitBranch, Loader2, MessageCircle, RefreshCw, Trash2, ExternalLink } from "lucide-react";
 import type { Lead } from "@shared/schema";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -61,7 +61,7 @@ export function websiteRowFromLead(lead: Lead): UnifiedLeadRow {
  */
 export function LeadDetailsSheet({
   row, onClose, targets, isSyncing, onSync, onSelectRow, onViewChat, onViewForm, onViewJourney, onOpenChannelPage, onDelete, showInternalIds,
-  journeyResponsesUrl, showCalls = true, showStory = true, onOpenConversation, accountName, noCrmText = "No CRM is connected. Connect one in Settings › Connected apps.",
+  journeyResponsesUrl, showCalls = true, showStory = true, onOpenConversation, onViewWhatsappChat, accountName, noCrmText = "No CRM is connected. Connect one in Settings › Connected apps.",
 }: {
   row: UnifiedLeadRow | null;
   onClose: () => void;
@@ -84,6 +84,8 @@ export function LeadDetailsSheet({
   showStory?: boolean;
   /** Open one of the person's website chats (from the timeline). */
   onOpenConversation?: (conversationId: string) => void;
+  /** Show a WhatsApp chat in a popup (id: the WhatsApp lead or one of its messages). Replaces "Open in WhatsApp". */
+  onViewWhatsappChat?: (whatsappLeadId: string) => void;
   /** The business the lead belongs to (group admin view). */
   accountName?: string | null;
   /** Shown in "CRM sync" when there is nothing to list. */
@@ -143,7 +145,7 @@ export function LeadDetailsSheet({
             </SheetHeader>
 
             {showStory && (row.channel === "website" || row.channel === "whatsapp") && (
-              <LeadStoryTimeline channel={row.channel} id={row.id} onOpenConversation={onOpenConversation} />
+              <LeadStoryTimeline channel={row.channel} id={row.id} onOpenConversation={onOpenConversation} onOpenWhatsapp={onViewWhatsappChat} />
             )}
 
             <Section title="Contact">
@@ -190,7 +192,10 @@ export function LeadDetailsSheet({
                 {onViewChat && <Button variant="outline" size="sm" onClick={onViewChat}><Eye className="mr-1.5 h-4 w-4" />View chat</Button>}
                 {onViewForm && <Button variant="outline" size="sm" onClick={onViewForm}><FileText className="mr-1.5 h-4 w-4" />View form</Button>}
                 {onViewJourney && <Button variant="outline" size="sm" onClick={onViewJourney}><GitBranch className="mr-1.5 h-4 w-4" />View journey answers</Button>}
-                {onOpenChannelPage && CHANNEL_META[row.channel].page && (
+                {onViewWhatsappChat && row.channel === "whatsapp" && (
+                  <Button variant="outline" size="sm" onClick={() => onViewWhatsappChat(row.id)} data-testid="button-view-whatsapp-chat"><MessageCircle className="mr-1.5 h-4 w-4" />View WhatsApp chat</Button>
+                )}
+                {onOpenChannelPage && CHANNEL_META[row.channel].page && !(onViewWhatsappChat && row.channel === "whatsapp") && (
                   <Button variant="outline" size="sm" onClick={onOpenChannelPage}><ExternalLink className="mr-1.5 h-4 w-4" />Open in {CHANNEL_META[row.channel].label}</Button>
                 )}
               </div>

@@ -53,6 +53,43 @@ router.get("/api/leads/unified", requireAuth, requireBusinessAccount, async (req
   }
 });
 
+/**
+ * GET /api/leads/whatsapp/:id/chat?before=<ISO time>
+ * The WhatsApp chat with a lead's number (newest 50 messages, older ones with `before`), so the
+ * Leads page can show it in a popup. Contacts are hidden by the view mask like every /api/leads route.
+ */
+router.get("/api/leads/whatsapp/:id/chat", requireAuth, requireBusinessAccount, async (req, res) => {
+  try {
+    const accountId = await leadAccount(req, res);
+    if (!accountId) return;
+    const { whatsappLeads } = await import("@shared/schema");
+    const { and } = await import("drizzle-orm");
+    const [lead] = await db.select({ senderPhone: whatsappLeads.senderPhone }).from(whatsappLeads)
+      .where(and(eq(whatsappLeads.id, req.params.id), eq(whatsappLeads.businessAccountId, accountId))).limit(1);
+    if (!lead?.senderPhone) return res.status(404).json({ error: "Lead not found" });
+    const before = typeof req.query.before === "string" && !Number.isNaN(Date.parse(req.query.before)) ? req.query.before : undefined;
+    const { whatsappService } = await import("../services/whatsappService");
+    const chat = await whatsappService.getConversationMessages(accountId, lead.senderPhone, undefined, undefined, undefined, 50, before);
+    res.json({
+      senderName: chat.senderName,
+      hasMore: chat.hasMore,
+      oldestTimestamp: chat.oldestTimestamp,
+      journeys: chat.flowSessions.map(f => ({ id: f.id, name: f.flowName })),
+      messages: chat.messages.map(m => ({
+        id: m.id,
+        outgoing: m.direction === "outgoing",
+        text: m.rawMessage || "",
+        at: m.receivedAt,
+        flowSessionId: m.flowSessionId,
+        attachments: (m.attachments || []).map((a: any) => ({ id: a.id, fileName: a.fileName, fileType: a.fileType, mimeType: a.mimeType, url: a.filePath, caption: a.caption })),
+      })),
+    });
+  } catch (error: any) {
+    console.error("[UnifiedLeads] WhatsApp chat failed:", error?.message);
+    res.status(500).json({ error: "Failed to load the chat" });
+  }
+});
+
 /** The lead the timeline / story is about: a website or WhatsApp lead of this account. */
 function timelineAnchor(q: Record<string, unknown>): { channel: "website" | "whatsapp"; id: string } | null {
   const channel = q.channel === "website" || q.channel === "whatsapp" ? q.channel : null;
