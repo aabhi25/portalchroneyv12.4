@@ -113,6 +113,8 @@ export interface UnifiedLeadsResult {
   channels: LeadChannel[];
   /** True when rows were merged per person (groupByPerson); total then counts persons. */
   groupedByPerson?: boolean;
+  /** Lead records matching the filters (one per channel row, never merged) and how many of them are in LeadSquared. */
+  summary?: { leads: number; syncedToLeadsquared: number };
 }
 
 /** Channels whose leads this account may see. Website leads are always shown (as before). */
@@ -177,7 +179,7 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
       if (search) conds.push(sql`(l.name ILIKE ${search} OR l.email ILIKE ${search} OR l.phone ILIKE ${search} OR l.message ILIKE ${search})`);
       if (f.temperature) conds.push(sql`l.lead_temperature = ${f.temperature}`);
       const pk = opts.personKey ? sql`, ${websitePersonKeySql()} AS person_key` : sql``;
-      return sql`SELECT 'website'::text AS channel, l.id AS id, ${at} AS captured_at, l.engagement_score AS score${pk} FROM leads l WHERE ${whereAll(conds)}`;
+      return sql`SELECT 'website'::text AS channel, l.id AS id, ${at} AS captured_at, l.engagement_score AS score, (l.leadsquared_sync_status = 'synced') AS lsq_synced${pk} FROM leads l WHERE ${whereAll(conds)}`;
     }
     case "whatsapp": {
       const conds: SQL[] = [
@@ -193,7 +195,7 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
       }
       if (f.temperature) conds.push(sql`w.lead_temperature = ${f.temperature}`);
       const pk = opts.personKey ? sql`, ${key10(sql`w.sender_phone`)} AS person_key` : sql``;
-      return sql`SELECT 'whatsapp'::text AS channel, w.id AS id, w.received_at AS captured_at, w.engagement_score AS score${pk} FROM whatsapp_leads w WHERE ${whereAll(conds)}`;
+      return sql`SELECT 'whatsapp'::text AS channel, w.id AS id, w.received_at AS captured_at, w.engagement_score AS score, (w.leadsquared_sync_status = 'synced') AS lsq_synced${pk} FROM whatsapp_leads w WHERE ${whereAll(conds)}`;
     }
     case "instagram":
     case "facebook": {
@@ -204,7 +206,7 @@ function branchSql(channel: LeadChannel, accountId: string, f: UnifiedLeadFilter
       if (f.status) conds.push(sql`s.status = ${f.status}`);
       if (f.temperature) conds.push(sql`FALSE`); // not scored
       const pk = opts.personKey ? sql`, NULL::text AS person_key` : sql``;
-      return sql`SELECT ${channel}::text AS channel, s.id AS id, s.received_at AS captured_at, NULL::int AS score${pk} FROM ${table} s WHERE ${whereAll(conds)}`;
+      return sql`SELECT ${channel}::text AS channel, s.id AS id, s.received_at AS captured_at, NULL::int AS score, (s.leadsquared_sync_status = 'synced') AS lsq_synced${pk} FROM ${table} s WHERE ${whereAll(conds)}`;
     }
   }
 }
@@ -356,10 +358,15 @@ export async function queryUnifiedLeads(
 
   const union = sql.join(selected.map(ch => branchSql(ch, businessAccountId, filters, { excludeDrafts })), sql` UNION ALL `);
 
-  const countRes = await db.execute(sql`SELECT u.channel, count(*)::int AS n FROM (${union}) u GROUP BY u.channel`);
+  const countRes = await db.execute(sql`SELECT u.channel, count(*)::int AS n, count(*) FILTER (WHERE u.lsq_synced)::int AS synced FROM (${union}) u GROUP BY u.channel`);
   const countsByChannel = { ...empty };
-  for (const r of countRes.rows as { channel: LeadChannel; n: number }[]) countsByChannel[r.channel] = Number(r.n);
+  let syncedToLeadsquared = 0;
+  for (const r of countRes.rows as { channel: LeadChannel; n: number; synced: number }[]) {
+    countsByChannel[r.channel] = Number(r.n);
+    syncedToLeadsquared += Number(r.synced) || 0;
+  }
   const total = Object.values(countsByChannel).reduce((a, b) => a + b, 0);
+  const summary = { leads: total, syncedToLeadsquared };
 
   // Merging per person only matters when website + WhatsApp are both listed and something links
   // them; otherwise the listing below is exactly the per-row one.
@@ -384,7 +391,7 @@ export async function queryUnifiedLeads(
       ? sql`${grouped} SELECT grp, max(captured_at) AS last_at FROM g GROUP BY grp ORDER BY ${groupOrder} LIMIT ${paging.limit} OFFSET ${paging.offset}`
       : sql`${grouped} SELECT grp, max(captured_at) AS last_at FROM g GROUP BY grp ORDER BY ${groupOrder}`);
     const groupKeys = (groupsRes.rows as { grp: string }[]).map(r => r.grp);
-    if (groupKeys.length === 0) return { leads: [], total: groupTotal, countsByChannel, channels, groupedByPerson: true };
+    if (groupKeys.length === 0) return { leads: [], total: groupTotal, countsByChannel, channels, groupedByPerson: true, summary };
     const membersRes = await db.execute(sql`${grouped} SELECT grp, channel, id FROM g WHERE grp IN (${sql.join(groupKeys.map(k => sql`${k}`), sql`, `)}) ORDER BY captured_at DESC, channel ASC, id ASC`);
     const members = membersRes.rows as { grp: string; channel: LeadChannel; id: string }[];
     const rows = await withPersonTrail(businessAccountId, await hydrate(businessAccountId, members, mask));
@@ -398,7 +405,7 @@ export async function queryUnifiedLeads(
       const others = groupRows.filter(r => r !== primary);
       out.push(others.length ? { ...primary, linked: others } : primary);
     }
-    return { leads: out, total: groupTotal, countsByChannel, channels, groupedByPerson: true };
+    return { leads: out, total: groupTotal, countsByChannel, channels, groupedByPerson: true, summary };
   }
 
   const order = filters.sort === "score" ? sql`u.score DESC NULLS LAST, u.captured_at DESC, u.channel ASC, u.id ASC` : sql`u.captured_at DESC, u.channel ASC, u.id ASC`;
@@ -412,7 +419,7 @@ export async function queryUnifiedLeads(
   const leadsOut = canLink
     ? await withPersonTrail(businessAccountId, hydrated)
     : hydrated.map(r => ({ ...r, personId: null, channels: [r.channel] }));
-  return { leads: leadsOut, total, countsByChannel, channels };
+  return { leads: leadsOut, total, countsByChannel, channels, summary };
 }
 
 /**

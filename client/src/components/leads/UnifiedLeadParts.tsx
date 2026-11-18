@@ -90,6 +90,8 @@ export interface UnifiedLeadsResponse {
   countsByChannel: Record<LeadChannel, number>;
   channels: LeadChannel[];
   groupedByPerson?: boolean;
+  /** Lead records matching the filters (not merged per person) and how many are in LeadSquared. */
+  summary?: { leads: number; syncedToLeadsquared: number };
 }
 
 export type CrmConfig = Record<Exclude<SocialCrm, "meritto">, { configured: boolean; autoSync: boolean }>;

@@ -125,11 +125,48 @@ const SOCIAL_STATUS_LOOK: Record<Exclude<SocialStatusFilter, 'all'>, { label: st
 const isSocialChannel = (c: string): c is 'instagram' | 'facebook' => c === 'instagram' || c === 'facebook';
 const prettyFieldName = (key: string) => key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ').replace(/^./, ch => ch.toUpperCase());
 
+function periodLabel(preset: DatePreset, from?: Date, to?: Date): string {
+  switch (preset) {
+    case 'today': return 'Today';
+    case 'yesterday': return 'Yesterday';
+    case 'last7': return 'Last 7 days';
+    case 'last30': return 'Last 30 days';
+    case 'custom': return `${from ? format(from, 'd MMM') : '…'} – ${to ? format(to, 'd MMM') : '…'}`;
+    default: return 'All time';
+  }
+}
+
+/**
+ * Two figures above the list, for the chosen dates and filters: leads, and how many of them are
+ * in LeadSquared (only when LeadSquared is connected; `synced` undefined hides it).
+ */
+function LeadSummaryCards({ total, synced, period }: { total: number | null; synced?: number | null; period: string }) {
+  const pct = total && synced != null ? Math.round((synced / total) * 100) : null;
+  return (
+    <div className={`mb-5 grid gap-3 ${synced !== undefined ? 'sm:grid-cols-2' : 'sm:grid-cols-1 sm:max-w-sm'}`} data-testid="lead-summary-cards">
+      <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+        <p className="text-[13px] text-gray-500">Total leads <span className="text-gray-400">· {period}</span></p>
+        <p className="mt-1 text-2xl font-semibold tabular-nums text-gray-900" data-testid="summary-total-leads">{total ?? '—'}</p>
+      </div>
+      {synced !== undefined && (
+        <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+          <p className="text-[13px] text-gray-500">Synced to LeadSquared <span className="text-gray-400">· {period}</span></p>
+          <p className="mt-1 flex items-baseline gap-2">
+            <span className="text-2xl font-semibold tabular-nums text-emerald-700" data-testid="summary-synced-leads">{synced ?? '—'}</span>
+            {pct !== null && <span className="text-[13px] text-gray-500">{pct}% of leads</span>}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) {
   const { toast } = useToast();
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
-  const [datePreset, setDatePreset] = useState<DatePreset>('all');
+  // Today's leads first; "All Time" is one click away.
+  const [datePreset, setDatePreset] = useState<DatePreset>('today');
   const [fromDate, setFromDate] = useState<Date | undefined>(undefined);
   const [toDate, setToDate] = useState<Date | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1029,6 +1066,12 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
               <RetentionBanner policies={[accountRetention.policy]} />
             </div>
           )}
+          <LeadSummaryCards
+            total={data?.summary?.leads ?? null}
+            synced={isLeadsquaredConfigured || isWhatsappLsqConfigured ? (data?.summary?.syncedToLeadsquared ?? null) : undefined}
+            period={periodLabel(datePreset, fromDate, toDate)}
+          />
+
           {/* Search and Filter Controls */}
           <div className="mb-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3">
@@ -1262,9 +1305,11 @@ export default function AdminLeads({ channel }: { channel?: LeadChannel } = {}) 
               <div className="w-20 h-20 rounded-full bg-gradient-to-br from-purple-100 to-blue-100 flex items-center justify-center mb-4">
                 <Contact className="w-10 h-10 text-purple-600" />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">No leads yet</h3>
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">{datePreset === 'today' && !searchQuery ? 'No leads today yet' : 'No leads yet'}</h3>
               <p className="text-sm text-muted-foreground max-w-md">
-                {searchQuery || datePreset !== 'all' || channelFilter !== 'all'
+                {datePreset === 'today' && !searchQuery
+                  ? 'New leads from today show here. Pick "All Time" to see earlier ones.'
+                  : searchQuery || datePreset !== 'all' || channelFilter !== 'all'
                   ? 'No leads match these filters.'
                   : 'Leads will appear here when users provide their contact information through the AI chat.'}
               </p>
