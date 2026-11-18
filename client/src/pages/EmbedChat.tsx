@@ -634,6 +634,11 @@ export default function EmbedChat() {
   const [showDesignStudio, setShowDesignStudio] = useState(false);
   /** "Customise this" on a product card: the product the Design Studio opens on. */
   const [designStudioProduct, setDesignStudioProduct] = useState<{ id: string; name: string } | null>(null);
+  // The website's chat window goes full height while the Design Studio is open, and back after.
+  useEffect(() => {
+    if (window.parent === window) return;
+    window.parent.postMessage({ type: 'DESIGN_STUDIO_VIEW', open: showDesignStudio }, '*');
+  }, [showDesignStudio]);
   const [tryOnProduct, setTryOnProduct] = useState<{imageUrl: string; name: string; type?: string} | null>(null);
   const [expandedImageUrl, setExpandedImageUrl] = useState<string | null>(null);
   const [visitorSessionId, setVisitorSessionId] = useState<string | null>(null);

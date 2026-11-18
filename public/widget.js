@@ -2901,6 +2901,27 @@
             margin: 0 !important;
           }
         }
+        /* Design Studio: while a shopper is designing, the chat takes the full height of the
+           screen (same width, same side). It goes back to its usual size when the studio closes. */
+        @media (min-width: 481px) {
+          #hichroney-widget-iframe.hichroney-tall:not(.partial-mode):not(.hichroney-full-panel) {
+            ${verticalPos === 'top' ? 'top: 12px !important; bottom: auto !important;' : 'bottom: 12px !important; top: auto !important;'}
+            height: calc(100vh - 24px) !important;
+            height: calc(100dvh - 24px) !important;
+            max-height: none !important;
+          }
+        }
+        @media (max-width: 480px) {
+          #hichroney-widget-iframe.mobile-open.hichroney-tall {
+            height: calc(100vh - env(safe-area-inset-bottom, 0px)) !important;
+            min-height: calc(100vh - env(safe-area-inset-bottom, 0px)) !important;
+            max-height: calc(100vh - env(safe-area-inset-bottom, 0px)) !important;
+            height: calc(100dvh - env(safe-area-inset-bottom, 0px)) !important;
+            min-height: calc(100dvh - env(safe-area-inset-bottom, 0px)) !important;
+            max-height: calc(100dvh - env(safe-area-inset-bottom, 0px)) !important;
+            border-radius: 0 !important;
+          }
+        }
       ${isFullPanel ? `
         /* "Full height" docked side panel (computers and tablets) */
         @keyframes hichroney-panel-in {
@@ -4247,6 +4268,16 @@
         // Handle expand widget message (when user focuses on input in partial mode)
         if (event.data && event.data.type === 'EXPAND_WIDGET') {
           expandWidget();
+        }
+
+        // Design Studio opened or closed in the chat: full height while designing
+        if (event.data && event.data.type === 'DESIGN_STUDIO_VIEW') {
+          if (event.data.open) {
+            expandWidget();
+            iframe.classList.add('hichroney-tall');
+          } else {
+            iframe.classList.remove('hichroney-tall');
+          }
         }
 
         // Urgency offer: render on parent page (outside iframe)
