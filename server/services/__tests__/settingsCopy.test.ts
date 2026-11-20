@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describeValue, fieldDetailRows, mentionedNames, mergeInstructions, sameValue, stableStringify, websiteHost } from "@shared/settingsCopy";
+import { describeValue, fieldDetailRows, matchOfferCampaigns, mentionedNames, mergeInstructions, offerSections, offersSummary, sameOffer, sameValue, stableStringify, websiteHost } from "@shared/settingsCopy";
 
 // Comparing.
 assert.equal(stableStringify({ b: 1, a: [{ d: 1, c: 2 }] }), stableStringify({ a: [{ c: 2, d: 1 }], b: 1 }));
@@ -44,6 +44,24 @@ assert.deepEqual(fieldDetailRows("conversationStarters", '["Fees?","Syllabus?"]'
 ]);
 assert.equal(fieldDetailRows("availableLanguages", ["auto", "hi", "hinglish"])[0].value, "Detect automatically, Hindi, Hinglish");
 assert.equal(fieldDetailRows("welcomeMessage", null)[0].value, "(empty)");
+
+// Offers.
+assert.deepEqual(offersSummary({ campaigns: [], exitIntent: null, idleTimeout: null }), { summary: "None", empty: true });
+assert.equal(offersSummary({ campaigns: [{ isEnabled: true }, { isEnabled: false }], exitIntent: { isEnabled: true }, idleTimeout: null }).summary, "2 offers on · 1 off");
+assert.equal(offersSummary({ campaigns: [{ isEnabled: false }], exitIntent: null, idleTimeout: null }).summary, "All off · 1 set up");
+const matched = matchOfferCampaigns([{ name: "Diwali " }, { name: "New" }], [{ name: "diwali" }, { name: "Mine" }]);
+assert.deepEqual(matched.pairs.map((p) => p.target?.name ?? null), ["diwali", null]);
+assert.deepEqual(matched.rest.map((r) => r.name), ["Mine"]);
+assert.ok(sameOffer({ id: "1", businessAccountId: "a", discountValue: 10 }, { id: "2", businessAccountId: "b", discountValue: 10 }));
+assert.ok(!sameOffer({ discountValue: 10 }, null));
+const offerDetails = JSON.stringify(offerSections({
+  campaigns: [{ name: "Diwali", isEnabled: true, discountType: "fixed", discountValue: 500, triggerMode: "keyword", triggerKeywords: "fees", countdownDurationMinutes: 60, requirePhone: true, phoneInputLabel: "Your WhatsApp", maxOffersPerVisitor: 1, cooldownMinutes: 30 }],
+  exitIntent: null,
+  idleTimeout: { isEnabled: false, discountPercentage: 10, idleTimeoutSeconds: 120, expiryMinutes: 30, maxUsesPerVisitor: 1, cooldownMinutes: 1440 },
+}));
+for (const text of ["AI urgency offer: Diwali", "500 off (fixed amount)", "The visitor writes: fees", "1 hour", "When someone goes quiet", "120 seconds", "24 hours apart"]) {
+  assert.ok(offerDetails.includes(text), text);
+}
 
 console.log("settingsCopy tests passed");
 
@@ -286,6 +304,73 @@ if (process.env.SETTINGS_COPY_TEST_DB) {
     assert.equal((await mappingsOf(targetB, "whatsapp")).length, 0);
     assert.equal((await settings(targetB)).leadsquaredWaMappings, "same");
     await storage.upsertWidgetSettings(sourceId, { leadsquaredEnabled: "false" } as any);
+
+    // Discounts & offers: the set-up travels, never the codes, who claimed an offer or their numbers.
+    const campaign = async (businessAccountId: string, name: string, enabled: boolean, value: number, extra: Record<string, unknown> = {}) =>
+      (await q(
+        "INSERT INTO urgency_offer_settings (business_account_id, name, is_enabled, discount_type, discount_value, trigger_mode, trigger_keywords, headline, priority) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+        [businessAccountId, name, enabled, extra.discountType ?? "percentage", value, extra.triggerMode ?? "intent", extra.triggerKeywords ?? "", extra.headline ?? "Limited Time Offer!", extra.priority ?? 0],
+      ))[0].id as string;
+    const claim = (businessAccountId: string, campaignId: string, phone: string) => q(
+      "INSERT INTO urgency_offers (business_account_id, campaign_id, visitor_token, countdown_expires_at, discount_type, discount_value, discount_code, phone_number, status, redeemed_at) VALUES ($1, $2, 'visitor-1', NOW(), 'percentage', 5, 'SAVEOLD1', $3, 'redeemed', NOW())",
+      [businessAccountId, campaignId, phone],
+    );
+    await campaign(sourceId, "Diwali", true, 15, { triggerMode: "keyword", triggerKeywords: "fees, scholarship", headline: "Source School Diwali offer" });
+    await campaign(sourceId, "Weekend", false, 500, { discountType: "fixed", priority: 1 });
+    const sourceDiwali = (await q("SELECT id FROM urgency_offer_settings WHERE business_account_id = $1 AND name = 'Diwali'", [sourceId]))[0].id;
+    await claim(sourceId, sourceDiwali, "9800000001");
+    await q("INSERT INTO exit_intent_settings (business_account_id, is_enabled, discount_percentage, discount_message) VALUES ($1, true, 12, 'Wait! {discount}% off')", [sourceId]);
+    const alphaDiwali = await campaign(targetA, "diwali", true, 5);
+    await campaign(targetA, "Alpha own", true, 8, { priority: 2 });
+    await claim(targetA, alphaDiwali, "9800000002");
+    await q("INSERT INTO idle_timeout_settings (business_account_id, is_enabled, discount_percentage) VALUES ($1, true, 7)", [targetA]);
+    const offerRows = async (id: string) => (await q("SELECT * FROM urgency_offer_settings WHERE business_account_id = $1 ORDER BY name", [id]))
+      .map(({ updated_at, ...row }: any) => row);
+    const singleRow = async (table: string, id: string) => (await q(`SELECT * FROM ${table} WHERE business_account_id = $1`, [id]))
+      .map(({ updated_at, ...row }: any) => row);
+    const alphaBefore = { campaigns: await offerRows(targetA), exit: await singleRow("exit_intent_settings", targetA), idle: await singleRow("idle_timeout_settings", targetA) };
+
+    const offersItem = (await describeSource(sourceId)).items.find((i) => i.key === "offers")!;
+    assert.equal(offersItem.group, "Offers");
+    assert.equal(offersItem.summary, "2 offers on · 1 off");
+    assert.ok(JSON.stringify(offersItem.sections).includes("The visitor writes: fees, scholarship"));
+    assert.ok(!JSON.stringify(offersItem).includes("9800000001") && !JSON.stringify(offersItem).includes("SAVEOLD1"));
+
+    const offersRequest = { ...request, items: ["offers"], targetIds: [targetA, targetB], offersMode: "add" as const };
+    const addPreview = await previewCopy(groupId, offersRequest);
+    const alphaAdd = addPreview.find((p) => p.businessAccountId === targetA)!;
+    assert.deepEqual(alphaAdd.changes[0].details, [
+      { field: 'Urgency offer "Diwali"', from: "On · 5% off", to: "On · 15% off" },
+      { field: 'Urgency offer "Weekend"', from: "Not on this account", to: "Off · 500 off (fixed amount)" },
+      { field: "Offer when leaving the page", from: "Not set up", to: "On · 12% off" },
+    ]);
+    assert.ok(alphaAdd.warnings.some((w) => w.message.includes('"Source School"')), "warns about the source's name in the offer");
+    assert.equal(addPreview.find((p) => p.businessAccountId === targetB)!.changes[0].details.length, 3);
+    const offersReplacePreview = await previewCopy(groupId, { ...offersRequest, offersMode: "replace" });
+    const alphaReplace = offersReplacePreview.find((p) => p.businessAccountId === targetA)!;
+    assert.deepEqual(alphaReplace.changes[0].details.at(-2), { field: 'Urgency offer "Alpha own"', from: "On", to: "Off" });
+    assert.ok(alphaReplace.warnings.some((w) => w.message.includes('Switches off "Alpha own"')));
+
+    const offersCopy = await runCopy(groupId, { ...offersRequest, offersMode: "replace" }, { name: "tester" });
+    assert.ok(offersCopy.results.every((r) => r.ok));
+    const alphaAfter = await offerRows(targetA);
+    assert.deepEqual(alphaAfter.map((r: any) => [r.name, r.is_enabled, r.discount_value]), [["Alpha own", false, 8], ["Diwali", true, 15], ["Weekend", false, 500]]);
+    assert.equal(alphaAfter.find((r: any) => r.name === "Diwali").id, alphaDiwali, "the same offer is updated, so who claimed it can't claim it again");
+    assert.equal(alphaAfter.find((r: any) => r.name === "Diwali").trigger_keywords, "fees, scholarship");
+    assert.equal((await q("SELECT campaign_id FROM urgency_offers WHERE business_account_id = $1", [targetA]))[0].campaign_id, alphaDiwali);
+    assert.equal((await singleRow("exit_intent_settings", targetA))[0].discount_percentage, 12);
+    assert.deepEqual(await singleRow("idle_timeout_settings", targetA), alphaBefore.idle, "the source has no quiet offer, so the account keeps its own");
+    assert.equal((await offerRows(targetB)).length, 2);
+    assert.equal((await q("SELECT count(*)::int AS n FROM urgency_offers WHERE business_account_id = ANY($1)", [[targetB]]))[0].n, 0, "no claims travel");
+    assert.ok((await previewCopy(groupId, { ...offersRequest, offersMode: "replace" })).every((p) => p.changes.length === 0));
+
+    await undoCopy(groupId, offersCopy.copyId, "tester");
+    assert.deepEqual(await offerRows(targetA), alphaBefore.campaigns, "undo puts the account's offers back exactly");
+    assert.deepEqual(await singleRow("exit_intent_settings", targetA), alphaBefore.exit);
+    assert.deepEqual(await singleRow("idle_timeout_settings", targetA), alphaBefore.idle);
+    assert.equal((await offerRows(targetB)).length, 0);
+    assert.equal((await singleRow("exit_intent_settings", targetB)).length, 0);
+    assert.equal((await q("SELECT campaign_id FROM urgency_offers WHERE business_account_id = $1", [targetA]))[0].campaign_id, alphaDiwali);
 
     // One account failing doesn't stop the others; its reason is kept, and trying it again works.
     await q(`CREATE FUNCTION copy_test_fail() RETURNS trigger AS $$ BEGIN IF NEW.chat_color = '#FA11ED' AND NEW.business_account_id = '${targetA}' THEN RAISE EXCEPTION 'Forced failure'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`);

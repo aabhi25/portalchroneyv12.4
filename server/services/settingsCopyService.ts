@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { desc, eq, inArray } from "drizzle-orm";
+import { asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { storage } from "../storage";
 import { businessContextCache } from "./businessContextCache";
@@ -10,10 +10,13 @@ import {
   chatMenuItemDetails,
   chatMenuItems,
   conversationJourneys,
+  exitIntentSettings,
+  idleTimeoutSettings,
   journeySessions,
   journeySteps,
   leadsquaredFieldMappings,
   settingsCopyLog,
+  urgencyOfferSettings,
   widgetSettings,
 } from "@shared/schema";
 import { mergeGroupLeadConfigIntoAccount } from "@shared/leadTrainingConfig";
@@ -29,11 +32,18 @@ import {
   lsqConnectionReady,
   lsqConnectionRows,
   maskedLink,
+  matchOfferCampaigns,
   mentionedNames,
   mergeInstructions,
+  OFFER_OWN_KEYS,
+  offerLine,
+  offerSections,
+  offersSummary,
+  offerText,
   parseInstructionList,
   sameValue,
   SECRET_FIELDS,
+  sameOffer,
   stableStringify,
   websiteHost,
   type CopyChange,
@@ -44,6 +54,7 @@ import {
   type CopyRequest,
   type CopyResultTarget,
   type CopyWarning,
+  type OffersSetup,
 } from "@shared/settingsCopy";
 
 type Row = Record<string, any>;
@@ -58,6 +69,11 @@ export interface CopySnapshot {
   menu: MenuBundle | null;
   /** The account's LeadSquared field mappings before the copy (absent in copies made before this existed). */
   lsqMappings?: Row[] | null;
+  /**
+   * Offers before the copy: urgency offers the copy added (removed again on undo), the ones it changed
+   * or switched off as they were, and the leaving/quiet offers as they were (null: the account had none).
+   */
+  offers?: { created: string[]; updated: Row[]; exitIntent?: Row | null; idleTimeout?: Row | null } | null;
 }
 
 const withoutKeys = (row: Row, keys: string[]) => {
@@ -106,6 +122,17 @@ function describeLsqValue(field: string, value: unknown): string {
   if (field === "leadsquaredWaConnection" || field === "leadsquaredWaMappings") return value === "own" ? "Their own" : "Same as website";
   return describeValue(value);
 }
+
+/** An account's offer set-up. Who was shown or claimed an offer (urgency_offers, discount_offers) is never read. */
+async function loadOffers(businessAccountId: string): Promise<OffersSetup> {
+  const campaigns = await db.select().from(urgencyOfferSettings).where(eq(urgencyOfferSettings.businessAccountId, businessAccountId))
+    .orderBy(asc(urgencyOfferSettings.priority), asc(urgencyOfferSettings.createdAt));
+  const [exitIntent] = await db.select().from(exitIntentSettings).where(eq(exitIntentSettings.businessAccountId, businessAccountId)).limit(1);
+  const [idleTimeout] = await db.select().from(idleTimeoutSettings).where(eq(idleTimeoutSettings.businessAccountId, businessAccountId)).limit(1);
+  return { campaigns, exitIntent: exitIntent ?? null, idleTimeout: idleTimeout ?? null };
+}
+
+const NO_OFFERS: OffersSetup = { campaigns: [], exitIntent: null, idleTimeout: null };
 
 const byOrder = (a: Row, b: Row) => Number(a.stepOrder) - Number(b.stepOrder);
 const nameKey = (name: unknown) => String(name ?? "").trim().toLowerCase();
@@ -254,6 +281,7 @@ export async function describeSource(sourceAccountId: string) {
   const journeys = await loadJourneys(sourceAccountId);
   const menu = await loadMenu(sourceAccountId);
   const mappings = await loadLsqMappings(sourceAccountId);
+  const offers = await loadOffers(sourceAccountId);
   const items = COPY_ITEMS.map((item) => {
     let summary = "";
     let empty = false;
@@ -268,6 +296,8 @@ export async function describeSource(sourceAccountId: string) {
       sections = journeySections(journeys);
     } else if (item.kind === "menu") {
       sections = menuSections(menu, journeys);
+    } else if (item.kind === "offers") {
+      sections = offerSections(offers);
     } else if (item.kind === "lsq-connection") {
       sections = [{ rows: lsqConnectionRows(settings) }];
     } else if (item.kind === "lsq-mappings") {
@@ -295,6 +325,8 @@ export async function describeSource(sourceAccountId: string) {
     } else if (item.kind === "menu") {
       empty = !menu.config && menu.items.length === 0;
       summary = empty ? "No menu" : `${menu.config?.enabled === "true" ? "On" : "Off"} · ${menu.items.length} button${menu.items.length === 1 ? "" : "s"}`;
+    } else if (item.kind === "offers") {
+      ({ summary, empty } = offersSummary(offers));
     } else if (item.kind === "lsq-connection") {
       empty = !lsqConnectionReady(settings);
       summary = empty ? "Not set up" : `${settings.leadsquaredConnectionType === "uds" ? "UDS" : "API"} · sync ${settings.leadsquaredEnabled === "true" ? "on" : "off"}`;
@@ -327,6 +359,7 @@ interface Source {
   allJourneys: JourneyBundle[];
   menu: MenuBundle;
   lsqMappings: Row[];
+  offers: OffersSetup;
 }
 
 async function loadSource(request: CopyRequest): Promise<Source> {
@@ -344,6 +377,7 @@ async function loadSource(request: CopyRequest): Promise<Source> {
     journeys: request.items.includes("journeys") ? allJourneys.filter(({ journey }) => request.journeyIds.includes(journey.id)) : [],
     menu: request.items.includes("menu") ? await loadMenu(request.sourceAccountId) : { config: null, items: [], details: [] },
     lsqMappings: request.items.includes("leadsquared-mappings") ? await loadLsqMappings(request.sourceAccountId) : [],
+    offers: request.items.includes("offers") ? await loadOffers(request.sourceAccountId) : NO_OFFERS,
   };
 }
 
@@ -439,6 +473,8 @@ interface TargetPlan {
   menuChanged: boolean;
   /** The source's mappings to write, when they differ from the account's. */
   lsqMappings: Row[] | null;
+  /** What to write for offers: urgency offers to update or add, ones to switch off, and the leaving/quiet offers. */
+  offers: { campaigns: { source: Row; target: Row | null }[]; switchOff: Row[]; exitIntent: Row | null; idleTimeout: Row | null } | null;
 }
 
 const INTRO_FIELDS = ["welcomeMessageType", "welcomeMessage", "personality", "responseLength", "customInstructions"];
@@ -448,7 +484,7 @@ async function planTarget(source: Source, request: CopyRequest, target: { busine
   // so "before" always holds real values and undo can put them back.
   const settings: Row = (await storage.getWidgetSettings(target.businessAccountId)) ?? (await storage.upsertWidgetSettings(target.businessAccountId, {}));
   const plan: TargetPlan = {
-    ...target, changes: [], warnings: [], widgetUpdate: {}, widgetBefore: {}, journeys: [], clearStartup: [], menuChanged: false, lsqMappings: null,
+    ...target, changes: [], warnings: [], widgetUpdate: {}, widgetBefore: {}, journeys: [], clearStartup: [], menuChanged: false, lsqMappings: null, offers: null,
   };
   const warnIfNamed = (item: CopyItem, text: string) => {
     const names = mentionedNames(text, source.names, target.name);
@@ -546,6 +582,29 @@ async function planTarget(source: Source, request: CopyRequest, target: { busine
       if (source.menu.items.some((i) => i.itemType === "phone" || i.itemType === "url") || ["phone", "url"].includes(source.menu.config?.persistentCtaAction)) {
         plan.warnings.push({ key, label: item.label, message: "Has phone numbers or web links. Check they are right for this account" });
       }
+    } else if (item.kind === "offers") {
+      const from = source.offers;
+      if (offersSummary(from).empty) continue;
+      const current = await loadOffers(target.businessAccountId);
+      const { pairs, rest } = matchOfferCampaigns(from.campaigns, current.campaigns);
+      const campaigns = pairs.filter((pair) => !sameOffer(pair.source, pair.target));
+      const switchOff = request.offersMode === "replace" ? rest.filter((row) => row.isEnabled) : [];
+      // The leaving/quiet offers travel only when the source has set them up.
+      const exitIntent = from.exitIntent && !sameOffer(from.exitIntent, current.exitIntent) ? from.exitIntent : null;
+      const idleTimeout = from.idleTimeout && !sameOffer(from.idleTimeout, current.idleTimeout) ? from.idleTimeout : null;
+      if (!campaigns.length && !switchOff.length && !exitIntent && !idleTimeout) continue;
+      plan.offers = { campaigns, switchOff, exitIntent, idleTimeout };
+      const details: CopyChange["details"] = [
+        ...campaigns.map((pair) => ({ field: `Urgency offer "${pair.source.name}"`, from: pair.target ? offerLine(pair.target, "campaign") : "Not on this account", to: offerLine(pair.source, "campaign") })),
+        ...switchOff.map((row) => ({ field: `Urgency offer "${row.name}"`, from: "On", to: "Off" })),
+      ];
+      if (exitIntent) details.push({ field: "Offer when leaving the page", from: offerLine(current.exitIntent, "exit"), to: offerLine(exitIntent, "exit") });
+      if (idleTimeout) details.push({ field: "Offer when someone goes quiet", from: offerLine(current.idleTimeout, "idle"), to: offerLine(idleTimeout, "idle") });
+      plan.changes.push({ key, label: item.label, details });
+      if (switchOff.length) {
+        plan.warnings.push({ key, label: item.label, message: `Switches off ${switchOff.map((row) => `"${row.name}"`).join(", ")}, which ${source.name} doesn't have. ${switchOff.length === 1 ? "It is" : "They are"} kept, not deleted` });
+      }
+      warnIfNamed(item, offerText({ campaigns: campaigns.map((pair) => pair.source), exitIntent, idleTimeout }));
     } else if (item.kind === "lsq-connection") {
       if (!lsqConnectionReady(source.settings)) continue;
       const fields = lsqConnectionFields(source.settings);
@@ -680,6 +739,38 @@ async function applyLsqMappings(businessAccountId: string, mappings: Row[], snap
   });
 }
 
+/**
+ * Urgency offers are updated where they are (same name), so who already claimed one can't claim it
+ * again; new ones are added. Codes are made for each visitor when shown, so there are none to copy.
+ */
+async function applyOffers(businessAccountId: string, offers: NonNullable<TargetPlan["offers"]>, snapshot: CopySnapshot) {
+  const saved: NonNullable<CopySnapshot["offers"]> = { created: [], updated: [] };
+  snapshot.offers = saved;
+  const values = (row: Row) => withoutKeys(row, OFFER_OWN_KEYS);
+  await db.transaction(async (tx) => {
+    for (const { source, target } of offers.campaigns) {
+      if (target) {
+        await tx.update(urgencyOfferSettings).set({ ...values(source), updatedAt: new Date() } as any).where(eq(urgencyOfferSettings.id, target.id));
+        saved.updated.push(target);
+      } else {
+        const [created] = await tx.insert(urgencyOfferSettings).values({ ...values(source), businessAccountId } as any).returning();
+        saved.created.push(created.id);
+      }
+    }
+    for (const row of offers.switchOff) {
+      await tx.update(urgencyOfferSettings).set({ isEnabled: false, updatedAt: new Date() }).where(eq(urgencyOfferSettings.id, row.id));
+      saved.updated.push(row);
+    }
+    for (const [table, row, slot] of [[exitIntentSettings, offers.exitIntent, "exitIntent"], [idleTimeoutSettings, offers.idleTimeout, "idleTimeout"]] as const) {
+      if (!row) continue;
+      const [before] = await tx.select().from(table).where(eq(table.businessAccountId, businessAccountId)).limit(1);
+      saved[slot] = before ?? null;
+      if (before) await tx.update(table).set({ ...values(row), updatedAt: new Date() } as any).where(eq(table.businessAccountId, businessAccountId));
+      else await tx.insert(table).values({ ...values(row), businessAccountId } as any);
+    }
+  });
+}
+
 async function applyMenu(businessAccountId: string, source: Source, snapshot: CopySnapshot) {
   const before = await loadMenu(businessAccountId);
   snapshot.menu = before;
@@ -730,7 +821,7 @@ export async function runCopy(groupId: string, request: CopyRequest, user: { id?
   const snapshots: Record<string, CopySnapshot> = {};
 
   for (const target of targets) {
-    const snapshot: CopySnapshot = { widget: {}, journeys: { created: [], updated: [], cleared: [] }, menu: null, lsqMappings: null };
+    const snapshot: CopySnapshot = { widget: {}, journeys: { created: [], updated: [], cleared: [] }, menu: null, lsqMappings: null, offers: null };
     let warnings: CopyWarning[] = [];
     try {
       const plan = await planTarget(source, request, target);
@@ -744,6 +835,7 @@ export async function runCopy(groupId: string, request: CopyRequest, user: { id?
       }
       if (plan.menuChanged) await applyMenu(target.businessAccountId, source, snapshot);
       if (plan.lsqMappings) await applyLsqMappings(target.businessAccountId, plan.lsqMappings, snapshot);
+      if (plan.offers) await applyOffers(target.businessAccountId, plan.offers, snapshot);
       if (plan.changes.length) businessContextCache.invalidateBusinessCache(target.businessAccountId);
       results.push({ ...target, ok: true, changed: plan.changes.map((c) => c.label), warnings });
     } catch (error: any) {
@@ -826,10 +918,36 @@ async function restoreLsqMappings(businessAccountId: string, snapshot: CopySnaps
   });
 }
 
+async function restoreOffers(businessAccountId: string, snapshot: CopySnapshot) {
+  const saved = snapshot.offers;
+  if (!saved) return;
+  const values = (row: Row) => withoutKeys(row, ["createdAt", "updatedAt"]);
+  await db.transaction(async (tx) => {
+    // Offers shown from an added one in the meantime are kept; they just no longer name it.
+    if (saved.created.length) await tx.delete(urgencyOfferSettings).where(inArray(urgencyOfferSettings.id, saved.created));
+    for (const row of saved.updated) {
+      const [present] = await tx.select({ id: urgencyOfferSettings.id }).from(urgencyOfferSettings).where(eq(urgencyOfferSettings.id, row.id)).limit(1);
+      if (present) await tx.update(urgencyOfferSettings).set({ ...values(row), updatedAt: new Date() } as any).where(eq(urgencyOfferSettings.id, row.id));
+      else await tx.insert(urgencyOfferSettings).values({ ...values(row), businessAccountId } as any);
+    }
+    for (const [table, slot] of [[exitIntentSettings, "exitIntent"], [idleTimeoutSettings, "idleTimeout"]] as const) {
+      if (!(slot in saved)) continue;
+      const before = saved[slot];
+      if (!before) {
+        await tx.delete(table).where(eq(table.businessAccountId, businessAccountId));
+        continue;
+      }
+      const [present] = await tx.select({ id: table.id }).from(table).where(eq(table.businessAccountId, businessAccountId)).limit(1);
+      if (present) await tx.update(table).set({ ...withoutKeys(before, OFFER_OWN_KEYS), updatedAt: new Date() } as any).where(eq(table.businessAccountId, businessAccountId));
+      else await tx.insert(table).values({ ...values(before), businessAccountId } as any);
+    }
+  });
+}
+
 /** Every part gets its chance, so one failing doesn't leave the others uncopied back. */
 async function restoreTarget(businessAccountId: string, snapshot: CopySnapshot) {
   const problems: string[] = [];
-  for (const restore of [restoreJourneys, restoreWidget, restoreMenu, restoreLsqMappings]) {
+  for (const restore of [restoreJourneys, restoreWidget, restoreMenu, restoreLsqMappings, restoreOffers]) {
     try {
       await restore(businessAccountId, snapshot);
     } catch (error: any) {

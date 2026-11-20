@@ -14,6 +14,7 @@ const copyRequestSchema = z.object({
   targetIds: z.array(z.string().min(1)).min(1, "Choose at least one account to copy to"),
   items: z.array(z.string().refine((key) => COPY_ITEMS.some((item) => item.key === key))).min(1, "Choose at least one thing to copy"),
   instructionsMode: z.enum(["add", "replace"]).default("add"),
+  offersMode: z.enum(["add", "replace"]).default("add"),
   journeyIds: z.array(z.string()).default([]),
 }).refine((value) => !value.items.includes("journeys") || value.journeyIds.length > 0, { message: "Choose at least one journey to copy" });
 

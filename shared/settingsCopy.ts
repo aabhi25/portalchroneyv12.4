@@ -2,9 +2,10 @@
  * "Copy settings" on an account group's page: what can be copied from one account to others, and
  * the pure rules for comparing and merging. Passwords, WhatsApp and phone numbers, products,
  * knowledge, leads and chats are deliberately not in this list. The one login that can be copied is
- * the LeadSquared connection, only when ticked, and its keys are never shown.
+ * the LeadSquared connection, only when ticked, and its keys are never shown. Offers copy their set-up
+ * only: the codes, who was shown or claimed an offer and their phone numbers stay on each account.
  */
-export type CopyItemKind = "fields" | "avatar" | "lead" | "instructions" | "journeys" | "menu" | "lsq-connection" | "lsq-mappings";
+export type CopyItemKind = "fields" | "avatar" | "lead" | "instructions" | "journeys" | "menu" | "offers" | "lsq-connection" | "lsq-mappings";
 
 export interface CopyItem {
   key: string;
@@ -41,11 +42,13 @@ export const COPY_ITEMS: CopyItem[] = [
   { key: "journeys", group: "Training", label: "Journeys", description: "Forms and guided conversations. Pick which ones below", kind: "journeys" },
   { key: "menu", group: "Training", label: "Chat menu & forms", description: "The menu start screen and its buttons", kind: "menu" },
 
+  { key: "offers", group: "Offers", label: "Discounts & offers", description: "AI urgency offers, the offer when someone is leaving and the offer when someone goes quiet: wording, discount, timing and on/off. Codes, and who claimed an offer, stay on each account", kind: "offers" },
+
   { key: "leadsquared-connection", group: "CRM", label: "LeadSquared connection", description: "The UDS link and key (or API keys), the sync switch, and WhatsApp leads' own connection if they have one. Keys are copied as stored and never shown", kind: "lsq-connection" },
   { key: "leadsquared-mappings", group: "CRM", label: "LeadSquared field mappings", description: "Which details go into which LeadSquared field, including fixed values and WhatsApp's own mappings. Replaces each account's own mappings", kind: "lsq-mappings" },
 ];
 
-export const COPY_ITEM_GROUPS = ["Appearance", "Welcome & behaviour", "Nudges & banners", "Training", "CRM"];
+export const COPY_ITEM_GROUPS = ["Appearance", "Welcome & behaviour", "Nudges & banners", "Training", "Offers", "CRM"];
 
 /** LeadSquared connection fields whose values are never shown, only whether they are set. */
 export const SECRET_FIELDS = ["leadsquaredUdsKey", "leadsquaredAccessKey", "leadsquaredSecretKey", "leadsquaredWaUdsKey", "leadsquaredWaAccessKey", "leadsquaredWaSecretKey"];
@@ -367,6 +370,8 @@ export interface CopyRequest {
   instructionsMode: "add" | "replace";
   /** Which of the source's journeys, when "journeys" is ticked. */
   journeyIds: string[];
+  /** "add": the account's other urgency offers stay as they are; "replace": they are switched off. */
+  offersMode?: "add" | "replace";
 }
 
 export interface CopyChange {
@@ -397,3 +402,117 @@ export interface CopyResultTarget {
   warnings: CopyWarning[];
   error?: string;
 }
+
+/** An account's offers: its AI urgency offers (any number) and its one leaving-the-page and one gone-quiet offer. */
+export interface OffersSetup {
+  campaigns: Record<string, any>[];
+  exitIntent: Record<string, any> | null;
+  idleTimeout: Record<string, any> | null;
+}
+
+/** The columns that belong to the account rather than to the offer's set-up. */
+export const OFFER_OWN_KEYS = ["id", "businessAccountId", "createdAt", "updatedAt"];
+
+const minutes = (value: unknown) => {
+  const n = Number(value);
+  if (n >= 60 && n % 60 === 0) return `${n / 60} hour${n === 60 ? "" : "s"}`;
+  return `${n} minute${n === 1 ? "" : "s"}`;
+};
+
+/** "10% off" or "100 off (fixed amount)". */
+export const offerDiscount = (row: Record<string, any>) =>
+  row.discountType === "fixed" ? `${row.discountValue} off (fixed amount)` : `${row.discountValue ?? row.discountPercentage}% off`;
+
+/** One offer in a few words, for the review screen. */
+export function offerLine(row: Record<string, any> | null, kind: "campaign" | "exit" | "idle"): string {
+  if (!row) return "Not set up";
+  const discount = kind === "campaign" ? offerDiscount(row) : `${row.discountPercentage}% off`;
+  return `${row.isEnabled ? "On" : "Off"} · ${discount}`;
+}
+
+/** "2 offers on · 1 off", or "None". */
+export function offersSummary(offers: OffersSetup): { summary: string; empty: boolean } {
+  const all = [...offers.campaigns, offers.exitIntent, offers.idleTimeout].filter(Boolean) as Record<string, any>[];
+  if (all.length === 0) return { summary: "None", empty: true };
+  const on = all.filter((row) => row.isEnabled).length;
+  const off = all.length - on;
+  if (on === 0) return { summary: `All off · ${off} set up`, empty: false };
+  return { summary: `${on} offer${on === 1 ? "" : "s"} on${off ? ` · ${off} off` : ""}`, empty: false };
+}
+
+/** The complete set-up of every offer, for the details panel. */
+export function offerSections(offers: OffersSetup): DetailSection[] {
+  const sections: DetailSection[] = offers.campaigns.map((row) => {
+    const rows: DetailRow[] = [
+      { label: "Status", value: row.isEnabled ? "On" : "Off" },
+      { label: "Discount", value: offerDiscount(row) },
+      { label: "Countdown", value: minutes(row.countdownDurationMinutes) },
+      {
+        label: "Shown when",
+        value: row.triggerMode === "keyword"
+          ? `The visitor writes: ${String(row.triggerKeywords || "").trim() || "(no words set)"}`
+          : `The AI sees buying interest (${row.intentThreshold}% sure, after ${row.minMessagesBeforeTrigger} messages)`,
+      },
+      { label: "Headline", value: row.headline || "(empty)" },
+      { label: "Description", value: row.description || "(empty)" },
+      { label: "Buttons", value: [row.ctaButtonText, row.dismissButtonText].filter(Boolean).join(" · ") || "(empty)" },
+      { label: "Asks for WhatsApp number", value: row.requirePhone ? `Yes: "${row.phoneInputLabel}"` : "No" },
+      { label: "After claiming", value: row.successMessage || "(empty)" },
+      { label: "Per visitor", value: `At most ${row.maxOffersPerVisitor}, ${minutes(row.cooldownMinutes)} apart${row.showReminderAfterDismiss ? ", reminder after closing" : ""}` },
+    ];
+    return { title: `AI urgency offer: ${row.name}`, rows };
+  });
+  const triggered = (row: Record<string, any>, title: string, when: DetailRow) => ({
+    title,
+    rows: [
+      { label: "Status", value: row.isEnabled ? "On" : "Off" },
+      { label: "Discount", value: `${row.discountPercentage}% off` },
+      when,
+      { label: "Only with items in the cart", value: row.requireCartItems ? "Yes" : "No" },
+      { label: "Message", value: row.discountMessage || "(empty)" },
+      { label: "Code valid for", value: minutes(row.expiryMinutes) },
+      { label: "Per visitor", value: `At most ${row.maxUsesPerVisitor}, ${minutes(row.cooldownMinutes)} apart` },
+    ],
+  });
+  if (offers.exitIntent) {
+    sections.push(triggered(offers.exitIntent, "When someone is leaving the page", { label: "On phones too", value: offers.exitIntent.mobileExitEnabled ? "Yes" : "No" }));
+  }
+  if (offers.idleTimeout) {
+    sections.push(triggered(offers.idleTimeout, "When someone goes quiet", { label: "After", value: seconds(offers.idleTimeout.idleTimeoutSeconds) }));
+  }
+  return sections;
+}
+
+/**
+ * Pairs each of the source's urgency offers with the target's offer of the same name, so an offer that
+ * is copied again is updated (keeping who already claimed it) rather than added twice. `rest` is the
+ * target's offers with no source offer of that name.
+ */
+export function matchOfferCampaigns<T extends Record<string, any>>(source: T[], target: T[]): { pairs: { source: T; target: T | null }[]; rest: T[] } {
+  const key = (row: T) => String(row.name ?? "").trim().toLowerCase();
+  const used = new Set<T>();
+  const pairs = source.map((row) => {
+    const match = target.find((t) => !used.has(t) && key(t) === key(row)) ?? null;
+    if (match) used.add(match);
+    return { source: row, target: match };
+  });
+  return { pairs, rest: target.filter((t) => !used.has(t)) };
+}
+
+/** Whether two offers are set up the same (ids and dates aside). */
+export function sameOffer(a: Record<string, any> | null, b: Record<string, any> | null): boolean {
+  if (!a || !b) return !a && !b;
+  const shape = (row: Record<string, any>) => {
+    const copy = { ...row };
+    for (const key of OFFER_OWN_KEYS) delete copy[key];
+    return copy;
+  };
+  return stableStringify(shape(a)) === stableStringify(shape(b));
+}
+
+/** The words a visitor sees, to look for the source account's name. */
+export const offerText = (offers: OffersSetup) => [
+  ...offers.campaigns.flatMap((row) => [row.name, row.headline, row.description, row.ctaButtonText, row.successMessage, row.triggerKeywords]),
+  offers.exitIntent?.discountMessage,
+  offers.idleTimeout?.discountMessage,
+].filter(Boolean).join("\n");

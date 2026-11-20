@@ -78,6 +78,7 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [journeyIds, setJourneyIds] = useState<Set<string>>(new Set());
   const [instructionsMode, setInstructionsMode] = useState<"add" | "replace">("add");
+  const [offersMode, setOffersMode] = useState<"add" | "replace">("add");
   const [targetMode, setTargetMode] = useState<"all" | "some">("all");
   const [someIds, setSomeIds] = useState<Set<string>>(new Set());
   const [targetSearch, setTargetSearch] = useState("");
@@ -114,7 +115,7 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
     [targetMode, others, someIds],
   );
   const visibleOthers = others.filter((m) => m.name.toLowerCase().includes(targetSearch.trim().toLowerCase()));
-  const request: CopyRequest = { sourceAccountId: sourceId, targetIds, items: Array.from(picked), instructionsMode, journeyIds: Array.from(journeyIds) };
+  const request: CopyRequest = { sourceAccountId: sourceId, targetIds, items: Array.from(picked), instructionsMode, offersMode, journeyIds: Array.from(journeyIds) };
   const needsJourney = picked.has("journeys") && journeyIds.size === 0;
   const detailItem = source?.items.find((item) => item.key === detailKey) ?? null;
   const sourceName = members.find((m) => m.businessAccountId === sourceId)?.name;
@@ -203,7 +204,7 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
   return (
     <div className="max-w-4xl space-y-5">
       <p className="text-sm text-gray-500">
-        Set something up on one account, then copy it to the others. Passwords, WhatsApp and phone settings, products, knowledge, leads and chats are never copied. The LeadSquared connection is copied only when you tick it, and its keys are never shown. Publishing from the Training tab can later overwrite what you copy here.
+        Set something up on one account, then copy it to the others. Passwords, WhatsApp and phone settings, products, knowledge, leads and chats are never copied, nor discount codes or who claimed an offer. The LeadSquared connection is copied only when you tick it, and its keys are never shown. Publishing from the Training tab can later overwrite what you copy here.
       </p>
 
       <Card className="shadow-sm">
@@ -272,6 +273,23 @@ export default function GroupCopySettings({ groupId }: { groupId: string }) {
                               <div className="flex items-center gap-2">
                                 <RadioGroupItem value="replace" id="instructions-replace" />
                                 <Label htmlFor="instructions-replace" className="font-normal">Replace each account's instructions</Label>
+                              </div>
+                            </RadioGroup>
+                          )}
+
+                          {item.key === "offers" && picked.has("offers") && (
+                            <RadioGroup
+                              className="ml-9 mt-1 space-y-1"
+                              value={offersMode}
+                              onValueChange={(value) => { setOffersMode(value as "add" | "replace"); stale(); }}
+                            >
+                              <div className="flex items-center gap-2">
+                                <RadioGroupItem value="add" id="offers-add" />
+                                <Label htmlFor="offers-add" className="font-normal">Add to each account's own offers</Label>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <RadioGroupItem value="replace" id="offers-replace" />
+                                <Label htmlFor="offers-replace" className="font-normal">Replace them: switch off each account's other offers (kept, not deleted)</Label>
                               </div>
                             </RadioGroup>
                           )}
