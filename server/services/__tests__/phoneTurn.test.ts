@@ -134,6 +134,9 @@ async function main() {
   expect(/how you got their number/.test(lead) && /they enquired with the business/.test(lead), '"how did you get my number" has a plain answer');
   expect(/No brochure sentences/.test(lead) && /written for its website chat/.test(lead) && /about 25 words/.test(lead), 'no brochure talk, website-chat instructions about contact details are ignored, ~25 words');
   expect(!/insurance|premium|claim|quotes|gaadi|parents|Third-party/i.test(lead), 'the phone rules carry no insurance examples', (lead.match(/[^.\n]*(insurance|premium|claim|quotes|gaadi|parents|Third-party)[^.\n]*/i) || [])[0]);
+  // Real call 2026-11-23: a sample answer in the rules ("fees मैं confirm करके बताती हूँ") was said word for word to an unrelated question.
+  expect(!/B\.Tech|sales|studying|पढ़ाई|fees मैं|Fees मैं|marketing|finance/i.test(lead), 'the phone rules carry no sample answers about a course, a job or fees', (lead.match(/[^.\n]*(B\.Tech|sales|studying|पढ़ाई|fees मैं|marketing|finance)[^.\n]*/i) || [])[0]);
+  expect(/If their words don't fit your last question/.test(lead) && /say it once more/.test(lead), "an answer that doesn't fit is asked again, not guessed");
   expect(/one or two short sentences/.test(PHONE_CORE_PROMPT) && /No brochure language/.test(PHONE_CORE_PROMPT) && PHONE_CORE_PROMPT.length < 2500 && !/product cards|journey|get_products/i.test(PHONE_CORE_PROMPT), 'calls get a short phone core, not the website chat rules', PHONE_CORE_PROMPT.length);
   const { isWrappingUp } = await import('../calling/phonePrompt');
   expect(['Okay, thank you.', 'Thanks a lot', "Theek hai, main soch ke batata hoon", 'ठीक है, थैंक यू', "That's all for now", 'धन्यवाद जी'].every((t) => isWrappingUp(t)), 'winding down is recognised');
