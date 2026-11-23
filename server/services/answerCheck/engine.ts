@@ -12,19 +12,27 @@ import {
 import {
   aiWrittenStatus,
   applyJudgement,
+  CONFIDENCE_AGREED,
+  CONFIDENCE_DECIDED,
+  CONFIDENCE_DIFFER,
+  doubtfulReading,
+  markingConfidence,
   normalizeScheme,
+  readingDoubt,
   resolveAnswerCheckSettings,
   schemeProblems,
+  settleMarkings,
   subjectKindOf,
   teacherReasons,
   wordCount,
   type AnswerCheckSettings,
   type AnswerRegion,
   type MarkingScheme,
+  type MarkResult,
   type PracticeLevel,
   type QuestionKind,
 } from "@shared/answerCheck";
-import { ANSWER_CHECK_MINI_MODEL, ANSWER_CHECK_MODEL, AnswerCheckAiError, createAnswerCheckAi, type AnswerCheckAi } from "./ai";
+import { ANSWER_CHECK_MODEL, ANSWER_CHECK_SECOND_MODEL, AnswerCheckAiError, createAnswerCheckAi, type AnswerCheckAi, type JsonCall } from "./ai";
 import {
   AI_WRITTEN_SYSTEM,
   aiWrittenUserText,
@@ -37,7 +45,11 @@ import {
   parsePractice,
   parseRead,
   parseSchemeDraft,
+  KEY_GAPS_SYSTEM,
+  keyGapsUserText,
+  parseKeyGaps,
   schemeCorrectionText,
+  schemeGapsText,
   practiceSystem,
   practiceUserText,
   READ_SYSTEM,
@@ -45,6 +57,7 @@ import {
   remarkNote,
   schemeSystem,
   schemeUserText,
+  type MarkReply,
   type QuestionContext,
 } from "./prompts";
 import { imageBytes, listImages, listPaperImages, readerPhotos, replaceMarkedImage, saveImage, toDataUrl } from "./images";
@@ -54,9 +67,10 @@ import type { QuestionInput } from "./questions";
 
 /**
  * Answer checking pilot — one check from photos to marks:
- *   read the handwriting (GPT-4.1, photos attached) → mark against the question's saved scheme
- *   (GPT-4.1; with the question's own pictures, and the student's page when something is drawn)
- *   → final marks by the shared rules → AI-written estimate (GPT-4.1 mini) → decide if
+ *   read the handwriting (photos attached; by a second model when it is hard to read) → mark against
+ *   the question's saved scheme (with the question's own pictures, and the student's page when
+ *   something is drawn) → when the marks are in doubt, mark again thinking harder, and by a second
+ *   model when those two differ → final marks by the shared rules → AI-written estimate → decide if
  *   a teacher must look → draw the marked sheet → save, with time taken and cost.
  * Checks run in the background, a few at a time; the screen polls. A re-check keeps the reading
  * and marks again with the question's current scheme; the earlier result goes into `history`.
@@ -156,7 +170,8 @@ export async function prepareQuestion(businessAccountId: string, q: QuestionInpu
   const rules = settings.subjectRules[ctx.subjectKind];
   const draftScheme = async (correction = "") => {
     const reply = await ai.json({
-      model: ANSWER_CHECK_MODEL,
+      model: ANSWER_CHECK_SECOND_MODEL,
+      effort: "low",
       system: schemeSystem(),
       user: [schemeUserText(ctx, rules, { question: pictures.question.length, answer: pictures.answer.length }), correction].filter(Boolean).join("\n\n"),
       images: [...pictures.question, ...pictures.answer].map(b => toDataUrl(b)),
@@ -174,7 +189,7 @@ export async function prepareQuestion(businessAccountId: string, q: QuestionInpu
   // marked against the draft; steps it does not earn are rewritten once, then taken out.
   if (incomingAnswer && !scheme.needsDrawing) {
     const unearned = async (s: MarkingScheme) => {
-      const marked = parseMark(await ai.json({ model: ANSWER_CHECK_MODEL, system: markSystem(settings), user: markUserText(ctx, s, rules, incomingAnswer), maxTokens: 2500 }).catch(() => null));
+      const marked = parseMark(await ai.json({ model: ANSWER_CHECK_MODEL, effort: "high", system: markSystem(settings), user: markUserText(ctx, s, rules, incomingAnswer), maxTokens: 2500 }).catch(() => null));
       // No usable reply: the key can't be checked, so it is left as drafted.
       if (!marked.judgements.length) return [];
       return applyJudgement(s, q.maxMarks, marked.judgements).steps.filter(st => st.awarded < st.marks);
@@ -190,6 +205,17 @@ export async function prepareQuestion(businessAccountId: string, q: QuestionInpu
       // Still asking for something the model answer doesn't show: those steps go, their marks move to the steps it does earn.
       const ids = new Set(missed.map(m => m.stepId));
       if (ids.size && ids.size < scheme.steps.length) scheme = normalizeScheme({ ...scheme, steps: scheme.steps.filter(st => !ids.has(st.id)) }, q.maxMarks);
+    }
+    // The other way round: a key that stops short of the model answer (one for "72/100 = 36/50 = 18/25"
+    // ended at 36/50, so a student who stopped there got full marks) is written once more.
+    const gapsOf = async (s: MarkingScheme) => parseKeyGaps(await ai.json({ model: ANSWER_CHECK_MODEL, effort: "high", system: KEY_GAPS_SYSTEM, user: keyGapsUserText(ctx, s), maxTokens: 600 }).catch(() => null));
+    const gaps = await gapsOf(scheme);
+    if (gaps.length) {
+      const again = await draftScheme(schemeGapsText(scheme, gaps));
+      if (again) {
+        const fuller = normalizeScheme(again.raw, q.maxMarks);
+        if (!fuller.needsDrawing && !(await unearned(fuller)).length && (await gapsOf(fuller)).length < gaps.length) { draft = again; scheme = fuller; }
+      }
     }
   }
   const modelAnswerByAi = !q.modelAnswer.trim() && !!draft.modelAnswer;
@@ -353,7 +379,7 @@ async function writePractice(scheme: AnswerMarkingSchemeRow, rows: AnswerCheckRo
     const ai = await aiFactory(scheme.businessAccountId);
     const ctx = contextOf(scheme);
     const markingScheme = schemeOf(scheme);
-    const reply = await ai.json({ model: ANSWER_CHECK_MODEL, system: practiceSystem(), user: practiceUserText(ctx, markingScheme, levels), maxTokens: 4000, temperature: 0.7 });
+    const reply = await ai.json({ model: ANSWER_CHECK_SECOND_MODEL, system: practiceSystem(), user: practiceUserText(ctx, markingScheme, levels), maxTokens: 4000, temperature: 0.7 });
     const answers = parsePractice(reply, levels);
     const share = rows.length ? ai.costUsd() / rows.length : 0;
     for (const row of rows) {
@@ -414,6 +440,39 @@ function markedRemark(teacherComment: string | undefined, summary: string | unde
   return teacherComment || (summary || "").split(/(?<=[.!?])\s/)[0] || "";
 }
 
+/** One marking of an answer. */
+interface Marking {
+  by: "quick" | "careful" | "second";
+  reply: MarkReply;
+  marks: MarkResult;
+  /** Its marks contradicted its own comments, so it marked again; and they still did. */
+  remarked: boolean;
+  contradicts: boolean;
+}
+
+const judged = (scheme: MarkingScheme, maxMarks: number, r: MarkReply) =>
+  applyJudgement(scheme, maxMarks, r.judgements, { finalAnswerCorrect: r.finalAnswerCorrect ?? undefined, workingShown: r.workingShown ?? undefined });
+
+/**
+ * Marks an answer once (null when the AI gave nothing usable). Marks that contradict the marker's own
+ * comments are marked once more, saying where.
+ */
+async function markOnce(ai: AnswerCheckAi, call: JsonCall, scheme: MarkingScheme, maxMarks: number): Promise<Marking | null> {
+  const by = call.model === ANSWER_CHECK_SECOND_MODEL ? "second" : call.effort === "high" ? "careful" : "quick";
+  const replied = await ai.json(call);
+  if (!replied) return null;
+  let reply = parseMark(replied);
+  let marks = judged(scheme, maxMarks, reply);
+  const contradictions = markContradictions(reply, marks);
+  if (!contradictions.length) return { by, reply, marks, remarked: false, contradicts: false };
+  const again = await ai.json({ ...call, user: `${call.user}\n\n${remarkNote(contradictions)}` }).catch(() => null);
+  if (again) {
+    reply = parseMark(again);
+    marks = judged(scheme, maxMarks, reply);
+  }
+  return { by, reply, marks, remarked: true, contradicts: !again || markContradictions(reply, marks).length > 0 };
+}
+
 export async function runCheck(checkId: string, opts: { reread?: boolean } = {}): Promise<void> {
   const started = Date.now();
   const [check] = await db.select().from(answerChecks).where(eq(answerChecks.id, checkId));
@@ -444,9 +503,16 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
     let reading = check.reading as any;
     if (readText === null || readText === undefined || (opts.reread && !fromPaper)) {
       const photos = await readerPhotos(pageBytes);
-      const replied = await ai.json({ model: ANSWER_CHECK_MODEL, system: READ_SYSTEM, user: readUserText(ctx, pageBytes.length, photos.strips), images: photos.images.map(b => toDataUrl(b)), imageLabels: photos.labels, maxTokens: 3000 });
+      const readCall = { model: ANSWER_CHECK_MODEL, system: READ_SYSTEM, user: readUserText(ctx, pageBytes.length, photos.strips), images: photos.images.map(b => toDataUrl(b)), imageLabels: photos.labels, maxTokens: 3000 };
+      const replied = await ai.json(readCall);
       if (!replied) return fail("The AI could not read the photos. Try again.", ai.costUsd());
-      const read = parseRead(replied);
+      let read = parseRead(replied);
+      // Hard to read: another model reads it too, and the surer of the two readings is kept.
+      if (!read.blank && doubtfulReading([read])) {
+        const second = await ai.json({ ...readCall, model: ANSWER_CHECK_SECOND_MODEL }).catch(() => null);
+        const other = second ? parseRead(second) : null;
+        if (other && !other.blank && readingDoubt([other]) < readingDoubt([read])) read = other;
+      }
       readText = read.text;
       reading = read;
       await db.update(answerChecks).set({ readText, reading: read as any, updatedAt: new Date() }).where(eq(answerChecks.id, checkId));
@@ -460,7 +526,9 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
     let markReply = parseMark(null);
     let drawingExpected = false;
     let marksDisagree = false;
-    const judgementOpts = (r: typeof markReply) => ({ finalAnswerCorrect: r.finalAnswerCorrect ?? undefined, workingShown: r.workingShown ?? undefined });
+    let markings: Marking[] = [];
+    let sure: { score: number; why: string[] } = { score: 1, why: [] };
+    let settled = true;
     if (notAttempted) {
       markReply = { ...markReply, confidence: 1, feedback: { summary: "This question was not attempted.", improvement: "", revision: "Revise this topic and try the question." }, teacherComment: "Not attempted" };
     } else if (!blank) {
@@ -470,45 +538,61 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
       drawingExpected = scheme.needsDrawing === true || own.answer.length > 0;
       const lookAtPages = drawingExpected || mentionsDrawing(readText);
       const studentPages = lookAtPages ? pageBytes.slice(0, MAX_PAGES_FOR_DRAWING) : [];
-      const markCall = {
+      const markCall: JsonCall = {
         model: ANSWER_CHECK_MODEL,
         system: markSystem(settings),
         user: markUserText(ctx, scheme, rules, readText || "", { question: own.question.length, answer: own.answer.length, pages: studentPages.length }),
         images: [...own.question, ...own.answer, ...studentPages].map(b => toDataUrl(b)),
         maxTokens: 2500,
       };
-      const replied = await ai.json(markCall);
-      if (!replied) return fail("The AI could not mark this answer. Try again.", ai.costUsd());
-      markReply = parseMark(replied);
-      // Marks that contradict the marker's own comments: mark once more, saying where; a second
-      // contradiction goes to a teacher.
-      const contradictions = markContradictions(markReply, applyJudgement(scheme, ctx.maxMarks, markReply.judgements, judgementOpts(markReply)));
-      if (contradictions.length) {
-        const again = await ai.json({ ...markCall, user: `${markCall.user}\n\n${remarkNote(contradictions)}` }).catch(() => null);
-        if (again) markReply = parseMark(again);
-        marksDisagree = !again || markContradictions(markReply, applyJudgement(scheme, ctx.maxMarks, markReply.judgements, judgementOpts(markReply))).length > 0;
+      const first = await markOnce(ai, markCall, scheme, ctx.maxMarks);
+      if (!first) return fail("The AI could not mark this answer. Try again.", ai.costUsd());
+      markings = [first];
+      const sureOf = (m: Marking) => markingConfidence({
+        aiConfidence: m.reply.confidence, alternativeMethod: m.reply.alternativeMethod, finalAnswerCorrect: m.reply.finalAnswerCorrect,
+        total: m.marks.total, maxMarks: ctx.maxMarks, remarked: m.remarked, contradicts: m.contradicts, legibility, unclearCount,
+        drawing: drawingExpected || (m.reply.drawing.status !== "none" && m.reply.drawing.status !== "missing"),
+      });
+      sure = sureOf(first);
+      // In doubt: marked again by the same model thinking harder, then, if the two differ, by another
+      // model. A marking that can't be made leaves the ones there are.
+      if (sure.score < settings.recheckBelow) {
+        const careful = await markOnce(ai, { ...markCall, effort: "high" }, scheme, ctx.maxMarks).catch(() => null);
+        if (careful) markings.push(careful);
+        if (careful && careful.marks.total !== first.marks.total) {
+          const other = await markOnce(ai, { ...markCall, model: ANSWER_CHECK_SECOND_MODEL, effort: "low" }, scheme, ctx.maxMarks).catch(() => null);
+          if (other) markings.push(other);
+        }
       }
+      const { use, agreed } = settleMarkings(markings.map(m => m.marks.total));
+      settled = agreed;
+      markReply = markings[use].reply;
+      marksDisagree = markings[use].contradicts;
+      if (markings.length > 1) sure = { ...sure, score: !agreed ? CONFIDENCE_DIFFER : markings.length === 2 ? CONFIDENCE_AGREED : CONFIDENCE_DECIDED };
+      if (marksDisagree) sure = { ...sure, score: Math.min(sure.score, CONFIDENCE_DIFFER) };
     } else {
       markReply = { ...markReply, confidence: 1, feedback: { summary: "No answer was found on the page.", improvement: "", revision: "" } };
     }
-    const marks = applyJudgement(scheme, ctx.maxMarks, markReply.judgements, judgementOpts(markReply));
+    const marks = judged(scheme, ctx.maxMarks, markReply);
 
     // 3. AI-written estimate (separate from the marks; short answers are not judged).
     const words = wordCount(readText || "");
     let aiWritten: Record<string, unknown> = { percent: null, status: "inconclusive", confidence: "low", signals: ["The answer is too short to judge."], words };
     if (!blank && words >= 15) {
-      const replied = await ai.json({ model: ANSWER_CHECK_MINI_MODEL, system: AI_WRITTEN_SYSTEM, user: aiWrittenUserText(ctx, readText || ""), maxTokens: 400 });
+      const replied = await ai.json({ model: ANSWER_CHECK_MODEL, system: AI_WRITTEN_SYSTEM, user: aiWrittenUserText(ctx, readText || ""), maxTokens: 400 });
       const est = parseAiWritten(replied);
       aiWritten = { ...est, status: aiWrittenStatus(est.percent, words), words };
     }
 
     // 4. Does a teacher need to look?
     const reasons = notAttempted
-      ? (reading?.unplacedOnSheet ? ["Parts of the sheet weren't matched to any question — check this question really wasn't answered."] : [])
-      : teacherReasons({ legibility, unclearCount, blank, confidence: markReply.confidence }, settings);
+      ? (reading?.maybeOnPage ? [`An answer to this question seems to be on page ${reading.maybeOnPage}, but the AI could not read it apart from the others — please check.`]
+        : reading?.unplacedOnSheet ? ["Parts of the sheet weren't matched to any question — check this question really wasn't answered."] : [])
+      : teacherReasons({ legibility, unclearCount, blank, confidence: sure.score }, settings);
     if (fromPaper && !notAttempted && typeof reading?.matchConfidence === "number" && reading.matchConfidence < MATCH_CONFIDENCE_MIN) {
       reasons.push("The AI isn't sure this part of the sheet is the answer to this question.");
     }
+    if (!settled) reasons.push(`The AI marked this answer ${markings.length === 2 ? "twice" : "three times"} and got different marks (${markings.map(m => m.marks.total).join(", ")}).`);
     if (marksDisagree) reasons.push("The AI's marks and its own comments don't agree on this answer — please check the marks.");
     // Drawings: the AI's judgement of a diagram is a first opinion until a teacher confirms it.
     const drew = markReply.drawing.status !== "none" && markReply.drawing.status !== "missing";
@@ -542,7 +626,9 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
         missingConcepts: markReply.missingConcepts,
         missingKeywords: markReply.missingKeywords,
         alternativeMethod: markReply.alternativeMethod,
-        confidence: markReply.confidence,
+        confidence: sure.score,
+        confidenceWhy: sure.why,
+        markings: markings.map(m => ({ by: m.by, total: m.marks.total })),
         confidenceNote: markReply.confidenceNote,
         feedback: markReply.feedback,
         teacherComment: markReply.teacherComment,
@@ -554,7 +640,7 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
       aiWritten: aiWritten as any,
       teacherReasons: reasons,
       history: history as any,
-      model: ANSWER_CHECK_MODEL,
+      model: markings.some(m => m.by === "second") ? `${ANSWER_CHECK_MODEL} + ${ANSWER_CHECK_SECOND_MODEL}` : ANSWER_CHECK_MODEL,
       costUsd: String(n(check.costUsd) + ai.costUsd()),
       durationMs: Date.now() - started,
       error: null,

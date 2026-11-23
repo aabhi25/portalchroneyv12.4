@@ -63,6 +63,8 @@ export interface AnswerCheckSettings {
   legibilityThreshold: number;
   /** Below this marking confidence (0–1) the answer goes to a teacher. */
   confidenceThreshold: number;
+  /** Below this marking confidence (0–1) the answer is marked again, more carefully. */
+  recheckBelow: number;
   /** An answer with a drawing (a diagram, graph, construction) goes to a teacher to confirm the marks. */
   drawingsToTeacher: boolean;
   feedbackTone: FeedbackTone;
@@ -108,6 +110,7 @@ export function defaultAnswerCheckSettings(): AnswerCheckSettings {
     subjectRules: JSON.parse(JSON.stringify(DEFAULT_SUBJECT_RULES)),
     legibilityThreshold: 0.6,
     confidenceThreshold: 0.5,
+    recheckBelow: 0.9,
     drawingsToTeacher: true,
     feedbackTone: { ...DEFAULT_FEEDBACK_TONE },
   };
@@ -154,6 +157,7 @@ export function resolveAnswerCheckSettings(raw: unknown): AnswerCheckSettings {
     subjectRules,
     legibilityThreshold: clamp(num(r.legibilityThreshold, d.legibilityThreshold), 0, 1),
     confidenceThreshold: clamp(num(r.confidenceThreshold, d.confidenceThreshold), 0, 1),
+    recheckBelow: clamp(num(r.recheckBelow, d.recheckBelow), 0, 1),
     drawingsToTeacher: typeof r.drawingsToTeacher === "boolean" ? r.drawingsToTeacher : d.drawingsToTeacher,
     feedbackTone,
   };
@@ -372,6 +376,78 @@ export function aiWrittenStatus(percent: number, words: number): AiWrittenStatus
   if (percent >= 60) return "possibly_ai";
   if (percent <= 30) return "likely_human";
   return "inconclusive";
+}
+
+// ---- How sure the marks are --------------------------------------------------------------------
+// The AI's own figure is no guide: on 255 markings with known fair marks it said under 90 % for only
+// 3 of the 16 unfair ones (it is about 98 % sure either way). Worked out from what it did, 15 of
+// the 16 came out under 90 %, with 1 fair marking in 6.
+
+export interface ConfidenceInput {
+  /** The AI's own figure (0–1). */
+  aiConfidence: number;
+  alternativeMethod: boolean;
+  finalAnswerCorrect: boolean | null;
+  total: number;
+  maxMarks: number;
+  /** Its marks contradicted its comments and it marked again; and they still did. */
+  remarked: boolean;
+  contradicts: boolean;
+  legibility: number;
+  unclearCount: number;
+  /** The answer has a drawing, or must have one. */
+  drawing: boolean;
+}
+
+/** Marks agreed on by two markings, the third included, are surer than one; markings that all differ are not. */
+export const CONFIDENCE_AGREED = 0.95;
+export const CONFIDENCE_DECIDED = 0.9;
+export const CONFIDENCE_DIFFER = 0.5;
+
+/** How sure one marking is (0–1), and what took it down. Never 1: marks are never certain. */
+export function markingConfidence(i: ConfidenceInput): { score: number; why: string[] } {
+  let score = 0.97;
+  const why: string[] = [];
+  const less = (by: number, reason: string) => { score -= by; why.push(reason); };
+  if (i.alternativeMethod) less(0.12, "The student used another method.");
+  if (i.finalAnswerCorrect === true && i.total < i.maxMarks) less(0.12, "The final answer is right, but it did not get full marks.");
+  if (i.finalAnswerCorrect === false && i.total >= i.maxMarks) less(0.3, "The final answer is wrong, but it got full marks.");
+  if (i.contradicts) less(0.35, "The marks and the AI's own comments don't agree.");
+  else if (i.remarked) less(0.12, "The marks did not fit the AI's comments at first.");
+  if (i.aiConfidence < 0.9) less(i.aiConfidence < 0.5 ? 0.5 : i.aiConfidence < 0.75 ? 0.2 : 0.1, "The AI says it is not sure.");
+  if (i.legibility < 0.8) less(i.legibility < 0.6 ? 0.2 : 0.1, "The handwriting is hard to read.");
+  if (i.unclearCount) less(Math.min(0.2, i.unclearCount * 0.08), i.unclearCount === 1 ? "One part could not be read clearly." : `${i.unclearCount} parts could not be read clearly.`);
+  if (i.drawing) less(0.12, "The answer has a drawing.");
+  return { score: Math.max(0.05, Math.round(score * 100) / 100), why };
+}
+
+/**
+ * Which of an answer's markings stands, given their totals in the order they were made (a quick one,
+ * a careful one, one by another model). Two that agree decide, the careful one for choice; three
+ * different totals are for a teacher, and the middle one is shown meanwhile.
+ */
+export function settleMarkings(totals: number[]): { use: number; agreed: boolean } {
+  const same = (a: number, b: number) => Math.abs(totals[a] - totals[b]) < 1e-9;
+  if (totals.length < 2) return { use: 0, agreed: true };
+  if (same(0, 1)) return { use: 1, agreed: true };
+  if (totals.length < 3) return { use: 1, agreed: false };
+  if (same(1, 2)) return { use: 1, agreed: true };
+  if (same(0, 2)) return { use: 2, agreed: true };
+  const middle = [0, 1, 2].sort((a, b) => totals[a] - totals[b])[1];
+  return { use: middle, agreed: false };
+}
+
+/** A reading worth doing again by another model: hard to read, or several parts unclear. */
+export function doubtfulReading(parts: Array<{ legibility: number; unclear: unknown[] }>): boolean {
+  if (!parts.length) return false;
+  const average = parts.reduce((a, p) => a + p.legibility, 0) / parts.length;
+  return average < 0.7 || parts.reduce((a, p) => a + p.unclear.length, 0) >= 3;
+}
+
+/** How doubtful a reading is, to choose between two of the same sheet (lower is better). */
+export function readingDoubt(parts: Array<{ legibility: number; unclear: unknown[] }>): number {
+  if (!parts.length) return Number.POSITIVE_INFINITY;
+  return parts.reduce((a, p) => a + p.unclear.length, 0) + 10 * (1 - parts.reduce((a, p) => a + p.legibility, 0) / parts.length);
 }
 
 // ---- When a teacher must look -----------------------------------------------------------------

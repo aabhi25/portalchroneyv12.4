@@ -164,6 +164,8 @@ export interface LocatedParts {
   places: Map<number, AnswerRegion[]>;
   /** The pages each part is really on, as it reads (as the reader gave them where nothing better is known). */
   pages: number[][];
+  /** Part number → page → the first words of the part there. */
+  begins: Array<Map<number, string>>;
 }
 
 const NOT_LETTERS = new RegExp("[^\\p{L}\\p{N}]+", "gu");
@@ -192,18 +194,47 @@ export function sameWriting(a: string, b: string): boolean {
  */
 export function partPages(part: SheetPart, notOn: number[], begins: Map<number, string>): number[] {
   const pages = part.pages.filter(p => !notOn.includes(p));
-  if (pages.length < 2) return pages;
-  const text = letters(part.text);
+  return pagePlaces(part.text, pages, begins)?.map(x => x.page) ?? pages;
+}
+
+/** Where in a part's text (among its letters and digits) each of its pages begins, in order; null unless every one is known for certain. */
+function pagePlaces(text: string, pages: number[], begins: Map<number, string>): Array<{ page: number; at: number }> | null {
+  if (pages.length < 2) return null;
+  const all = letters(text);
   const at = pages.map(p => {
     for (let words = letters(begins.get(p) ?? ""); words.length >= 6; words = words.slice(0, -1)) {
-      const k = text.indexOf(words);
-      if (k >= 0) return text.indexOf(words, k + 1) >= 0 ? -1 : k;
+      const k = all.indexOf(words);
+      if (k >= 0) return all.indexOf(words, k + 1) >= 0 ? -1 : k;
     }
     return -1;
   });
-  // Only when every page's place in the text is known for certain.
-  if (at.some(k => k < 0) || new Set(at).size !== at.length) return pages;
-  return pages.map((p, i) => ({ p, k: at[i] })).sort((a, b) => a.k - b.k).map(x => x.p);
+  if (at.some(k => k < 0) || new Set(at).size !== at.length) return null;
+  return pages.map((page, i) => ({ page, at: at[i] })).sort((a, b) => a.at - b.at);
+}
+
+/** A part's text cut where each of its pages begins, as it reads; null when that isn't known for certain. */
+export function pagePieces(text: string, pages: number[], begins: Map<number, string>): Array<{ page: number; text: string }> | null {
+  const places = pagePlaces(text, pages, begins);
+  if (!places) return null;
+  // The same places among all the characters.
+  const index: number[] = [];
+  for (let i = 0; i < text.length;) {
+    const ch = String.fromCodePoint(text.codePointAt(i)!);
+    for (let k = letters(ch).length; k > 0; k--) index.push(i);
+    i += ch.length;
+  }
+  const from = places.map((p, i) => (i === 0 ? 0 : index[p.at] ?? text.length));
+  return places.map((p, i) => ({ page: p.page, text: text.slice(from[i], from[i + 1] ?? text.length).trim() })).filter(p => p.text);
+}
+
+/** The parts a page nobody claimed may carry on from: the last one before it and the first one after it. */
+export function besideParts(parts: SheetPart[], page: number): Array<{ part: SheetPart; i: number }> {
+  const all = parts.map((part, i) => ({ part, i }));
+  const before = all.filter(x => x.part.pages.some(q => q < page));
+  const nearest = Math.max(...before.flatMap(x => x.part.pages.filter(q => q < page)));
+  const last = before.filter(x => x.part.pages.includes(nearest)).pop();
+  const next = all.find(x => x.part.pages.some(q => q > page) && x !== last);
+  return [last, next].filter((x): x is { part: SheetPart; i: number } => !!x);
 }
 
 /**
@@ -212,21 +243,25 @@ export function partPages(part: SheetPart, notOn: number[], begins: Map<number, 
  */
 export async function locateParts(ai: AnswerCheckAi, pages: Buffer[], parts: SheetPart[]): Promise<LocatedParts> {
   const perPage = await Promise.all(pages.map(async (page, p) => {
-    const here = parts.map((part, i) => ({ part, i })).filter(x => x.part.pages.includes(p + 1) && !isRepeat(parts, x.i, p + 1));
+    const listed = parts.map((part, i) => ({ part, i })).filter(x => x.part.pages.includes(p + 1) && !isRepeat(parts, x.i, p + 1));
+    // A page the reader gave to no part (it sometimes leaves off a long answer's last page): whose is it?
+    const unclaimed = !parts.some(part => part.pages.includes(p + 1));
+    const here = unclaimed ? besideParts(parts, p + 1) : listed;
     if (!here.length) return null;
     try {
       const rows = await writingRows(page);
       const strips = await numberedStrips(page, rows.edges);
       const reply = await ai.json({
         model: ANSWER_CHECK_MODEL,
+        effort: "low",
         system: LOCATE_SYSTEM,
-        user: locateUserText(here.map(x => ({ id: x.i, text: x.part.text, label: x.part.label, continues: x.part.pages[0] !== p + 1, goesOn: x.part.pages.length > 1 })), rows.edges.length - 1),
+        user: locateUserText(here.map(x => ({ id: x.i, text: x.part.text, label: x.part.label, continues: x.part.pages[0] !== p + 1, goesOn: x.part.pages.length > 1, unsure: unclaimed || x.part.pagesUnsure })), rows.edges.length - 1),
         images: strips.map(b => toDataUrl(b)),
         imageLabels: strips.map((_, i) => `Strip ${i + 1} of ${strips.length}`),
         maxTokens: 1200,
       });
       const found = parseLocate(reply, here.map(x => x.i));
-      return { page: p + 1, rows, ...found };
+      return { page: p + 1, rows, only: listed.length === 1 && parts[listed[0].i].pages.length === 1 ? listed[0].i : null, ...found };
     } catch (err: any) {
       console.warn(`[Answer Check] answers on page ${p + 1} not located:`, err?.message || err);
       return null;
@@ -239,16 +274,17 @@ export async function locateParts(ai: AnswerCheckAi, pages: Buffer[], parts: She
     const borrowed = x.places.filter(s => {
       const words = letters(s.begins);
       const elsewhere = perPage.some(o => o && o !== x && o.places.some(t => t.part === s.part));
+      // Words of another part on this page that its own text doesn't have are never its own.
+      if (words.length >= 8 && !letters(parts[s.part].text).includes(words) && x.places.some(o => o.part !== s.part && letters(parts[o.part].text).includes(words))) return true;
       return parts[s.part].pages.length > 1 && elsewhere && words.length >= 6 && x.places.some(o => o.part !== s.part && o.row <= s.row && parts[o.part].pages.length === 1 && letters(parts[o.part].text).includes(words));
     }).map(s => s.part);
     x.places = x.places.filter(s => !borrowed.includes(s.part));
     x.notHere = [...x.notHere, ...borrowed];
   });
-  const refined = parts.map((part, i) => partPages(
-    part,
-    perPage.flatMap(x => (x?.notHere.includes(i) ? [x.page] : [])),
-    new Map(perPage.flatMap(x => x?.places.filter(s => s.part === i).map(s => [x.page, s.begins] as [number, string]) ?? [])),
-  ));
+  // A page nobody claimed joins the pages of the part found on it.
+  const claimed = parts.map((part, i) => ({ ...part, pages: [...part.pages, ...perPage.flatMap(x => (x && !part.pages.includes(x.page) && x.places.some(s => s.part === i) ? [x.page] : []))] }));
+  const begins = parts.map((_, i) => new Map(perPage.flatMap(x => x?.places.filter(s => s.part === i).map(s => [x.page, s.begins] as [number, string]) ?? [])));
+  const refined = claimed.map((part, i) => partPages(part, perPage.flatMap(x => (x?.notHere.includes(i) ? [x.page] : [])), begins[i]));
   // A part found on none of its pages that holds the same writing as one that was found: that one's pages.
   parts.forEach((part, i) => {
     const looked = perPage.filter(x => x && part.pages.includes(x.page));
@@ -259,11 +295,12 @@ export async function locateParts(ai: AnswerCheckAi, pages: Buffer[], parts: She
   const places = new Map<number, AnswerRegion[]>();
   for (const x of perPage) {
     if (!x) continue;
-    const continues = x.places.filter(s => refined[s.part][0] !== x.page).map(s => s.part);
+    // A page with one answer on it is that answer's from its first line.
+    const continues = x.places.filter(s => refined[s.part][0] !== x.page || s.part === x.only).map(s => s.part);
     partsOnPage(x.rows, x.places, continues).forEach((place, part) => {
       if (!places.has(part)) places.set(part, []);
       places.get(part)!.push({ page: x.page, ...place });
     });
   }
-  return { places, pages: refined };
+  return { places, pages: refined, begins };
 }

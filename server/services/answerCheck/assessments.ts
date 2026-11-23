@@ -3,7 +3,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import { answerAssessments, answerMarkingSchemes, answerPapers, type AnswerAssessmentRow } from "@shared/schema";
 import { accuracySummary, QUESTION_KINDS, type QuestionKind } from "@shared/answerCheck";
-import { ANSWER_CHECK_MODEL, AnswerCheckAiError } from "./ai";
+import { ANSWER_CHECK_SECOND_MODEL, AnswerCheckAiError } from "./ai";
 import { answerCheckAi, currentScheme, prepareQuestion, schemeView } from "./engine";
 import { IMPORT_SYSTEM, parseImport, type ImportedPaper, type ImportedQuestion } from "./prompts";
 import { isCmsQuestionJson, parseCmsQuestionFiles } from "./cmsQuestions";
@@ -359,7 +359,8 @@ export async function importQuestions(businessAccountId: string, input: { text?:
   const ai = await answerCheckAi(businessAccountId);
   if (images.length > 10) images.splice(10);
   const reply = await ai.json({
-    model: ANSWER_CHECK_MODEL,
+    model: ANSWER_CHECK_SECOND_MODEL,
+    effort: "low",
     system: IMPORT_SYSTEM,
     user: text ? `The question paper${images.length ? " (text, then photos)" : ""}:\n"""\n${text.slice(0, 60000)}\n"""` : "The question paper is in the photos.",
     images: images.map(b => toDataUrl(b)),

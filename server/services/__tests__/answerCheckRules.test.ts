@@ -13,7 +13,11 @@ import {
   correctnessOf,
   defaultAnswerCheckSettings,
   normalizeScheme,
+  doubtfulReading,
+  markingConfidence,
+  readingDoubt,
   resolveAnswerCheckSettings,
+  settleMarkings,
   roundMarks,
   schemeProblems,
   schemeTotal,
@@ -159,6 +163,20 @@ console.log("AI-written estimate");
 
 console.log("When a teacher must look");
 {
+  {
+    const base = { aiConfidence: 0.98, alternativeMethod: false, finalAnswerCorrect: true as boolean | null, total: 3, maxMarks: 3, remarked: false, contradicts: false, legibility: 0.95, unclearCount: 0, drawing: false };
+    const plain = markingConfidence(base);
+    expect(plain.score >= 0.95 && plain.score < 1 && plain.why.length === 0, "a plain right answer is sure, never 100 %", plain);
+    expect(markingConfidence({ ...base, finalAnswerCorrect: false, total: 1 }).score >= 0.9, "a wrong answer that lost marks is sure too");
+    const doubts: Array<[string, object]> = [["another method", { alternativeMethod: true }], ["right answer, marks lost", { total: 2 }], ["wrong answer, full marks", { finalAnswerCorrect: false }], ["marked again", { remarked: true }], ["marks against comments", { contradicts: true, remarked: true }], ["AI unsure", { aiConfidence: 0.85 }], ["hard to read", { legibility: 0.7 }], ["a drawing", { drawing: true }], ["parts unclear", { unclearCount: 1 }]];
+    for (const [what, d] of doubts) { const r = markingConfidence({ ...base, ...d }); expect(r.score < 0.9 && r.why.length === 1, `below 90 %: ${what}`, r); }
+    expect(markingConfidence({ ...base, alternativeMethod: true, contradicts: true, aiConfidence: 0.1, legibility: 0.1, unclearCount: 9, drawing: true, finalAnswerCorrect: false }).score === 0.05, "never below 5 %");
+    expect(JSON.stringify([[3], [3, 3], [2, 3], [2, 3, 3], [2, 3, 2], [1, 3, 2], [0.5, 1, 1.5]].map(settleMarkings)) === JSON.stringify([{ use: 0, agreed: true }, { use: 1, agreed: true }, { use: 1, agreed: false }, { use: 1, agreed: true }, { use: 2, agreed: true }, { use: 2, agreed: false }, { use: 1, agreed: false }]), "two markings that agree decide; else the middle one");
+    const part = (legibility: number, unclear: number) => ({ legibility, unclear: Array(unclear).fill({}) });
+    expect(!doubtfulReading([part(0.95, 0), part(0.6, 1)]) && doubtfulReading([part(0.6, 0), part(0.7, 0)]) && doubtfulReading([part(0.95, 2), part(0.95, 1)]) && !doubtfulReading([]), "a reading is doubtful when hard to read or with three unclear parts");
+    expect(readingDoubt([part(0.9, 0)]) < readingDoubt([part(0.6, 0)]) && readingDoubt([part(0.9, 0)]) < readingDoubt([part(0.9, 2)]) && readingDoubt([]) === Infinity, "the surer reading is less doubtful");
+    expect(resolveAnswerCheckSettings({}).recheckBelow === 0.9 && resolveAnswerCheckSettings({ recheckBelow: 4 }).recheckBelow === 1, "the recheck level: 90 % unless set");
+  }
   const s = { legibilityThreshold: 0.6, confidenceThreshold: 0.5 };
   expect(teacherReasons({ legibility: 0.9, unclearCount: 0, blank: false, confidence: 0.8 }, s).length === 0, "clear writing, confident marks → no teacher");
   expect(teacherReasons({ legibility: 0.4, unclearCount: 1, blank: false, confidence: 0.8 }, s)[0].includes("hard to read"), "hard-to-read writing → teacher");

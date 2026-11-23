@@ -8,7 +8,7 @@ import { getChunks, type ChunkPage, type ChunkQueryOptions, type ContentChunkIte
 import { getMongoChunks } from "../topscholar/mongoContentReader";
 import { chapterNamesForCpIds, listSyncedScopeMetadata, syncedCpIdsForScope, type StoredCurriculumScope } from "../topscholar/testerContentScopes";
 import { htmlToText } from "../topscholar/htmlContent";
-import { ANSWER_CHECK_MODEL, type AnswerCheckAi } from "./ai";
+import { ANSWER_CHECK_SECOND_MODEL, type AnswerCheckAi } from "./ai";
 import { guessQuestionKind, isObjectiveQuestion, parseChapterQuestions, parseQuestionFromNotes, QUESTION_FROM_NOTES_SYSTEM, QUESTIONS_FROM_CHAPTER_SYSTEM, questionFromNotesUserText, questionsFromChapterUserText, type QuestionAsk } from "./prompts";
 
 /**
@@ -232,7 +232,7 @@ export async function pickRandomQuestion(businessAccountId: string, settings: An
     const kind = settings.questionKinds[Math.floor(rand() * settings.questionKinds.length)];
     const maxMarks = suggestMaxMarks(kind, "", settings);
     const reply = await ai.json({
-      model: ANSWER_CHECK_MODEL,
+      model: ANSWER_CHECK_SECOND_MODEL,
       system: QUESTION_FROM_NOTES_SYSTEM,
       user: questionFromNotesUserText({ ...scope, chapter: notesChapter }, kind, maxMarks, text),
       maxTokens: 1500,
@@ -368,7 +368,7 @@ export async function draftQuestionsFromCurriculum(
 
   const avoid = opts.avoid || [];
   const reply = await ai.json({
-    model: ANSWER_CHECK_MODEL,
+    model: ANSWER_CHECK_SECOND_MODEL,
     system: QUESTIONS_FROM_CHAPTER_SYSTEM,
     user: questionsFromChapterUserText(scope, asks, material, { instructions: opts.instructions, avoid }),
     maxTokens: Math.min(16000, 1500 + wanted * 700),

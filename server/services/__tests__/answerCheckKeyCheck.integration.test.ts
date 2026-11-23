@@ -31,14 +31,16 @@ async function main() {
   // Scheme replies come from a queue; the marker gives full marks except to steps labelled UNEARNED.
   const schemes: any[] = [];
   const markReplies: any[] = [];
-  const calls: Array<{ kind: "scheme" | "mark" | "read" | "aiWritten"; user: string }> = [];
+  const calls: Array<{ kind: "scheme" | "gaps" | "mark" | "read" | "aiWritten"; user: string; model: string; effort?: string }> = [];
+  const gapReplies: any[] = [];
   let markBroken = false;
   const prompts = await import("../answerCheck/prompts");
   engine.setAnswerCheckAiFactoryForTests(async () => ({
     costUsd: () => 0,
     async json(call) {
-      const kind = call.system.startsWith("You are a senior board examiner") ? "scheme" : call.system === prompts.READ_SYSTEM ? "read" : call.system === prompts.AI_WRITTEN_SYSTEM ? "aiWritten" : "mark";
-      calls.push({ kind, user: call.user });
+      const kind = call.system.startsWith("You are a senior board examiner") ? "scheme" : call.system === prompts.KEY_GAPS_SYSTEM ? "gaps" : call.system === prompts.READ_SYSTEM ? "read" : call.system === prompts.AI_WRITTEN_SYSTEM ? "aiWritten" : "mark";
+      calls.push({ kind, user: call.user, model: call.model, effort: call.effort });
+      if (kind === "gaps") return gapReplies.shift() ?? { missing: [] };
       if (kind === "scheme") return schemes.shift() ?? null;
       if (kind === "read") return { text: "Angle of reflection = 30°", legibility: 0.95, unclear: [] };
       if (kind === "aiWritten") return { percent: 5, confidence: "low", signals: [] };
@@ -58,7 +60,7 @@ async function main() {
     board: "Maharashtra Board", medium: "English", grade: "9", subject: "Mathematics", chapter: null, maxMarks,
   }, null);
   const steps = (row: any) => engine.schemeOf(row).steps;
-  const reset = () => { calls.length = 0; schemes.length = 0; markReplies.length = 0; markBroken = false; };
+  const reset = () => { calls.length = 0; schemes.length = 0; markReplies.length = 0; gapReplies.length = 0; markBroken = false; };
 
   console.log("A key the model answer earns in full");
   {
@@ -123,6 +125,30 @@ async function main() {
     expect(count("scheme") === 0 && count("mark") === 0 && again.version === 1, "a question that already has its key is neither rewritten nor checked again");
   }
 
+  console.log("A key that stops short of the model answer");
+  {
+    const short = { steps: [{ id: "s1", label: "Writes 72/100", marks: 1 }, { id: "s2", label: "Reduces it to 36/50", marks: 1 }] };
+    const full = { steps: [{ id: "s1", label: "Reduces it to 36/50", marks: 1 }, { id: "s2", label: "Reduces it to 18/25", marks: 1 }] };
+    reset();
+    schemes.push(short, full);
+    gapReplies.push({ missing: ["the final ratio 18/25 is not asked for"] }, { missing: [] });
+    let row = await prepare("custom:g1", "72/100 = 36/50 = 18/25", 2);
+    expect(steps(row).map(s => s.label).join("|") === "Reduces it to 36/50|Reduces it to 18/25" && count("gaps") === 2, "a key that never asks for the final answer is written again", steps(row));
+    const again = calls.filter(c => c.kind === "scheme")[1];
+    expect(again.user.includes("stops short") && again.user.includes("the final ratio 18/25 is not asked for") && again.user.includes("Reduces it to 36/50"), "the writer is told what is missing and shown its draft");
+    expect(calls.filter(c => c.kind === "scheme").every(c => c.model === "gpt-6.1-terra") && calls.filter(c => c.kind === "gaps").every(c => c.model === "gpt-6-luna" && c.effort === "high"), "keys are written by the second model and checked by the everyday one");
+    reset();
+    schemes.push(short, { steps: [{ id: "s1", label: "UNEARNED reason", marks: 2 }] });
+    gapReplies.push({ missing: ["the final ratio"] }, { missing: [] });
+    row = await prepare("custom:g2", "72/100 = 36/50 = 18/25", 2);
+    expect(steps(row)[1].label === "Reduces it to 36/50", "a rewrite the model answer does not earn is not taken", steps(row));
+    reset();
+    schemes.push(full);
+    gapReplies.push(null);
+    row = await prepare("custom:g3", "18/25", 2);
+    expect(count("scheme") === 1 && steps(row).length === 2, "a check that could not be made leaves the key");
+  }
+
   console.log("Marks and comments must agree");
   {
     const sharp = (await import("sharp")).default;
@@ -141,13 +167,13 @@ async function main() {
     const wrongKept = { steps: [{ stepId: "s1", awarded: 0, comment: "No calculation shown." }, { stepId: "s2", awarded: 1, comment: "Final answer given with unit, but value is wrong." }], finalAnswerCorrect: false, confidence: 1, feedback: { summary: "Not correct." } };
     const fair = { steps: [{ stepId: "s1", awarded: 0, comment: "No calculation shown." }, { stepId: "s2", awarded: 0, comment: "Final answer is wrong." }], finalAnswerCorrect: false, mistakes: ["30° instead of 60°"], confidence: 1, feedback: { summary: "Not correct." } };
 
-    const fixed = await run([wrongKept, fair]);
+    const fixed = await run([wrongKept, fair, fair]);
     const marks = calls.filter(c => c.kind === "mark");
-    expect(marks.length === 2 && marks[1].user.includes("contradicts itself") && marks[1].user.includes('"Gives the final answer: 60°" was given its full 1 mark') && marks[1].user.startsWith(marks[0].user), "a wrong final answer that kept its mark is marked once more, the marker told where it contradicts itself", marks.length);
+    expect(marks.length === 3 && marks[1].user.includes("contradicts itself") && marks[1].user.includes('"Gives the final answer: 60°" was given its full 1 mark') && marks[1].user.startsWith(marks[0].user), "a wrong final answer that kept its mark is marked once more, the marker told where it contradicts itself", marks.length);
     expect(Number(fixed.aiMarks) === 0 && fixed.status === "done" && (fixed.teacherReasons || []).length === 0, "the consistent second marking stands: 0 of 2, no teacher needed", [fixed.aiMarks, fixed.status, fixed.teacherReasons]);
 
-    const stuck = await run([wrongKept, wrongKept]);
-    expect(calls.filter(c => c.kind === "mark").length === 2 && stuck.status === "needs_teacher" && (stuck.teacherReasons || []).some(r => /don't agree/.test(r)), "still contradicting itself after one more marking → a teacher checks the marks", [stuck.status, stuck.teacherReasons]);
+    const stuck = await run([wrongKept, wrongKept, wrongKept, wrongKept]);
+    expect(calls.filter(c => c.kind === "mark").length === 4 && stuck.status === "needs_teacher" && (stuck.teacherReasons || []).some(r => /don't agree/.test(r)), "still contradicting itself after one more marking → a teacher checks the marks", [stuck.status, stuck.teacherReasons]);
 
     const clean = await run([fair]);
     expect(calls.filter(c => c.kind === "mark").length === 1 && clean.status === "done" && Number(clean.aiMarks) === 0, "a consistent marking is not repeated");

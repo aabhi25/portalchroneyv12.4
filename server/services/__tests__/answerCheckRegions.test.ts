@@ -64,8 +64,19 @@ async function main() {
   const ai = { costUsd: () => 0, async json(call: any) { asked.push(call); if (call.user.includes("Part 2")) throw new Error("busy"); return { places: [{ part: 0, row: 1 }, { part: 1, row: 4 }] }; } };
   const P = (pages: number[], text: string) => ({ label: "", pages, text, legibility: 1, unclear: [] });
   const located = await locateParts(ai, [plain, plain, plain], [P([1], "a"), P([1], "b"), P([2], "c")]);
-  expect(asked.length === 2 && asked.every(c => c.system === LOCATE_SYSTEM && c.images.length >= 1 && c.images.length === c.imageLabels.length), "one question per page with answers on it");
+  expect(asked.length === 3 && asked.every(c => c.system === LOCATE_SYSTEM && c.images.length >= 1 && c.images.length === c.imageLabels.length), "one question per page, one nobody claims too");
   expect(located.places.get(0)![0].page === 1 && located.places.get(1)![0].top > 0.5 && !located.places.has(2) && JSON.stringify(located.pages) === "[[1],[1],[2]]", "a page that fails leaves its answers without a boundary, the rest stay", Array.from(located.places));
+
+  console.log("A page the reader gave to no part");
+  const { besideParts } = await import("../answerCheck/regions");
+  const four = [P([1], "a"), P([1, 2], "b"), P([2], "c"), P([5], "d")];
+  expect(besideParts(four, 3).map(x => x.i).join() === "2,3" && besideParts(four, 6).map(x => x.i).join() === "3" && besideParts([P([2], "a")], 1).map(x => x.i).join() === "0" && besideParts([], 1).length === 0, "it may carry on the last answer before it, or begin the first after it");
+  const tailAsked: any[] = [];
+  const tail = await locateParts({ costUsd: () => 0, async json(call: any) { tailAsked.push(call.user); return call.user.includes("may or may not") ? { places: [{ part: 0, row: 1, begins: "ii) LHS = (a-4c)" }] } : { places: [{ part: 0, row: 1, begins: "169775 a, b, c are" }] }; } }, [plain, plain], [P([1], "169775 a, b, c are in continued proportion\nii) LHS = (a-4c)/(a-2b)")]);
+  expect(JSON.stringify(tail.pages) === "[[1,2]]" && tail.places.get(0)!.map(r => r.page).join() === "1,2" && tail.places.get(0)![1].top < 0.11, "the answer whose last lines are on it gets that page", tail.pages);
+  expect(tailAsked.some(u => u.includes("ii) LHS = (a-4c)/(a-2b)") && u.includes("may or may not have writing on this page")), "the answer is shown to its end");
+  const stray = await locateParts({ costUsd: () => 0, async json(call: any) { return call.user.includes("may or may not") ? { places: [], notHere: [0] } : { places: [{ part: 0, row: 1, begins: "a" }] }; } }, [plain, plain], [P([1], "a")]);
+  expect(JSON.stringify(stray.pages) === "[[1]]", "a page that is nobody's stays so (rough work)", stray.pages);
 
   console.log("The pages an answer is on");
   const { isRepeat, partPages } = await import("../answerCheck/regions");

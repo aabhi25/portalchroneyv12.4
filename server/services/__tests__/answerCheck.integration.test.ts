@@ -34,7 +34,7 @@ async function main() {
 
   // ---- Stand-in AI: replies are queued per kind; every call is recorded. ----
   const queues: Record<Kind, Array<Record<string, any> | null>> = { read: [], scheme: [], mark: [], aiWritten: [], practice: [], question: [] };
-  const calls: Array<{ kind: Kind; model: string; images: number; temperature?: number; user: string }> = [];
+  const calls: Array<{ kind: Kind; model: string; images: number; temperature?: number; effort?: string; user: string }> = [];
   const kindOf = (system: string): Kind =>
     system === prompts.READ_SYSTEM ? "read"
     : system === prompts.AI_WRITTEN_SYSTEM ? "aiWritten"
@@ -48,7 +48,7 @@ async function main() {
       costUsd: () => spent,
       async json(call) {
         const kind = kindOf(call.system);
-        calls.push({ kind, model: call.model, images: call.images?.length || 0, temperature: call.temperature, user: call.user });
+        calls.push({ kind, model: call.model, images: call.images?.length || 0, temperature: call.temperature, effort: call.effort, user: call.user });
         spent += 0.001;
         const q = queues[kind];
         // The AI-written estimate is asked for on every answer of 15+ words; default: human.
@@ -79,7 +79,7 @@ async function main() {
     { stepId: "s3", awarded: 1, comment: "" }, { stepId: "s4", awarded: 1, comment: "" },
     { stepId: "s5", awarded: 0, comment: "Final value x = 3 not written" },
   ], finalAnswerCorrect: false, workingShown: true, correctPoints: ["Correct method"], mistakes: [], missingConcepts: [], missingKeywords: ["x = 3"],
-    alternativeMethod: false, confidence: 0.85, confidenceNote: "", feedback: { summary: "Good attempt! Your working is correct.", improvement: "Write the final value of x clearly.", revision: "" }, teacherComment: "Good working — finish with x = 3." };
+    alternativeMethod: false, confidence: 0.95, confidenceNote: "", feedback: { summary: "Good attempt! Your working is correct.", improvement: "Write the final value of x clearly.", revision: "" }, teacherComment: "Good working — finish with x = 3." };
 
   console.log("Settings");
   {
@@ -193,7 +193,7 @@ async function main() {
     ] });
     const light = await questions.draftQuestionsFromCurriculum(B, draftAi as any, { ...sci, chapter: "Light" }, asks, { avoid: ["Explain refraction of light with one example."] });
     const lastDraft = calls.filter(c => c.kind === "draft").pop()!;
-    expect(lastDraft.model === "gpt-4.1" && lastDraft.user.includes("Snell's law: n1 sin i") && lastDraft.user.includes("### Chapter: Light"), "GPT-4.1 is given the chapter's own notes", lastDraft.user.slice(0, 300));
+    expect(lastDraft.model === "gpt-6.1-terra" && lastDraft.user.includes("Snell's law: n1 sin i") && lastDraft.user.includes("### Chapter: Light"), "the question writer is given the chapter's own notes", lastDraft.user.slice(0, 300));
     expect(!lastDraft.user.includes("Ohm's law"), "only the chosen chapter's content");
     expect(lastDraft.user.includes("- Explain refraction of light with one example."), "questions already in the paper are passed so they aren't repeated");
     expect(light.questions.length === 3 && light.questions.every(q => q.source === "generated" && q.questionKey.startsWith("gen:") && q.chapter === "Light" && q.grade === "10" && q.subject === "Science"), "3 questions labelled as AI-written, with their class and chapter", light.questions);
@@ -238,7 +238,7 @@ async function main() {
     const before = callsOf("scheme");
     const same = await engine.prepareQuestion(B, question, null);
     expect(same.id === scheme.id && callsOf("scheme") === before, "the same question again → the saved scheme, no AI call");
-    expect(calls.find(c => c.kind === "scheme")?.model === "gpt-4.1", "schemes are drafted by GPT-4.1");
+    expect(calls.find(c => c.kind === "scheme")?.model === "gpt-6.1-terra", "schemes are drafted by the second model");
     queues.scheme.push({ ...linearScheme, steps: [{ id: "s1", label: "Method", marks: 2 }, { id: "s2", label: "Answer", marks: 2 }] });
     const four = await engine.prepareQuestion(B, { ...question, maxMarks: 4 }, null);
     expect(four.version === 2 && Number(four.maxMarks) === 4, "changing max marks drafts a new version", { v: four.version, m: four.maxMarks });
@@ -272,10 +272,10 @@ async function main() {
     const aiw = row.aiWritten as any;
     expect(aiw.status === "inconclusive" && aiw.percent === 80, "a short answer is never called AI-written, even at 80 %", aiw);
     const readCall = calls.filter(c => c.kind === "read").pop()!;
-    expect(readCall.images >= 2 && readCall.user.includes("show the 2 pages") && readCall.model === "gpt-4.1" && !readCall.user.includes("Solve 2x + 4 = 10") && readCall.user.includes("Mathematics"), "both photos go to GPT-4.1 (as enlarged strips) with the subject, not the question", readCall);
+    expect(readCall.images >= 2 && readCall.user.includes("show the 2 pages") && readCall.model === "gpt-6-luna" && !readCall.user.includes("Solve 2x + 4 = 10") && readCall.user.includes("Mathematics"), "both photos go to the everyday model (as enlarged strips) with the subject, not the question", readCall);
     expect(calls.filter(c => c.kind === "mark").pop()?.user.includes("[s5] States x = 3 — 1 mark"), "the marker sees the scheme with step ids");
-    expect(calls.filter(c => c.kind === "aiWritten").pop()?.model === "gpt-4.1-mini", "the AI-written estimate uses GPT-4.1 mini");
-    expect(Number(row.costUsd) > 0.0029 && (row.durationMs ?? -1) >= 0 && row.model === "gpt-4.1", "cost, time and model are recorded", { cost: row.costUsd, ms: row.durationMs });
+    expect(calls.filter(c => c.kind === "aiWritten").pop()?.model === "gpt-6-luna", "the AI-written estimate uses the everyday model");
+    expect(Number(row.costUsd) > 0.0029 && (row.durationMs ?? -1) >= 0 && row.model === "gpt-6-luna", "cost, time and model are recorded", { cost: row.costUsd, ms: row.durationMs });
     const imgs = await db.select().from(schema.answerCheckImages).where(eq(schema.answerCheckImages.checkId, checkId));
     expect(imgs.filter(i => i.kind === "answer").length === 2 && imgs.filter(i => i.kind === "marked").length === 1, "2 photos + 1 marked sheet stored");
     expect(imgs.every(i => !i.storageRef && i.data && i.data.length > 1000), "without a private R2 bucket the photos stay in the database");
@@ -312,6 +312,49 @@ async function main() {
     expect(unclear.row.aiMarks !== null, "the AI's marks are still shown to the teacher");
     const unsure = await run(goodRead, { ...markFourOfFive, confidence: 0.2 });
     expect(unsure.row.status === "needs_teacher" && (unsure.row.teacherReasons as string[]).some(r => r.includes("not sure")), "AI unsure of its marks → needs a teacher");
+    expect((unsure.row.result as any).markings.length === 1 && (unsure.row.result as any).confidenceWhy.some((w: string) => /not sure/.test(w)), "a second marking that can't be made leaves the first, with why it is unsure", (unsure.row.result as any).confidenceWhy);
+
+    // In doubt (another method): marked again, harder; agreeing marks stand.
+    const marksFrom = () => { const at = calls.length; return () => calls.slice(at).filter(c => c.kind === "mark"); };
+    const other = (total: number) => ({ ...markFourOfFive, finalAnswerCorrect: null, alternativeMethod: true, steps: ["s1", "s2", "s3", "s4", "s5"].map((stepId, i) => ({ stepId, awarded: Math.max(0, Math.min(1, total - i)), comment: "" })) });
+    let made = marksFrom();
+    queues.mark.push(other(4), other(4));
+    queues.read.push(goodRead);
+    const settle = async () => { const c = await engine.createUploadCheck({ businessAccountId: B, scheme, photos: [await photo("#ffffff")], studentLabel: "", userId: null }); await engine.waitForIdle(); return (await db.select().from(schema.answerChecks).where(eq(schema.answerChecks.id, c.id)))[0]; };
+    let row2 = await settle();
+    expect(made().map(c => `${c.model}/${c.effort ?? "none"}`).join() === "gpt-6-luna/none,gpt-6-luna/high", "a doubtful answer is marked again by the same model thinking harder", made().map(c => [c.model, c.effort]));
+    expect(Number(row2.aiMarks) === 4 && row2.status === "done" && (row2.result as any).confidence === 0.95 && (row2.result as any).markings.map((m: any) => `${m.by}:${m.total}`).join() === "quick:4,careful:4" && row2.model === "gpt-6-luna", "two markings that agree stand, and the score goes up", row2.result);
+    // The two differ: another model decides.
+    made = marksFrom();
+    queues.mark.push(other(3), other(5), other(5));
+    queues.read.push(goodRead);
+    row2 = await settle();
+    expect(made().length === 3 && made()[2].model === "gpt-6.1-terra" && made()[2].effort === "low" && Number(row2.aiMarks) === 5 && row2.status === "done" && (row2.result as any).confidence === 0.9 && row2.model === "gpt-6-luna + gpt-6.1-terra", "when they differ another model marks it too, and two that agree decide", [made().map(c => c.model), row2.aiMarks, row2.status]);
+    // No two agree: a teacher, with all three.
+    queues.mark.push(other(2), other(5), other(3));
+    queues.read.push(goodRead);
+    row2 = await settle();
+    expect(row2.status === "needs_teacher" && Number(row2.aiMarks) === 3 && (row2.teacherReasons as string[]).some(r => r.includes("three times and got different marks (2, 5, 3)")), "three different marks go to a teacher, the middle one shown", [row2.aiMarks, row2.teacherReasons]);
+    // The level is a setting.
+    await engine.saveSettings(B, { ...(await engine.getSettings(B)), recheckBelow: 0.5 }, null);
+    made = marksFrom();
+    queues.mark.push(other(4));
+    queues.read.push(goodRead);
+    row2 = await settle();
+    expect(made().length === 1 && (row2.result as any).confidence === 0.85, "the level below which answers are marked again can be changed", (row2.result as any).confidence);
+    await engine.saveSettings(B, { ...(await engine.getSettings(B)), recheckBelow: 0.9 }, null);
+
+    // Hard to read: another model reads it too, and the surer reading is kept.
+    const readsFrom = calls.length;
+    queues.read.push({ ...goodRead, legibility: 0.6, text: "2x + [unclear] = 10" }, { ...goodRead, legibility: 0.9, text: "2x + 4 = 10" });
+    queues.mark.push(markFourOfFive);
+    row2 = await settle();
+    expect(calls.slice(readsFrom).filter(c => c.kind === "read").map(c => c.model).join() === "gpt-6-luna,gpt-6.1-terra" && row2.readText === "2x + 4 = 10", "hard-to-read writing is read by another model too, and the surer reading kept", row2.readText);
+    queues.read.push({ ...goodRead, legibility: 0.6, text: "2x + 4 = 10" }, { ...goodRead, legibility: 0.3, text: "[unclear]" });
+    queues.mark.push(markFourOfFive);
+    row2 = await settle();
+    expect(row2.readText === "2x + 4 = 10", "…the first reading when the other is no surer");
+    queues.mark.length = 0; queues.read.length = 0;
     const blank = await run({ text: "", legibility: 0, unclear: [], blank: true }, null);
     expect(blank.row.status === "needs_teacher" && Number(blank.row.aiMarks) === 0 && !blank.marked, "blank page → 0, no marking call, teacher to look", { s: blank.row.status, m: blank.row.aiMarks });
     const many = await run({ ...goodRead, text: "[unclear] [unclear] [unclear] = 10", unclear: [] }, markFourOfFive);
@@ -389,7 +432,7 @@ async function main() {
       { level: "average", text: "2x = 6", expectedSteps: [{ stepId: "m", awarded: 2 }, { stepId: "a", awarded: 0 }], why: "Stopped early" },
     ] });
     for (const t of ["2x + 4 = 10\n2x = 6\nx = 3", "2x = 6", "2x = 14\nx = 7"]) queues.read.push({ ...goodRead, text: t });
-    for (const m of [5, 2, 0.5]) queues.mark.push({ ...markFourOfFive, steps: [{ stepId: "m", awarded: Math.min(3, m) }, { stepId: "a", awarded: Math.max(0, m - 3) }] });
+    for (const m of [5, 2, 0.5]) queues.mark.push({ ...markFourOfFive, finalAnswerCorrect: null, steps: [{ stepId: "m", awarded: Math.min(3, m) }, { stepId: "a", awarded: Math.max(0, m - 3) }] });
     const rows = await engine.createPracticeChecks({ businessAccountId: B, scheme: current, levels: ["strong", "average", "weak", "ai_copied"], userId: null, batchId: "batch-1" });
     expect(rows.length === 4 && rows.every(r => r.status === "writing"), "4 placeholder rows appear at once, 'writing'");
     await engine.waitForIdle();
@@ -401,7 +444,7 @@ async function main() {
     expect(by("ai_copied").status === "failed" && /did not write/.test(by("ai_copied").error || ""), "a level the AI skipped is marked failed, the rest go on");
     const pages = await db.select().from(schema.answerCheckImages).where(and(eq(schema.answerCheckImages.checkId, by("weak").id), eq(schema.answerCheckImages.kind, "answer")));
     expect(pages.length === 1 && (await sharp(pages[0].data as Buffer).metadata()).format === "jpeg", "the practice answer is drawn as a handwritten page");
-    expect(calls.filter(c => c.kind === "practice").pop()?.model === "gpt-4.1", "practice answers are written by GPT-4.1 (mini did not keep to the levels)");
+    expect(calls.filter(c => c.kind === "practice").pop()?.model === "gpt-6.1-terra", "practice answers are written by the second model (a small one did not keep to the levels)");
     expect(calls.filter(c => c.kind === "read").slice(-3).every(c => c.images >= 1), "the drawn pages are read like real photos (a tall page as overlapping strips)");
     expect((by("weak").result as any)?.practiceWhy === "Added 4 instead of subtracting", "why the practice answer should get its marks is kept");
   }

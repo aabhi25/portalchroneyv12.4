@@ -1,13 +1,16 @@
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../../db";
 import { answerCheckImages, answerChecks, answerMarkingSchemes, answerPapers, type AnswerMarkingSchemeRow, type AnswerPaperRow } from "@shared/schema";
-import { answerRegions, applyJudgement, movedRegions, pageOrderByQuestion, renumberPages, type AnswerRegion, type PracticeLevel } from "@shared/answerCheck";
-import { ANSWER_CHECK_MODEL, AnswerCheckAiError, type AnswerCheckAi } from "./ai";
+import { answerRegions, applyJudgement, doubtfulReading, movedRegions, pageOrderByQuestion, readingDoubt, renumberPages, type AnswerRegion, type PracticeLevel } from "@shared/answerCheck";
+import { ANSWER_CHECK_MODEL, ANSWER_CHECK_SECOND_MODEL, AnswerCheckAiError, type AnswerCheckAi } from "./ai";
 import {
   assembleAnswers,
   matchUserText,
   unplacedAnswerParts,
   MATCH_SYSTEM,
+  MISSING_SYSTEM,
+  missingUserText,
+  parseMissing,
   parsePaperRead,
   parsePieces,
   parsePractice,
@@ -17,6 +20,7 @@ import {
   practiceUserText,
   READ_PAPER_SYSTEM,
   readPaperUserText,
+  tidyParts,
   type PaperMatching,
   type PaperQuestion,
   type SheetPart,
@@ -24,7 +28,7 @@ import {
 import { checkView, contextOf, currentScheme, effectiveStatus, enqueue, answerCheckAi, redrawMarkedSheet, runCheck, schemeOf, STALE_AFTER_MS } from "./engine";
 import { deletePaperFiles, imageBytes, listPaperImages, readerPhotos, saveImage, toDataUrl } from "./images";
 import { renderPracticeSheet } from "./drawing";
-import { locateParts } from "./regions";
+import { locateParts, pagePieces } from "./regions";
 import { listQuestionPictures } from "./pictures";
 
 /**
@@ -174,7 +178,7 @@ async function writePracticePaper(paperId: string): Promise<void> {
       const q = questions[i];
       const scheme = schemes.get(q.questionKey)!;
       if (p.level === "skip") return { number: p.number, level: "skip" as const, text: "", expectedMarks: 0, why: "Not attempted on purpose", maxMarks: n(scheme.maxMarks) };
-      const reply = await ai!.json({ model: ANSWER_CHECK_MODEL, system: practiceSystem(), user: practiceUserText(contextOf(scheme), schemeOf(scheme), [p.level]), maxTokens: 2000, temperature: 0.7 });
+      const reply = await ai!.json({ model: ANSWER_CHECK_SECOND_MODEL, system: practiceSystem(), user: practiceUserText(contextOf(scheme), schemeOf(scheme), [p.level]), maxTokens: 2000, temperature: 0.7 });
       const [answer] = parsePractice(reply, [p.level]);
       if (!answer) throw new AnswerCheckAiError(`The AI did not write a practice answer for question ${p.number}. Try again.`);
       const expected = applyJudgement(schemeOf(scheme), n(scheme.maxMarks), answer.expectedSteps);
@@ -206,6 +210,8 @@ interface ReadSheet {
   read: { parts: SheetPart[]; blank: boolean; notes: string };
   matching: PaperMatching;
   places: Map<number, AnswerRegion[]>;
+  /** Questions with no answer that seem to be answered on a page after all. */
+  maybeOn: Map<string, number>;
 }
 
 /**
@@ -213,9 +219,9 @@ interface ReadSheet {
  * as overlapping strips, so small handwriting reaches the AI at full sharpness), which question each
  * answers, and where each is on its pages. A plain reason when the AI couldn't.
  */
-async function readSheet(ai: AnswerCheckAi, ctx: ReturnType<typeof contextOf>, pages: Buffer[], questions: PaperQuestion[]): Promise<ReadSheet | string> {
+async function readSheet(ai: AnswerCheckAi, ctx: ReturnType<typeof contextOf>, pages: Buffer[], questions: Array<PaperQuestion & { externalId?: string | null }>): Promise<ReadSheet | string> {
   const photos = await readerPhotos(pages);
-  const readReply = await ai.json({
+  const readCall = {
     model: ANSWER_CHECK_MODEL,
     system: READ_PAPER_SYSTEM,
     user: readPaperUserText(ctx, pages.length, photos.strips),
@@ -223,31 +229,63 @@ async function readSheet(ai: AnswerCheckAi, ctx: ReturnType<typeof contextOf>, p
     imageLabels: photos.labels,
     maxTokens: 12000,
     timeoutMs: 240_000,
-  });
+  };
+  const readReply = await ai.json(readCall);
   if (!readReply) return "The AI could not read the answer sheet. Try again.";
-  const read = parsePaperRead(readReply, pages.length);
+  let read = parsePaperRead(readReply, pages.length);
+  // Hard to read: another model reads it too, and the surer of the two readings is kept.
+  if (doubtfulReading(read.parts)) {
+    const second = await ai.json({ ...readCall, model: ANSWER_CHECK_SECOND_MODEL }).catch(() => null);
+    const other = second ? parsePaperRead(second, pages.length) : null;
+    if (other && readingDoubt(other.parts) < readingDoubt(read.parts)) read = other;
+  }
+  read = { ...read, parts: tidyParts(read.parts, questions) };
   let matchReply: Record<string, any> | null = { answers: [] };
   const locating = locateParts(ai, pages, read.parts);
   if (read.parts.length) {
-    matchReply = await ai.json({ model: ANSWER_CHECK_MODEL, system: MATCH_SYSTEM, user: matchUserText(questions, read.parts), maxTokens: 2000 });
+    matchReply = await ai.json({ model: ANSWER_CHECK_MODEL, effort: "low", system: MATCH_SYSTEM, user: matchUserText(questions, read.parts), maxTokens: 2000 });
     if (!matchReply) return "The AI could not match the sheet to the questions. Try again.";
   }
   // What the pages really show corrects the pages the reader gave (kept for an answer left with none).
   const located = await locating;
-  const parts = read.parts.map((part, i) => ({ ...part, pages: located.pages[i] }));
+  const parts = read.parts.map(({ pagesUnsure, ...part }, i) => ({ ...part, pages: located.pages[i].length || !pagesUnsure ? located.pages[i] : part.pages }));
   const matching = assembleAnswers(questions, parts, matchReply);
   for (const a of matching.answers) if (!a.notAttempted && !a.pages.length) a.pages = Array.from(new Set(a.parts.flatMap(i => read.parts[i].pages))).sort((x, y) => x - y);
-  // An answer in several pieces over several pages: the pieces in the order they were written.
+  // An answer over several pages: its pieces (its parts, cut where a page begins) in the order they were written.
   await Promise.all(matching.answers.map(async a => {
-    if (a.parts.length < 2 || a.parts.length > 20 || new Set(a.parts.flatMap(i => parts[i].pages)).size < 2) return;
+    const pieces = a.parts.flatMap(i => pagePieces(parts[i].text, parts[i].pages, located.begins[i])?.map(p => ({ part: i, page: p.page as number | null, text: p.text })) ?? [{ part: i, page: null, text: parts[i].text }]);
+    if (pieces.length < 2 || pieces.length > 20 || new Set(a.parts.flatMap(i => parts[i].pages)).size < 2) return;
     const q = questions.find(x => x.number === a.number)!;
-    const reply = await ai.json({ model: ANSWER_CHECK_MODEL, system: PIECES_SYSTEM, user: piecesUserText(q, a.parts.map(i => `${parts[i].label} ${parts[i].text}`.trim())), maxTokens: 900 }).catch(() => null);
-    const pieces = parsePieces(reply, a.parts.length);
-    if (!pieces) return;
-    a.parts = pieces.map(k => a.parts[k]);
-    a.text = a.parts.map(i => parts[i].text).join("\n");
+    const label = (k: number) => (pieces.findIndex(p => p.part === pieces[k].part) === k ? parts[pieces[k].part].label : "");
+    const reply = await ai.json({ model: ANSWER_CHECK_MODEL, effort: "high", system: PIECES_SYSTEM, user: piecesUserText(q, pieces.map((p, k) => `${label(k)} ${p.text}`.trim())), maxTokens: 900 }).catch(() => null);
+    const order = parsePieces(reply, pieces.length);
+    if (!order) return;
+    const written = order.map(k => pieces[k]);
+    a.parts = Array.from(new Set(written.map(p => p.part)));
+    a.text = written.map(p => p.text).join("\n");
+    for (const i of a.parts) {
+      const mine = written.filter(p => p.part === i);
+      if (mine.some(p => p.page === null)) continue;
+      parts[i].pages = mine.map(p => p.page!);
+      parts[i].text = mine.map(p => p.text).join("\n");
+    }
   }));
-  return { read: { ...read, parts }, matching, places: located.places };
+  // A question with no answer is looked for on the pages themselves: marks must not be lost to a reading slip.
+  const none = matching.answers.filter(a => a.notAttempted).map(a => a.number);
+  let maybeOn = new Map<string, number>();
+  if (none.length && parts.length) {
+    const reply = await ai.json({
+      model: ANSWER_CHECK_MODEL,
+      effort: "low",
+      system: MISSING_SYSTEM,
+      user: missingUserText(questions.filter(q => none.includes(q.number)), questions.filter(q => !none.includes(q.number)), pages.length),
+      images: pages.map(b => toDataUrl(b)),
+      imageLabels: pages.map((_, i) => `Page ${i + 1}`),
+      maxTokens: 800,
+    }).catch(() => null);
+    maybeOn = parseMissing(reply, none, pages.length);
+  }
+  return { read: { ...read, parts }, matching, places: located.places, maybeOn };
 }
 
 /** An answer whose working carries on to a page before the one it left: the pages are in a jumble. */
@@ -278,7 +316,7 @@ export async function runPaper(paperId: string): Promise<void> {
 
     // 1. Read the whole sheet into parts and match them to the questions.
     const aliases = questionAliases(questions);
-    const paperQuestions: PaperQuestion[] = questions.map(q => ({ number: q.number, maxMarks: n(schemes.get(q.questionKey)!.maxMarks), questionText: schemes.get(q.questionKey)!.questionText, aliases: aliases.get(q.number) }));
+    const paperQuestions: PaperQuestion[] = questions.map(q => ({ number: q.number, maxMarks: n(schemes.get(q.questionKey)!.maxMarks), questionText: schemes.get(q.questionKey)!.questionText, aliases: aliases.get(q.number), externalId: q.externalId }));
     let sheet = await readSheet(ai, contextOf(first), pageBytes, paperQuestions);
     if (typeof sheet === "string") return fail(sheet);
 
@@ -287,17 +325,26 @@ export async function runPaper(paperId: string): Promise<void> {
     //    reader (lines copied twice, or to a page they aren't on): the sheet is read once more in order.
     const arranged = (paper.reading as any)?.arranged === "manual" ? "manual" : "auto";
     let order = arranged === "auto" && pageBytes.length === pageRows.length ? pageOrderByQuestion(pageRows.length, sheet.read.parts, sheet.matching.answers) : [];
-    if (!inOrder(order)) {
-      const rows = order.map(p => pageRows[p - 1]);
+    let rows = pageRows;
+    const arrange = async () => {
+      rows = order.map(p => rows[p - 1]);
       await db.transaction(async tx => {
         for (let i = 0; i < rows.length; i++) await tx.update(answerCheckImages).set({ position: i }).where(eq(answerCheckImages.id, rows[i].id));
       });
+    };
+    if (!inOrder(order)) {
+      await arrange();
       if (carriesOnBackwards(sheet.read.parts, sheet.matching.answers)) {
         const again = await readSheet(ai, contextOf(first), order.map(p => pageBytes[p - 1]), paperQuestions).catch(() => "failed");
-        if (typeof again !== "string") { sheet = again; order = []; }
+        if (typeof again !== "string") {
+          sheet = again;
+          // Read in a better order, it may still show a page out of place.
+          order = pageOrderByQuestion(rows.length, sheet.read.parts, sheet.matching.answers);
+          if (!inOrder(order)) await arrange();
+        }
       }
     }
-    const { read, matching, places } = sheet;
+    const { read, matching, places, maybeOn } = sheet;
     const regionsOf = (parts: number[]) => {
       const regions = answerRegions(parts, places);
       return inOrder(order) ? regions : movedRegions(regions, order);
@@ -344,6 +391,7 @@ export async function runPaper(paperId: string): Promise<void> {
           matchNote: a.note,
           notAttempted: a.notAttempted,
           unplacedOnSheet: a.notAttempted && unplaced,
+          ...(maybeOn.has(a.number) ? { maybeOnPage: inOrder(order) ? maybeOn.get(a.number) : renumberPages([maybeOn.get(a.number)], order)[0] } : {}),
         } as any,
         createdBy: paper.createdBy,
       }).returning();

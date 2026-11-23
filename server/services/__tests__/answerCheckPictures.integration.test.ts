@@ -46,6 +46,7 @@ async function main() {
           : call.system === prompts.READ_PAPER_SYSTEM ? "paperRead"
           : call.system === prompts.MATCH_SYSTEM ? "match"
           : call.system === prompts.AI_WRITTEN_SYSTEM ? "aiWritten"
+          : call.system === prompts.KEY_GAPS_SYSTEM ? "other"
           : call.system.startsWith("You are a senior board examiner") ? "scheme"
           : call.system.startsWith("You are an experienced, fair board examiner") ? "mark"
           : "other";
@@ -160,7 +161,7 @@ async function main() {
     await engine.waitForIdle();
     const match = last("match");
     expect(match.user.includes("[also labelled: A1, Section A Q1, 169001]") && match.user.includes("[also labelled: B1, Section B Q1, 169002]"), "the matcher is offered the section numbers and the client's question IDs", match.user.slice(0, 300));
-    const marks = calls.filter(c => c.kind === "mark").slice(-2);
+    const marks = calls.filter(c => c.kind === "mark").slice(-4);
     const plain = marks.find(c => c.user.includes("Solve x + 1 = 5"))!;
     const pictured = marks.find(c => c.user.includes("name the angle"))!;
     expect(plain.images === 0 && !plain.user.includes("Pictures attached"), "a question without pictures or drawings is marked from text alone", plain.images);
@@ -183,7 +184,7 @@ async function main() {
     const { rerunPaper } = await import("../answerCheck/papers");
     await rerunPaper(B, paperId);
     await engine.waitForIdle();
-    const sketch = calls.filter(c => c.kind === "mark").slice(-2).find(c => c.user.includes("Solve x + 1 = 5"))!;
+    const sketch = calls.filter(c => c.kind === "mark").slice(-4).find(c => c.user.includes("Solve x + 1 = 5"))!;
     expect(sketch.images === 1 && sketch.user.includes("1 photo of the student's answer page"), "a drawing the student added brings the page photo to the marker", sketch.images);
 
     // Switched off: drawings no longer go to a teacher (unless the AI couldn't see the drawing).

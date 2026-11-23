@@ -16,7 +16,7 @@ function expect(cond: boolean, label: string, detail?: unknown) {
 }
 
 async function main() {
-  const { assembleAnswers, matchUserText, parsePaperRead, readPaperUserText, unplacedAnswerParts } = await import("../answerCheck/prompts");
+  const { assembleAnswers, matchUserText, parseMissing, parsePaperRead, readPaperUserText, tidyParts, unplacedAnswerParts } = await import("../answerCheck/prompts");
   const { cleanQuestionList, paperTotals, practicePlan, PaperError } = await import("../answerCheck/papers");
 
   const questions = [
@@ -41,6 +41,25 @@ async function main() {
     expect(!read.blank && parsePaperRead(null, 2).blank && parsePaperRead({ parts: [] }, 2).blank, "no parts → blank sheet");
     expect(parsePaperRead({ parts: [{ label: "Q1", pages: [7], text: "x" }] }, 2).parts[0].pages.join() === "1", "page numbers outside the sheet fall back to page 1");
     expect(!readPaperUserText({ board: "CBSE", grade: "10", medium: "English", subject: "Science", chapter: "Light" }, 3).includes("Light"), "the reader gets no chapter or question");
+  }
+
+  console.log("Parts cut at pages and at labels");
+  {
+    const ids = [{ number: "8", externalId: "169774" }, { number: "9", externalId: "169775" }, { number: "2", externalId: null }];
+    const P = (label: string, pages: number[], text: string, unclear: any[] = []) => parsePaperRead({ parts: [{ label, pages, text, legibility: 0.9, unclear }] }, 5).parts;
+    const marked = tidyParts(P("8] 169774", [2], "i) a/b = 5/2\n[page 3]\nii) 4a/7b = 20/14\n169775 - Solution :- a, b, c are\n[Page 4]\nRHS = [unclear]\n[page 4]\n"), ids);
+    expect(JSON.stringify(marked.map(p => [p.label, p.pages, p.text])) === JSON.stringify([["8] 169774", [2], "i) a/b = 5/2"], ["", [3], "ii) 4a/7b = 20/14"], ["169775", [3], "Solution :- a, b, c are"], ["", [4], "RHS = [unclear]"]]), "a part is cut where it goes on to another page, and where another question's ID begins a line", marked.map(p => [p.label, p.pages, p.text]));
+    expect(marked.map(p => p.unclear.length).join() === "0,0,0,1", "an unclear spot stays with its piece", marked.map(p => p.unclear));
+    const joined = tidyParts(P("169774 - Solution", [2, 3], "i) a/b\n9] 169775 - a, b, c are\nLHS"), ids);
+    expect(joined.length === 2 && joined[1].label === "9] 169775" && joined[1].text === "a, b, c are\nLHS" && joined.every(p => p.pagesUnsure && p.pages.join() === "2,3"), "two answers run together without page marks are cut, their pages unsure", joined);
+    const spelt = tidyParts(P("Q8", [1], "x = 2\nQ9) y = 3\nQ9 again\n9) is not a label\n2 x 169775 = z"), ids);
+    expect(spelt.map(p => p.label).join("|") === "Q8|Q9)" && spelt[1].text === "y = 3\nQ9 again\n9) is not a label\n2 x 169775 = z", "a spelt-out number is a label; a bare one or an ID in the working is not", spelt.map(p => [p.label, p.text]));
+    const same = P("169774", [2, 3], "169774 - Solution\nGiven a/b");
+    expect(tidyParts(same, ids)[0] === same[0] || JSON.stringify(tidyParts(same, ids).map(p => p.text)) === JSON.stringify([same[0].text]), "its own label starts nothing new");
+    expect(tidyParts(P("Q8", [1], "a\n[page 7]\nb"), ids).map(p => `${p.pages}:${p.text}`).join("|") === "1:a\nb", "a mark for a page that isn't there is dropped");
+    expect(tidyParts(P("Q8", [1], "[page 1]\n"), ids).length === 0, "nothing but a mark is no part");
+    const found = parseMissing({ found: [{ number: 9, page: "3" }, { number: "9", page: 1 }, { number: "4", page: 2 }, { number: "8", page: 12 }, null] }, ["8", "9"], 5);
+    expect(found.size === 1 && found.get("9") === 3 && parseMissing(null, ["8"], 2).size === 0, "only questions asked about, on pages that exist", Array.from(found));
   }
 
   console.log("Matching parts to questions");

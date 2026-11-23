@@ -22,7 +22,7 @@ function expect(cond: boolean, label: string, detail?: unknown) {
   else { failed++; console.error(`  FAIL ${label}`, detail === undefined ? "" : JSON.stringify(detail)?.slice(0, 600)); }
 }
 
-type Kind = "paperRead" | "match" | "locate" | "pieces" | "scheme" | "mark" | "aiWritten" | "practice";
+type Kind = "missing" | "paperRead" | "match" | "locate" | "pieces" | "scheme" | "mark" | "aiWritten" | "practice";
 
 async function main() {
   const { db } = await import("../../db");
@@ -32,11 +32,12 @@ async function main() {
   const prompts = await import("../answerCheck/prompts");
   const sharp = (await import("sharp")).default;
 
-  const queues: Record<Kind, Array<Record<string, any> | null>> = { paperRead: [], match: [], locate: [], pieces: [], scheme: [], mark: [], aiWritten: [], practice: [] };
+  const queues: Record<Kind, Array<Record<string, any> | null>> = { missing: [], paperRead: [], match: [], locate: [], pieces: [], scheme: [], mark: [], aiWritten: [], practice: [] };
   const calls: Array<{ kind: Kind; model: string; images: number; user: string }> = [];
   const kindOf = (system: string): Kind =>
     system === prompts.READ_PAPER_SYSTEM ? "paperRead"
     : system === prompts.MATCH_SYSTEM ? "match"
+    : system === prompts.MISSING_SYSTEM ? "missing"
     : system === prompts.LOCATE_SYSTEM ? "locate"
     : system === prompts.PIECES_SYSTEM ? "pieces"
     : system === prompts.AI_WRITTEN_SYSTEM ? "aiWritten"
@@ -59,6 +60,7 @@ async function main() {
           return { steps: ids.map(s => ({ stepId: s.id, awarded: wrong ? 0 : s.marks, comment: "" })), confidence: 0.9, feedback: { summary: "ok" } };
         }
         if (kind === "locate") return { places: Object.entries(rowOfPart).filter(([part]) => call.user.includes(`Part ${part}`)).map(([part, row]) => ({ part: Number(part), row })) };
+        if (kind === "missing") return queues.missing.shift() ?? { found: [] };
         if (kind === "pieces") return queues.pieces.shift() ?? null;
         if (kind === "practice") {
           // Strong: every step; average: the first step only; weak: nothing.
@@ -114,11 +116,13 @@ async function main() {
     expect(v.checks.length === 3 && v.checks.map(c => c.questionNumber).join() === "1,2,3", "one answer per question, in the paper's order", v.checks.map(c => c.questionNumber));
     expect(v.status === "done", "all answers checked → paper done", v.status);
     const readCall = calls.find(c => c.kind === "paperRead")!;
-    expect(readCall.images >= 2 && readCall.user.includes("show the 2 pages") && !readCall.user.includes("Ohm") && readCall.model === "gpt-4.1", "the whole sheet is read once, both pages (as enlarged strips), without the questions", { images: readCall.images, user: readCall.user.slice(0, 200) });
+    expect(readCall.images >= 2 && readCall.user.includes("show the 2 pages") && !readCall.user.includes("Ohm") && readCall.model === "gpt-6-luna", "the whole sheet is read once, both pages (as enlarged strips), without the questions", { images: readCall.images, user: readCall.user.slice(0, 200) });
     expect(calls.find(c => c.kind === "match")!.user.includes("Question 2 (4 marks): Find the resistance"), "the matcher sees the questions");
     expect(q("1").readText === "Current is proportional to voltage\nat constant temperature" && (q("1").reading as any).pages.join() === "1,2", "question 1 = its part plus the continuation on page 2");
     expect(q("2").readText === "R = V/I = 440 ohm" && q("2").aiMarks === 4, "'Ans 2)' written first is still question 2, marked 4/4");
     expect(q("3").aiMarks === 0 && q("3").status === "done" && (q("3").reading as any).notAttempted && q("3").teacherReasons.length === 0, "question 3 not attempted → 0, no teacher needed");
+    const looked = calls.filter(c => c.kind === "missing").pop()!;
+    expect(callsOf("missing") === 1 && looked.images === 2 && /No answer was found to:\nQuestion 3\b/.test(looked.user), "a question with no answer is looked for on the pages themselves", looked.user.slice(0, 200));
     expect(q("3").images.length === 0 && q("1").images.some(i => i.kind === "marked"), "marked sheets for answered questions only");
     expect(v.totals.aiMarks === 6 && v.totals.maxMarks === 8 && v.totals.notAttempted === 1, "paper total 6/8, one not attempted", v.totals);
     expect(q("2").studentLabel === "Riya · Q2", "answers are labelled with the student and question number");
@@ -130,7 +134,7 @@ async function main() {
     const readsBefore = callsOf("paperRead");
     await engine.recheck(B, q("1").id, { reread: true });
     await engine.waitForIdle();
-    expect(callsOf("paperRead") === readsBefore && calls.filter(c => c.kind === "paperRead" || (c.images > 0 && c.kind !== "locate")).length === readsBefore, "re-checking one answer of a paper never reads it on its own");
+    expect(callsOf("paperRead") === readsBefore && calls.filter(c => c.kind === "paperRead" || (c.images > 0 && c.kind !== "locate" && c.kind !== "missing")).length === readsBefore, "re-checking one answer of a paper never reads it on its own");
     let err = "";
     try { await engine.deleteCheck(B, q("2").id); } catch (e: any) { err = e.message; }
     expect(/delete the paper/.test(err), "one answer of a paper can't be deleted on its own", err);
@@ -143,9 +147,12 @@ async function main() {
       { label: "", pages: [1], text: "Light bends when it enters water", legibility: 0.9 },
     ] });
     queues.match.push({ answers: [{ number: "1", parts: [0], confidence: 0.4, note: "no label" }], notAttempted: ["2", "3"] });
+    queues.missing.push({ found: [{ number: 2, page: 1, begins: "R =" }, { number: "1", page: 1 }, { number: "3", page: 9 }] });
     const p = await papers.createPaper({ businessAccountId: B, title: "Mock test 2", studentLabel: "Arjun", questions: qs, photos: [await photo("#ffffff")], userId: null });
     await engine.waitForIdle();
     const v = await viewOf(p.id);
+    const two = v.checks.find(c => c.questionNumber === "2")!;
+    expect(two.status === "needs_teacher" && two.teacherReasons.some((r: string) => r.includes("seems to be on page 1")) && v.checks.find(c => c.questionNumber === "3")!.teacherReasons.every((r: string) => !r.includes("seems to be")), "one that seems to be answered after all goes to a teacher, with its page", two.teacherReasons);
     const q = (n: string) => v.checks.find(c => c.questionNumber === n)!;
     expect(q("1").status === "needs_teacher" && q("1").teacherReasons.some(r => r.includes("isn't sure this part")), "an unsure match → a teacher confirms it", q("1").teacherReasons);
     expect(q("3").status === "needs_teacher" && q("3").teacherReasons[0].includes("really wasn't answered"), "an answer-like part left over → 'not attempted' questions go to a teacher");

@@ -38,7 +38,17 @@ const DEFAULT_MODEL_PRICING: Record<string, ModelRates> = {
     outputCostPer1k: 0.008,         // $8.00 per 1M tokens
     cachedInputCostPer1k: 0.0005,   // $0.50 per 1M tokens
   },
-  // Answer checking pilot (services/answerCheck): AI-written estimate and practice answers
+  // Answer checking (services/answerCheck): reading and marking; second opinions and answer keys
+  'gpt-6-luna': {
+    inputCostPer1k: 0.0001,         // $0.10 per 1M tokens
+    outputCostPer1k: 0.0005,        // $0.50 per 1M tokens
+    cachedInputCostPer1k: 0.00001,  // $0.01 per 1M tokens
+  },
+  'gpt-6.1-terra': {
+    inputCostPer1k: 0.001,          // $1.00 per 1M tokens
+    outputCostPer1k: 0.005,         // $5.00 per 1M tokens
+    cachedInputCostPer1k: 0.00005,  // $0.05 per 1M tokens
+  },
   'gpt-4.1-mini': {
     inputCostPer1k: 0.0004,         // $0.40 per 1M tokens
     outputCostPer1k: 0.0016,        // $1.60 per 1M tokens

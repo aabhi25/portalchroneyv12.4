@@ -68,6 +68,9 @@ export interface CheckResult {
   missingKeywords: string[];
   alternativeMethod: boolean;
   confidence: number;
+  /** What took the confidence down, and each time the answer was marked (answers checked before these were kept have neither). */
+  confidenceWhy?: string[];
+  markings?: Array<{ by: "quick" | "careful" | "second"; total: number }>;
   confidenceNote: string;
   feedback: { summary: string; improvement: string; revision: string };
   teacherComment: string;

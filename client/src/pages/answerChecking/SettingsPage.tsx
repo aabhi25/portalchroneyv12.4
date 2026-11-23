@@ -76,6 +76,13 @@ export default function SettingsPage() {
         </div>
       </Panel>
 
+      <Panel title="When the AI marks again" subtitle="An answer it is less sure about is marked again more carefully, and by another AI when the two marks differ. Marks that still differ go to a teacher.">
+        <label className="text-[13px] font-medium text-gray-700">AI sure of its marks below (%)
+          <Input value={Math.round(s.recheckBelow * 100)} onChange={e => setS({ ...s, recheckBelow: (Number(e.target.value) || 0) / 100 })} inputMode="numeric" className="mt-1 w-24" data-testid="settings-recheck" />
+        </label>
+        <p className="mt-2 text-[13px] text-gray-500">90 is a good level. How sure it is comes from the marking itself, not the AI's own word: another method, marks that don't fit the final answer or the AI's comments, hard-to-read writing, a drawing.</p>
+      </Panel>
+
       <Panel title="When a teacher must look" subtitle="Answers below these levels are marked “Needs a teacher” instead of going straight to the student.">
         <div className="flex flex-wrap gap-6">
           <label className="text-[13px] font-medium text-gray-700">Handwriting readable below (%)

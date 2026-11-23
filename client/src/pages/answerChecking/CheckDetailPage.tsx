@@ -15,7 +15,7 @@ import { PictureStrip } from "./PictureStrip";
 import { viewerPages } from "./SheetPages";
 import { ASSESS_PATH,
   AI_WRITTEN_LABEL, API, DRAWING_LABEL, KIND_LABEL, LEVEL_LABEL, STATUS_LABEL, STATUS_STYLE, fmtMarks, imageUrl, isRunning, scopeLabel,
-  type CheckView,
+  type CheckResult, type CheckView,
 } from "./answerCheckApi";
 
 const CORRECTNESS: Record<string, string> = { correct: "Correct", partial: "Partly correct", incorrect: "Incorrect" };
@@ -165,6 +165,7 @@ export function TeacherView({ c, onDeleted, pane, onDirty, onSaveNext }: { c: Ch
           <Big label="Handwriting readable" value={c.reading ? `${Math.round((c.reading.legibility || 0) * 100)}%` : "—"} />
         </div>
       )}
+      {r && <SureOfMarks result={r} />}
       {c.teacherReasons.length > 0 && (
         <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-[14px] text-amber-900" data-testid="teacher-reasons">
           <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-4 w-4" />A teacher should look at this answer</p>
@@ -204,7 +205,7 @@ export function TeacherView({ c, onDeleted, pane, onDirty, onSaveNext }: { c: Ch
         <p className="mt-3 text-[14px] text-gray-800" data-testid="drawing-note"><span className="font-medium">{DRAWING_LABEL[r.drawing.status]}</span>{r.drawing.note ? ` — ${r.drawing.note}` : ""}</p>
       )}
       {r.alternativeMethod && <p className="mt-3 text-[13px] text-gray-600">The student used a different valid method.</p>}
-      {r.confidenceNote && <p className="mt-3 text-[13px] text-gray-500">How sure the AI is: {r.confidenceNote}</p>}
+      {r.confidenceNote && <p className="mt-3 text-[13px] text-gray-500">The AI's note on its marks: {r.confidenceNote}</p>}
     </Panel>
   );
   const feedbackPanel = r && (
@@ -302,6 +303,20 @@ function Big({ label, value, testid }: { label: string; value: string; testid?: 
     <div className="rounded-xl bg-gray-50 px-3 py-2">
       <p className="text-[12px] text-gray-500">{label}</p>
       <p className="text-[20px] font-semibold tabular-nums text-gray-900" data-testid={testid}>{value}</p>
+    </div>
+  );
+}
+
+const MARKING_LABEL = { quick: "first", careful: "careful", second: "another AI" } as const;
+
+/** Why the AI is less sure of its marks, and each time it marked the answer. */
+function SureOfMarks({ result: r }: { result: CheckResult }) {
+  const marked = r.markings ?? [];
+  if (!r.confidenceWhy?.length && marked.length < 2) return null;
+  return (
+    <div className="mt-3 text-[13px] text-gray-600" data-testid="sure-of-marks">
+      {marked.length > 1 && <p>Marked {marked.length === 2 ? "twice" : "three times"}: {marked.map(m => `${fmtMarks(m.total)} (${MARKING_LABEL[m.by]})`).join(", ")}.</p>}
+      {r.confidenceWhy && r.confidenceWhy.length > 0 && <p>{marked.length > 1 ? "Marked again because: " : ""}{r.confidenceWhy.join(" ")}</p>}
     </div>
   );
 }

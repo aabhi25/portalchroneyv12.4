@@ -197,6 +197,7 @@ Rules:
 - mustKeywords: words or concepts a full-marks answer must contain. niceKeywords: helpful but optional.
 - alternatives: other correct methods or wordings that must also get credit.
 - If no model answer is given, write a concise model answer suitable for the grade first, then base the scheme on it.
+- The steps go all the way to the model answer's end: for a maths or numerical question the last step is the final result, named exactly ("Reduces it to 18/25"), never an intermediate line.
 - A model answer that is given is the full-marks standard: a student who writes what it writes must earn every step. Never add a step for something the model answer itself does not do — a closing sentence in words when it ends at "x = 4", a unit, a definition, a reason or a statement of a law it does not give.
 - One step for each point that earns marks. Never one step that stands for several ("each correct sentence — 1 mark each"): write them as separate steps.
 - Pictures may be attached: the question's own figure and the model answer's diagram. Read them — a question that says "in the figure" cannot be understood without its picture.
@@ -225,6 +226,32 @@ export function schemeCorrectionText(missed: Array<{ label: string; marks: numbe
     "Your first draft of this scheme was checked by marking the model answer itself against it. The model answer did not earn these steps:",
     ...missed.map(m => `- "${m.label}" (${m.awarded} of ${m.marks})${m.comment ? ` — ${m.comment}` : ""}`),
     "The model answer is the full-marks standard. Write the scheme again so that the model answer, exactly as it is written, earns every step: drop or reword what it does not show, ask for nothing it does not do, and keep the steps adding up to the maximum marks.",
+  ].join("\n");
+}
+
+export const KEY_GAPS_SYSTEM = `You check a marking scheme before it is used. A student could follow the scheme's steps and stop: would they have reached everything the model answer reaches?
+List only what is NEEDED for full marks and that no step of the scheme asks for:
+- the final result of a maths or numerical question, or of one of its parts (the last value, ratio, percentage, conclusion or proof), when no step names it;
+- a part of the question that no step covers.
+Intermediate lines, wording, and things a step already covers in other words are NOT missing. Most schemes miss nothing.
+Reply with JSON only: {"missing": ["the final reduced ratio 18/25 is not asked for"]}`;
+
+export function keyGapsUserText(q: QuestionContext, scheme: MarkingScheme): string {
+  return `Question (${q.maxMarks} marks): ${q.questionText}\n\nModel answer:\n${q.modelAnswer.trim()}\n\nMarking scheme:\n${schemeText(scheme)}`;
+}
+
+export function parseKeyGaps(raw: Record<string, any> | null): string[] {
+  return (Array.isArray(raw?.missing) ? raw!.missing : []).map((x: unknown) => str(x).slice(0, 200)).filter(Boolean).slice(0, 5);
+}
+
+/** Said to the scheme writer when its scheme stops short of the model answer. */
+export function schemeGapsText(scheme: MarkingScheme, gaps: string[]): string {
+  return [
+    "Your first draft of this scheme was:",
+    schemeText(scheme),
+    "It stops short of the model answer. Missing:",
+    ...gaps.map(g => `- ${g}`),
+    "Write the scheme again so that its steps cover this too, with marks for it, keeping every step something the model answer itself shows and the steps adding up to the maximum marks.",
   ].join("\n");
 }
 
@@ -605,11 +632,12 @@ export function guessQuestionKind(questionType: unknown, questionText: string, s
 // step matches the parts to the paper's questions.
 
 export const READ_PAPER_SYSTEM = `You read a school student's handwritten exam answer sheet from photos (several pages, in order), for an examiner.
-Copy exactly what the student wrote. Students make mistakes and the examiner needs to see them: never correct spelling, grammar, signs, numbers, maths or facts, and never add anything that is not written.
+Copy exactly what the student wrote. Students make mistakes and the examiner needs to see them: never correct spelling, grammar, signs, numbers, maths or facts, and never add anything that is not written. Read every digit and sign as it is drawn, not as the working needs it: a wrong number must stay wrong in your copy (if the page says 45/60 = 3/5, write 3/5).
 Split the sheet into parts: start a new part wherever the student starts a new answer (a question number or label such as "Q3", "Ans 2", "3)", "(b)", or a clearly separate answer).
 - "label": the question number or label exactly as the student wrote it at the start of the part, or "" if there is none (for example an answer continuing from the previous page).
-- "pages": the page numbers (1 = first photo) the part is on.
+- "pages": every page number (1 = first photo) that has any of the part's writing, its last lines included: an answer that runs on over three photos lists all three. In its text, put a line with only "[page 4]" (the page's number) wherever its writing goes on to another page.
 - "text": the part's text without its label. Keep line breaks. Maths in plain text (2x + 4 = 10, x^2, 3/4). Describe diagrams in square brackets. Leave out crossed-out text. Write [unclear] for anything you cannot read and never guess silently; a character that could be read two ways goes in "unclear" with the other reading as "guess".
+- A label can also be a question ID from the school's app (such as "169318 - Solution"), and the photo's edge may cut off the start of it: whenever a question number or ID, or a word like "Solution" or "Ans" after one, begins a line, start a new part there and never join it to the answer before it.
 - Name, roll number, date or rough work at the top or margins are their own parts with label "" and start their text with "(heading)" or "(rough work)".
 Reply with JSON only:
 {"parts": [{"label": "Q1", "pages": [1], "text": "...", "legibility": 0.0-1.0, "unclear": [{"where": "...", "guess": "..."}]}], "blank": false, "notes": "short note for the examiner, or empty"}`;
@@ -625,6 +653,90 @@ export interface SheetPart {
   text: string;
   legibility: number;
   unclear: Array<{ where: string; guess: string }>;
+  /** Cut from another part, whose pages it may be on only some of. */
+  pagesUnsure?: boolean;
+}
+
+/** The reader's mark where a part goes on to another page. */
+const PAGE_MARK = /^\s*\[page\s+(\d{1,2})\]\s*$/i;
+
+/**
+ * Parts as the reader gave them, cut at its page marks, and where two answers were run together (the
+ * second one's label is cut off by the photo's edge): a line in the middle of a part that begins with
+ * another question's ID ("169775 - Solution"), or with a question number spelt out ("Q9", "Ans 9"),
+ * starts a part of its own.
+ */
+export function tidyParts(parts: SheetPart[], questions: Array<{ number: string; externalId?: string | null }>): SheetPart[] {
+  const ids = questions.map(q => (q.externalId || "").trim()).filter(id => /^[A-Za-z0-9-]{4,}$/.test(id) && /\d{3}/.test(id));
+  const numbers = questions.map(q => q.number.trim().toLowerCase());
+  const labelOf = (line: string): { label: string; rest: string; of: string } | null => {
+    const id = /^\s*(?:\(?\d{1,3}\s*[\]).:]+\s*)?([A-Za-z0-9-]{4,}?)(?=\s|[-–—:.]|$)/.exec(line);
+    if (id && ids.includes(id[1])) return { label: id[0].trim(), rest: line.slice(id[0].length).replace(/^[\s\-–—:.]+/, ""), of: id[1] };
+    const spelt = /^\s*(?:q|que|ques|question|ans|answer)\s*\.?\s*(?:no\.?\s*)?(\d{1,2}[a-z]?)\s*(?=[\]).:\-–—]|\s|$)[\]).:]*/i.exec(line);
+    if (spelt && numbers.includes(spelt[1].toLowerCase())) return { label: spelt[0].trim(), rest: line.slice(spelt[0].length).trim(), of: spelt[1].toLowerCase() };
+    return null;
+  };
+  return parts.flatMap(part => {
+    const pieces: Array<{ label: string; lines: Array<{ page: number; line: string }> }> = [{ label: part.label, lines: [] }];
+    let page = part.pages[0];
+    let marked = false;
+    for (const line of part.text.split("\n")) {
+      const mark = PAGE_MARK.exec(line);
+      if (mark) {
+        // A mark before any writing says where the part begins; one for a page it isn't on is a slip.
+        if (part.pages.includes(Number(mark[1]))) { page = Number(mark[1]); marked = true; }
+        continue;
+      }
+      const found = labelOf(line);
+      const now = pieces[pieces.length - 1];
+      // Its own label written again, or a label at its very start, starts nothing new.
+      if (found && now.lines.some(l => l.line.trim()) && !now.label.toLowerCase().includes(found.of)) pieces.push({ label: found.label, lines: found.rest ? [{ page, line: found.rest }] : [] });
+      else now.lines.push({ page, line });
+    }
+    // What was read as one part but is on several pages goes to the matcher page by page: at the top of a
+    // page the reader can only guess which answer carries on (the pages may be in any order).
+    const cut = pieces.flatMap(p => {
+      const out: Array<{ label: string; page: number; text: string }> = [];
+      for (const l of p.lines) {
+        const last = out[out.length - 1];
+        if (last && last.page === l.page) last.text += `\n${l.line}`;
+        else out.push({ label: out.length ? "" : p.label.slice(0, 30), page: l.page, text: l.line });
+      }
+      return out.map(x => ({ ...x, text: x.text.trim() })).filter(x => x.text);
+    });
+    if (cut.length < 2) return cut.length ? [{ ...part, text: cut[0].text, ...(marked ? { pages: [cut[0].page] } : {}) }] : [];
+    // Its unclear spots stay with the piece they are marked in; the rest with the first.
+    const spots = cut.map(x => (x.text.match(/\[unclear\]/gi) || []).length);
+    const first = Math.max(0, part.unclear.length - spots.slice(1).reduce((x, y) => x + y, 0));
+    return cut.map((x, k) => ({
+      ...part,
+      label: x.label,
+      text: x.text,
+      unclear: k === 0 ? part.unclear.slice(0, first) : Array.from({ length: spots[k] }, () => ({ where: "", guess: "" })),
+      ...(marked ? { pages: [x.page] } : part.pages.length > 1 ? { pagesUnsure: true } : {}),
+    }));
+  });
+}
+
+// ---- A question with no answer: looked for on the pages themselves ------------------------------
+
+export const MISSING_SYSTEM = `You check photos of one student's handwritten answer sheet. Another reader found no answer to the questions listed. Look at every page: is there writing that answers one of them, even partly or wrongly, with or without its number?
+Say so only for writing you can see. Writing that answers another question of the paper, a copied question, headings and rough work do not count.
+Reply with JSON only: {"found": [{"number": "9", "page": 3, "begins": "its first few words"}]} — an empty list when there is nothing, which is usual.`;
+
+export function missingUserText(missing: Array<{ number: string; questionText: string; aliases?: string[] }>, answered: Array<{ number: string; questionText: string }>, pages: number): string {
+  const line = (q: { number: string; questionText: string; aliases?: string[] }) => `Question ${q.number}${q.aliases?.length ? ` [also labelled: ${q.aliases.join(", ")}]` : ""}: ${q.questionText.replace(/\s+/g, " ").slice(0, 300)}`;
+  return `No answer was found to:\n${missing.map(line).join("\n")}\n\nAnswers were found to:\n${answered.map(line).join("\n") || "(none)"}\n\nThe photos are pages 1 to ${pages}.`;
+}
+
+export function parseMissing(raw: Record<string, any> | null, numbers: string[], pages: number): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const f of Array.isArray(raw?.found) ? raw!.found : []) {
+    const number = numbers.find(x => x.toLowerCase() === str(typeof f?.number === "number" ? String(f.number) : f?.number).trim().toLowerCase());
+    const page = Math.round(num(f?.page, 0));
+    if (number && page >= 1 && page <= pages && !out.has(number)) out.set(number, page);
+  }
+  return out;
 }
 
 export function parsePaperRead(raw: Record<string, any> | null, pageCount: number): { parts: SheetPart[]; blank: boolean; notes: string } {
@@ -633,7 +745,8 @@ export function parsePaperRead(raw: Record<string, any> | null, pageCount: numbe
     .filter((p: any) => p && typeof p === "object")
     .map((p: any) => {
       const read = parseRead({ text: p.text, legibility: p.legibility, unclear: p.unclear });
-      const pages = (Array.isArray(p.pages) ? p.pages : [p.pages])
+      const marks = read.text.split("\n").flatMap(l => PAGE_MARK.exec(l)?.[1] ?? []);
+      const pages = [...(Array.isArray(p.pages) ? p.pages : [p.pages]), ...marks]
         .map((x: unknown) => Math.round(num(x, 0)))
         .filter((x: number, i: number, a: number[]) => x >= 1 && x <= pageCount && a.indexOf(x) === i);
       return { label: str(p.label).slice(0, 30), pages: pages.length ? pages : [1], text: read.text, legibility: read.legibility, unclear: read.unclear };
@@ -655,7 +768,8 @@ export const MATCH_SYSTEM = `You match the parts of a student's handwritten answ
 - Use the student's own labels first ("Q3", "Ans 3", "3)", "iii" all mean question 3). Students often answer out of order.
 - A question may list other labels students use for it (its number inside its section, such as "B2", or its ID in the school's app, such as "169335"): a part labelled with one of them answers that question.
 - When a label is missing, unclear or wrong, use what the part says: which question does it answer?
-- A part with no label straight after another part usually continues that answer (for example on the next page).
+- A part with no label straight after another part on the same page usually continues that answer.
+- A part with no label at the top of a page carries on an answer begun on another page — the pages may have been uploaded in any order, so it is NOT always the part listed before it. Decide by what it says: which question's expressions, numbers or topic does it work with? (A "ii)" with a, b, c and k belongs to the question about a, b and c, not to whichever question was read before it.) Only when its content fits several, take the part before it.
 - Every part belongs to at most one question; one question may have several parts (give them in reading order).
 - Headings (name, roll number, date) and rough work belong to no question: list them under "unassigned" with the reason.
 - A question with no part is "notAttempted".
@@ -665,7 +779,7 @@ Reply with JSON only:
 
 export function matchUserText(questions: PaperQuestion[], parts: SheetPart[]): string {
   const qs = questions.map(q => `Question ${q.number} (${q.maxMarks} marks)${q.aliases?.length ? ` [also labelled: ${q.aliases.join(", ")}]` : ""}: ${q.questionText.replace(/\s+/g, " ").slice(0, 400)}`).join("\n");
-  const ps = parts.map((p, i) => `Part ${i} — label "${p.label}", page ${p.pages.join(", ")}:\n${p.text.slice(0, 700)}${p.text.length > 700 ? " …" : ""}`).join("\n\n");
+  const ps = parts.map((p, i) => `Part ${i} — label "${p.label}", page ${p.pages.join(", ")}:\n${p.text.slice(0, 2000)}${p.text.length > 2000 ? " …" : ""}`).join("\n\n");
   return `The exam paper's questions:\n${qs}\n\nThe parts of the student's answer sheet:\n${ps}`;
 }
 
@@ -813,9 +927,10 @@ An answer that continues from another page begins at its first line on THIS page
 The list can be wrong: an answer none of whose writing is on this page belongs in "notHere" — look at the writing itself, not at what would be likely.
 Reply with JSON only: {"places": [{"part": 0, "row": 1, "begins": "Let the number be"}], "notHere": []}`;
 
-export function locateUserText(parts: Array<{ id: number; label: string; text: string; continues: boolean; goesOn: boolean }>, rows: number): string {
+export function locateUserText(parts: Array<{ id: number; label: string; text: string; continues: boolean; goesOn: boolean; unsure?: boolean }>, rows: number): string {
   const list = parts.map(p => {
     const text = p.text.replace(/\s+/g, " ").trim();
+    if (p.unsure) return `Part ${p.id}${p.label ? `, labelled "${p.label}"` : ""} (may or may not have writing on this page): "${text.length > 2600 ? `${text.slice(0, 1000)} … ${text.slice(-1600)}` : text}"`;
     const note = p.continues ? " (began on another page; some of this text is on this page)" : p.goesOn ? " (begins on this page and goes on to another)" : "";
     return `Part ${p.id}${p.label ? `, labelled "${p.label}"` : ""}${note}: "${p.continues ? text.slice(0, 900) : text.slice(0, 140)}${text.length > (p.continues ? 900 : 140) ? " …" : ""}"`;
   }).join("\n");

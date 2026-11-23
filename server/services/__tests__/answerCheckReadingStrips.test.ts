@@ -60,6 +60,20 @@ async function main() {
     expect(content.map((c: any) => c.type).join() === "text,text,image_url,text,image_url" && content[1].text === "Page 1, strip 1 of 2" && content[3].text === "Page 1, strip 2 of 2", "each photo's name is said just before it", content.map((c: any) => c.text || c.type));
     await ai.json({ model: "gpt-4.1", system: "s", user: "u", images: ["data:image/jpeg;base64,AA"], maxTokens: 10 });
     expect(sent[1].messages[1].content.map((c: any) => c.type).join() === "text,image_url", "photos without names go as before");
+    expect(sent[0].temperature === 0 && sent[0].max_tokens === 10 && !("reasoning_effort" in sent[0]), "GPT-4 models get a temperature");
+    await ai.json({ model: "gpt-6-luna", system: "s", user: "u", maxTokens: 10, temperature: 0.7 });
+    await ai.json({ model: "gpt-6-luna", effort: "high", system: "s", user: "u", maxTokens: 10 });
+    expect(sent[2].reasoning_effort === "none" && sent[2].max_completion_tokens === 10 && !("temperature" in sent[2]) && !("max_tokens" in sent[2]) && sent[3].reasoning_effort === "high" && sent[3].max_completion_tokens > 1000, "newer models get how hard to think, with room for it, and no temperature", sent[3]);
+    // A key without access to the newer models: GPT-4.1 for the rest of the check.
+    const models: string[] = [];
+    const noLuna = openAiAnswerCheck({ chat: { completions: { create: async (body: any) => { models.push(body.model); if (body.model !== "gpt-4.1") throw Object.assign(new Error("403 Project `p` does not have access to model `gpt-6-luna`"), { status: 403 }); return { choices: [{ message: { content: '{"ok":1}' } }], usage: { prompt_tokens: 1000, completion_tokens: 0 } }; } } } } as any);
+    const one = await noLuna.json({ model: "gpt-6-luna", system: "s", user: "u", maxTokens: 10 });
+    await noLuna.json({ model: "gpt-6-luna", system: "s", user: "u", maxTokens: 10 });
+    expect(one?.ok === 1 && models.join() === "gpt-6-luna,gpt-4.1,gpt-4.1" && Math.abs(noLuna.costUsd() - 0.004) < 1e-9, "a key that can't use a model falls back, tried once, at the fallback's price", [models, noLuna.costUsd()]);
+    const refused = await openAiAnswerCheck({ chat: { completions: { create: async () => { throw Object.assign(new Error("401 Incorrect API key provided"), { status: 401 }); } } } } as any).json({ model: "gpt-6-luna", system: "s", user: "u", maxTokens: 10 }).catch((e: any) => e.status);
+    expect(refused === 401, "any other refusal is passed on");
+    const { estimateTextCostUsd } = await import("../aiUsageLogger");
+    expect(Math.abs(estimateTextCostUsd("gpt-6-luna", 1e6, 1e6) - 0.6) < 1e-9 && Math.abs(estimateTextCostUsd("gpt-6.1-terra", 1e6, 1e6) - 6) < 1e-9, "the newer models are costed at their own prices");
   }
 
   console.log("Answer keys follow the model answer");
