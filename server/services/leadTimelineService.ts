@@ -14,11 +14,12 @@ import {
   aiCalls, businessAccounts, conversations, facebookLeads, instagramLeads, leadConversations, leadStories, leads, messages,
   users, whatsappHandoffs, whatsappLeads,
 } from "@shared/schema";
-import { CALL_OUTCOME_LABEL, CALL_STATUS_LABEL, type CallOutcome, type CallStatus } from "@shared/aiCalling";
+import { CALL_OUTCOME_LABEL, CALL_STATUS_LABEL, LIVE_CALL_STATUSES, type CallOutcome, type CallStatus } from "@shared/aiCalling";
 import type { LeadStory, LeadTimelineResponse, TimelineEvent } from "@shared/leadTimeline";
 import { key10, websitePersonKeySql } from "./unifiedLeadsService";
 import { maskPhonesInText } from "../lib/leadAccess";
 import { readableChatText } from "./whatsappInteractiveText";
+import { effectiveHours, getSettingsRowCached, isValidTimeZone } from "./calling/settingsService";
 
 export type TimelineAnchor = { channel: "website" | "whatsapp"; id: string };
 
@@ -96,6 +97,47 @@ async function websiteEvents(p: Person, out: TimelineEvent[]): Promise<void> {
   }
 }
 
+/** "24 Nov, 2:10 PM" in the business's calling time zone (year added when it isn't this year). */
+export function readableCallTime(at: Date | string, timezone: string, now: Date = new Date()): string {
+  const tz = isValidTimeZone(timezone) ? timezone : "Asia/Kolkata";
+  const parts = (d: Date) => {
+    const p: Record<string, string> = {};
+    for (const x of new Intl.DateTimeFormat("en-GB", { timeZone: tz, year: "numeric", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true }).formatToParts(d)) p[x.type] = x.value;
+    return p;
+  };
+  const p = parts(new Date(at));
+  const year = p.year !== parts(now).year ? ` ${p.year}` : "";
+  return `${p.day} ${p.month}${year}, ${p.hour}:${p.minute} ${String(p.dayPeriod || "").toUpperCase()}`.trim();
+}
+
+type CallRow = Pick<typeof aiCalls.$inferSelect, "direction" | "status" | "trigger" | "outcome" | "answeredAt" | "summary" | "callbackAt" | "scheduledAt">;
+
+/**
+ * A call's timeline title and line. Only a finished call that never connected says "Not answered";
+ * one still waiting for its time (a callback the person asked for, the next try, a new lead's call)
+ * says when the AI will call, and a call that is ringing or under way just says so.
+ */
+export function describeCall(c: CallRow, timezone: string, now: Date = new Date()): { title: string; detail: string | null } {
+  const outcome = c.outcome ? CALL_OUTCOME_LABEL[c.outcome as CallOutcome] : null;
+  const answered = !!c.answeredAt;
+  const when = (d: Date | string) => readableCallTime(d, timezone, now);
+  if (c.status === "queued") {
+    const title = c.trigger === "callback" ? "AI call · Call back planned" : c.trigger === "retry" ? "AI call · Trying again" : `AI call · ${CALL_STATUS_LABEL.queued}`;
+    const at = c.scheduledAt ? when(c.scheduledAt) : null;
+    const detail = c.trigger === "callback" ? `They asked to be called back${at ? `. The AI will call on ${at}` : ""}.`
+      : c.trigger === "retry" ? `The last call wasn't answered${at ? `. The AI will try again on ${at}` : ""}.`
+      : at ? `The AI will call on ${at}.` : null;
+    return { title, detail };
+  }
+  if (LIVE_CALL_STATUSES.includes(c.status as CallStatus)) {
+    return { title: `AI call · ${CALL_STATUS_LABEL[c.status as CallStatus]}`, detail: null };
+  }
+  const status = CALL_STATUS_LABEL[c.status as CallStatus] || c.status;
+  const title = c.direction === "inbound" ? "Called you" : answered ? "AI call" : `AI call · ${status}`;
+  const bits = [c.summary ? clip(c.summary, 240) : null, c.callbackAt ? `Asked to be called back on ${when(c.callbackAt)}.` : null].filter(Boolean);
+  return { title: outcome ? `${title} · ${outcome}` : title, detail: bits.join(" ") || (answered ? null : "Not answered.") };
+}
+
 async function callEvents(p: Person, out: TimelineEvent[]): Promise<void> {
   const ids = p.websiteLeads.map((l) => l.id);
   const match: SQL[] = [];
@@ -106,18 +148,15 @@ async function callEvents(p: Person, out: TimelineEvent[]): Promise<void> {
     .leftJoin(users, eq(users.id, aiCalls.requestedBy))
     .where(and(eq(aiCalls.businessAccountId, p.accountId), or(...match)))
     .orderBy(desc(aiCalls.createdAt)).limit(30);
+  const timezone = rows.length ? effectiveHours(await getSettingsRowCached(p.accountId)).timezone : "";
   for (const { call: c, requester } of rows) {
     if (c.status === "cancelled" || c.status === "skipped") continue;
-    const outcome = c.outcome ? CALL_OUTCOME_LABEL[c.outcome as CallOutcome] : null;
-    const answered = !!c.answeredAt;
-    const status = CALL_STATUS_LABEL[c.status as CallStatus] || c.status;
-    const title = c.direction === "inbound" ? "Called you" : answered ? "AI call" : `AI call · ${status}`;
-    const bits = [c.summary ? clip(c.summary, 240) : null, c.callbackAt ? `Asked to be called back ${new Date(c.callbackAt).toISOString()}` : null].filter(Boolean);
+    const { title, detail } = describeCall(c, timezone);
     const tone = c.outcome === "interested" || c.outcome === "callback_requested" ? "good"
       : c.outcome === "not_interested" || c.outcome === "do_not_call" || c.outcome === "wrong_number" ? "bad" : null;
     out.push({
       id: `call:${c.id}`, at: iso(c.startedAt || c.scheduledAt || c.createdAt)!, channel: "call",
-      title: outcome ? `${title} · ${outcome}` : title, detail: bits.join(" ") || (answered ? null : "Not answered."), tone, link: { type: "call", id: c.id },
+      title, detail, tone, link: { type: "call", id: c.id },
     });
     if (c.trigger === "manual") {
       out.push({ id: `callreq:${c.id}`, at: iso(c.createdAt)!, channel: "team", title: "Call requested", detail: requester ? `By ${requester}.` : null, tone: null, link: { type: "call", id: c.id } });
@@ -366,9 +405,10 @@ export async function recentCallContext(accountId: string, phone: string | null 
         sql`${key10(sql`${aiCalls.phone}`)} = ${k}`, sql`${aiCalls.answeredAt} > now() - make_interval(days => ${RECENT_CALL_DAYS})`))
       .orderBy(desc(aiCalls.answeredAt)).limit(2);
     if (!rows.length) return "";
+    const timezone = effectiveHours(await getSettingsRowCached(accountId)).timezone;
     const lines = rows.reverse().map((r) => {
       const outcome = r.outcome ? CALL_OUTCOME_LABEL[r.outcome as CallOutcome] : null;
-      return `- ${r.at ? new Date(r.at).toISOString().slice(0, 10) : ""}: ${clip(r.summary, 400)}${outcome ? ` (outcome: ${outcome})` : ""}${r.callbackAt ? ` They asked to be called back at ${new Date(r.callbackAt).toISOString()}.` : ""}`;
+      return `- ${r.at ? new Date(r.at).toISOString().slice(0, 10) : ""}: ${clip(r.summary, 400)}${outcome ? ` (outcome: ${outcome})` : ""}${r.callbackAt ? ` They asked to be called back on ${readableCallTime(r.callbackAt, timezone)} (${timezone} time).` : ""}`;
     });
     return `RECENT PHONE CALL WITH THIS PERSON (our AI assistant called them):\n${lines.join("\n")}\nCarry on from it: don't repeat what was already explained, and follow up on what they asked.`;
   } catch (err) {

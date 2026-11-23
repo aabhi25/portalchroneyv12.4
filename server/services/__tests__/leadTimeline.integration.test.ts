@@ -116,6 +116,27 @@ async function main() {
   const grouped = await queryUnifiedLeads(B, { sort: "score", groupByPerson: true }, { limit: 50, offset: 0 });
   expect(grouped.leads[0]?.id === lead.id, "hottest first also works with one row per person", grouped.leads.map((r) => `${r.channel}:${r.name}:${r.score?.score}`));
 
+  // An answered call where she asked to be called back, and that callback still waiting for its time.
+  const callbackAt = new Date(Date.now() + 24 * 3600_000);
+  const [asked] = await db.insert(schema.aiCalls).values({
+    businessAccountId: B, direction: "outbound", status: "completed", trigger: "auto_lead", provider: "simulator", phone: `+91${phone}`, leadId: lead.id,
+    startedAt: at(150), answeredAt: at(150), endedAt: at(152), durationSec: 108, outcome: "callback_requested", summary: "Priya asked to be called back tomorrow about admission.", callbackAt,
+  } as any).returning();
+  await db.insert(schema.aiCalls).values({
+    businessAccountId: B, direction: "outbound", status: "queued", trigger: "callback", provider: "simulator", phone: `+91${phone}`, leadId: lead.id,
+    scheduledAt: callbackAt, parentCallId: asked.id, metadata: { rootTrigger: "callback", requestedOnCallId: asked.id },
+  } as any);
+  tl = await svc.getLeadTimeline(B, { channel: "website", id: lead.id });
+  const callRows = tl!.events.filter((e) => e.channel === "call");
+  const readable = svc.readableCallTime(callbackAt, "Asia/Kolkata");
+  const askedRow = callRows.find((e) => e.title === "AI call · Call back later");
+  const planned = callRows.find((e) => e.title === "AI call · Call back planned");
+  expect(askedRow && askedRow.detail?.endsWith(`Asked to be called back on ${readable}.`), "the answered call shows its outcome and a readable callback time", askedRow);
+  expect(planned && planned.detail === `They asked to be called back. The AI will call on ${readable}.` && planned.at === callbackAt.toISOString(), "the waiting callback says when the AI will call, at that time", planned);
+  expect(!callRows.some((e) => /Not answered/.test(e.detail || "") || /Waiting to call/.test(e.title)), "no call on her timeline says Not answered or Waiting to call", callRows.map((e) => `${e.title} | ${e.detail}`));
+  const ctxCallback = await svc.recentCallContext(B, `91${phone}`);
+  expect(ctxCallback.includes(`called back on ${readable} (Asia/Kolkata time)`) && !/T\d\d:\d\d:\d\d/.test(ctxCallback), "WhatsApp's call context gives the callback time in the business's time zone", ctxCallback);
+
   await db.delete(schema.leads).where(eq(schema.leads.id, lead.id));
   const left = await db.select().from(schema.leadStories).where(eq(schema.leadStories.businessAccountId, B));
   expect(left.length === 0, "deleting the lead deletes its story");
