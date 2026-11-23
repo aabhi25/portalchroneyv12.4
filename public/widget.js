@@ -2139,6 +2139,18 @@
       });
 
       document.body.appendChild(el);
+
+      // Not shown over the open chat: it is on the same layer as the chat and would cover its send
+      // button. The chat opens and closes from many places, so its window itself is watched.
+      const chat = document.getElementById('hichroney-widget-iframe');
+      if (chat) {
+        const sync = function() {
+          const open = getComputedStyle(chat).display !== 'none';
+          el.style.setProperty('display', open ? 'none' : 'flex', 'important');
+        };
+        new MutationObserver(sync).observe(chat, { attributes: true, attributeFilter: ['style', 'class'] });
+        sync();
+      }
       console.log('[Hi Chroney] WhatsApp launcher rendered (' + (aiAlsoShown ? 'both' : 'whatsapp-only') + ' mode)');
     },
 
