@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, FileCheck2, Loader2, RotateCcw, Trash2 } from "lucide-react";
@@ -8,6 +8,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel, Stat } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
+import { AnswerPane } from "./AnswerPane";
 import { usePageViewer } from "./PageViewer";
 import { SheetPages, questionsOnPage, viewerPages } from "./SheetPages";
 import { ASSESS_PATH,
@@ -90,7 +91,21 @@ export default function PaperDetailPage({ paperId }: { paperId: string }) {
 
 function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
   const { open, viewer } = usePageViewer();
-  const [, setLocation] = useLocation();
+  // The question open in the side pane; kept in the address (?q=3) so a reload or a shared link opens it.
+  const [question, setQuestion] = useState<string | null>(() => new URLSearchParams(window.location.search).get("q"));
+  const unsaved = useRef(false);
+  const onDirty = useCallback((dirty: boolean) => { unsaved.current = dirty; }, []);
+  const mayLeave = useCallback(() => {
+    if (unsaved.current && !window.confirm("Leave this question without saving the teacher's marks?")) return false;
+    unsaved.current = false;
+    return true;
+  }, []);
+  const show = useCallback((q: string | null) => {
+    if (!mayLeave()) return;
+    setQuestion(q);
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+  }, [mayLeave]);
+  const hide = useCallback(() => show(null), [show]);
   const t = p.totals;
   const lost = (p.matching?.unassigned ?? []).filter(u => !/^\((heading|rough work)\)/i.test(u.text.trim()));
   return (
@@ -128,7 +143,7 @@ function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
             <table className="w-full min-w-[760px] text-[14px]" data-testid="paper-answers">
               <thead>
                 <tr className="border-b text-left text-[12px] text-gray-500">
-                  <th className="w-14 py-2 pr-3 font-medium">Q</th>
+                  <th className="w-14 py-2 pl-2 pr-3 font-medium">Q</th>
                   <th className="py-2 pr-3 font-medium">Question</th>
                   <th className="py-2 pr-3 font-medium">Found on</th>
                   <th className="py-2 pr-3 font-medium">Status</th>
@@ -137,7 +152,7 @@ function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
                 </tr>
               </thead>
               <tbody>
-                {p.checks.map(c => <AnswerRow key={c.id} c={c} practice={p.source === "practice"} onOpen={() => setLocation(`${ASSESS_PATH}/checks/${c.id}`)} onPage={n => open(viewerPages(p.pages, p), n - 1)} />)}
+                {p.checks.map(c => <AnswerRow key={c.id} c={c} practice={p.source === "practice"} open={c.questionNumber === question} onOpen={() => { if (c.questionNumber !== question) show(c.questionNumber); }} onPage={n => open(viewerPages(p.pages, p), n - 1)} />)}
               </tbody>
             </table>
           </div>
@@ -151,18 +166,21 @@ function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
           <pre className="whitespace-pre-wrap rounded-xl bg-violet-50/50 p-3 font-sans text-[13px] text-gray-700">{p.practice.sheet}</pre>
         </Panel>
       )}
+      {question !== null && <AnswerPane p={p} number={question} onGo={show} onClose={hide} onDirty={onDirty} mayLeave={mayLeave} />}
       {viewer}
     </div>
   );
 }
 
-function AnswerRow({ c, practice, onOpen, onPage }: { c: CheckView; practice: boolean; onOpen: () => void; onPage: (page: number) => void }) {
+function AnswerRow({ c, practice, open, onOpen, onPage }: { c: CheckView; practice: boolean; open: boolean; onOpen: () => void; onPage: (page: number) => void }) {
   const r = c.reading;
   const compare = practice ? c.expectedMarks : c.teacherMarks;
   const gap = c.aiMarks !== null && compare !== null ? c.aiMarks - compare : null;
+  const row = useRef<HTMLTableRowElement>(null);
+  useEffect(() => { if (open) row.current?.scrollIntoView({ block: "nearest" }); }, [open]);
   return (
-    <tr onClick={onOpen} className="cursor-pointer border-b border-black/[0.04] align-top hover:bg-gray-50" data-testid={`paper-answer-${c.questionNumber}`}>
-      <td className="py-2.5 pr-3 font-semibold">{c.questionNumber}</td>
+    <tr ref={row} onClick={onOpen} aria-selected={open} className={`cursor-pointer border-b border-black/[0.04] align-top ${open ? "bg-violet-50" : "hover:bg-gray-50"}`} data-testid={`paper-answer-${c.questionNumber}`}>
+      <td className="py-2.5 pl-2 pr-3 font-semibold">{c.questionNumber}</td>
       <td className="max-w-[360px] py-2.5 pr-3">
         <p className="line-clamp-2 text-gray-900">{c.scheme?.questionText}</p>
         {c.practiceLevel && <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700">{LEVEL_LABEL[c.practiceLevel]}</span>}
