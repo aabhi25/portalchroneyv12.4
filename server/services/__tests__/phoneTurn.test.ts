@@ -57,7 +57,8 @@ async function main() {
   expect(names('Mujhe call mat karna') === 'do_not_call,end_call' && names("please don't call me again") === 'do_not_call,end_call', 'do_not_call only when they asked not to be called');
   expect(names('Okay, thank you.') === 'end_call' && names('Wrong number') === 'end_call' && names('No', 'Is there anything else I can help you with?') === 'end_call', 'end_call on thanks / wrong number / "no" after "anything else?"');
   expect(names('Can I talk to a real person?') === 'transfer_to_human', 'transfer only when they ask for a person');
-  expect(names('Kal shaam ko call karna') === 'end_call,save_call_details' && names('My name is Rahul') === 'save_call_details', 'callback time / name → the tools that record them');
+  // Details are read from the transcript after the call; only an email is saved live (real calls 2026-11-23: a tool call on nearly every turn = 3-4 s of silence).
+  expect(names('Kal shaam ko call karna') === 'end_call' && names('My name is Rahul') === '' && names("I'm working in sales, three years now") === '' && names('My email is rahul at the rate gmail dot com') === 'save_call_details', 'a callback time ends the call; a name or "I\'m…" needs no tool; an email is saved');
   expect(names('Motor insurance ke baare mein bataiye') === '', 'a plain question offers no tools');
 
   // ── closing turns get no live opener ──
@@ -94,7 +95,10 @@ async function main() {
   expect(dropEchoedClause('Health और Motor: दोनों मिलते हैं।', 'जी, health और motor,') === 'दोनों मिलते हैं।', 'a first clause ending in ":" that repeats the opener is dropped');
   expect(/^Hi there, this is Anika from ArhamSecure\./.test(buildOpeningLine({ direction: 'outbound', businessName: 'ArhamSecure', assistantName: 'Anika' }).text), 'the default opening gives the name without announcing an AI');
   const named = buildPhoneInstructions({ direction: 'outbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: false, assistantName: 'Anika' });
-  expect(/your name is Anika/.test(named) && /is this a good time/.test(named), 'phone rules carry the name and the "not a good time" rule');
+  expect(/"Anika here, from ArhamSecure"/.test(named) && /is this a good time/.test(named), 'phone rules carry the name and the "not a good time" rule');
+  // Real call 2026-11-23: "Yeah, who's this?" got "I'm Surbhi, Symbiosis Online's AI assistant"; "why do you have to end the call?" got a denial.
+  expect(/you say you are an AI only when they ask whether you are a person/.test(named) && /calls have that time limit/.test(named) && /never deny it/.test(named), '"who is this" = name + business; the time limit is explained, never denied');
+  expect(/Not an interview/.test(named) && /Don't sum up what they have told you/.test(named) && /nothing to do with the business/.test(named), 'no interview, no recap before each question, off-topic questions handled lightly');
   // A long purpose reaches the AI in full (a 1,318-character one lost its closing rules, 2026-10-24).
   const { CALL_PURPOSE_MAX } = await import('@shared/aiCalling');
   const longPurpose = `${'Explain the programme and answer questions. '.repeat(40)}Never end the call without securing the next step.`.slice(-CALL_PURPOSE_MAX);
@@ -138,6 +142,28 @@ async function main() {
   expect(!/B\.Tech|sales|studying|पढ़ाई|fees मैं|Fees मैं|marketing|finance/i.test(lead), 'the phone rules carry no sample answers about a course, a job or fees', (lead.match(/[^.\n]*(B\.Tech|sales|studying|पढ़ाई|fees मैं|marketing|finance)[^.\n]*/i) || [])[0]);
   expect(/If their words don't fit your last question/.test(lead) && /say it once more/.test(lead), "an answer that doesn't fit is asked again, not guessed");
   expect(/one or two short sentences/.test(PHONE_CORE_PROMPT) && /No brochure language/.test(PHONE_CORE_PROMPT) && PHONE_CORE_PROMPT.length < 2500 && !/product cards|journey|get_products/i.test(PHONE_CORE_PROMPT), 'calls get a short phone core, not the website chat rules', PHONE_CORE_PROMPT.length);
+  // Real call 2026-11-23: "कौन कौन से है आपके पास?" was written as "मुझे IT में कुछ चाहिए।" and answered; "उम्म" became a sentence.
+  const { heardUnclearly, transcriptConfidence, isHindiSentence, PHONE_UNCLEAR_CONFIDENCE } = await import('../calling/phonePrompt');
+  const lp = (...p: number[]) => p.map((x) => ({ logprob: Math.log(x) }));
+  expect(Math.abs((transcriptConfidence(lp(0.9, 0.9, 0.9)) ?? 0) - 0.9) < 1e-9 && transcriptConfidence(null) === null && transcriptConfidence([]) === null, 'confidence = mean token probability; unknown without them');
+  expect(heardUnclearly(lp(0.08, 0.3, 0.6, 0.9, 0.2, 0.5, 0.3)) && heardUnclearly(lp(0.06, 0.7)) && heardUnclearly(lp(0.55, 0.55)) && !heardUnclearly(lp(0.95, 0.98, 1, 0.9)) && !heardUnclearly(lp(0.4, 0.9, 0.9, 0.95, 0.9)) && !heardUnclearly(null), 'a transcript speech-to-text was unsure of is unclear; a sure one, or one without scores, is not', PHONE_UNCLEAR_CONFIDENCE);
+  const first = phoneTurnHints({ callerText: 'फोन लोन से आके बस', askedQuestions: ['MBA में कौन सा specialization ठीक रहेगा?'], unclear: 'first' }) || '';
+  expect(/did NOT hear their last words correctly/.test(first) && /say it once more/.test(first) && !/ALREADY asked/.test(first), 'an unclear turn: only "say that again?"', first);
+  const again = phoneTurnHints({ callerText: 'फोन लोन से आके बस', unclear: 'again' }) || '';
+  expect(/Don't ask them to repeat again/.test(again) && /yes\/no question/.test(again), 'unclear twice in a row: a best guess to confirm, not a third "say again"', again);
+  expect(isHindiSentence('हाँ जी बताइए।') && isHindiSentence('मार्केटिंग में।') && isHindiSentence('काम कर रहा हूँ।') && isHindiSentence('آ یہ ضروری ہے بتانا؟') && !isHindiSentence('या, प्लीज टेल मी।') && !isHindiSentence('एमबीए।') && !isHindiSentence('थैंक यू'), 'Hindi vs English written in Devanagari');
+  // Simulated calls 2026-11-23: "Okay, Abhi, …" opened five replies in a row.
+  const { trimRepeatedStart } = await import('../calling/phonePrompt');
+  const r1 = trimRepeatedStart('Okay, Abhi, you want to focus on marketing.', null, 'Abhi Sharma');
+  expect(r1.speech === 'Okay, Abhi, you want to focus on marketing.' && r1.starter === 'okay' && r1.usedName, 'the first reply is spoken as written', r1);
+  const r2 = trimRepeatedStart('Okay, Abhi, since you have three years in sales, is it a move up?', r1, 'Abhi Sharma');
+  expect(r2.speech === 'Since you have three years in sales, is it a move up?' && r2.starter === null && !r2.usedName, 'the same opener and the name again are not spoken', r2);
+  const r3 = trimRepeatedStart('Right, Abhi, the fees vary.', r2, 'Abhi Sharma');
+  expect(r3.speech === 'Right, Abhi, the fees vary.' && r3.starter === 'right' && r3.usedName, 'a different opener after a plain reply is fine', r3);
+  const r4 = trimRepeatedStart('जी, Marketing भी available है।', { starter: 'जी', usedName: false }, 'Abhi');
+  expect(r4.speech === 'Marketing भी available है।', 'Hindi: "जी," twice in a row loses the second', r4);
+  const r5 = trimRepeatedStart('Abhi जी, कल बात करते हैं।', { starter: null, usedName: true }, 'Abhi');
+  expect(r5.speech === 'कल बात करते हैं।' && trimRepeatedStart('The course is two years.', r1, 'Abhi').speech === 'The course is two years.', 'the name with "जी" too; a reply with no opener is untouched', r5);
   const { isWrappingUp } = await import('../calling/phonePrompt');
   expect(['Okay, thank you.', 'Thanks a lot', "Theek hai, main soch ke batata hoon", 'ठीक है, थैंक यू', "That's all for now", 'धन्यवाद जी'].every((t) => isWrappingUp(t)), 'winding down is recognised');
   expect(!['Not interested, thanks.', 'Call me tomorrow, thank you', "Please don't call me again, thanks", 'Can I talk to a person? Thanks', 'Okay.', 'Tell me about the fees', 'नहीं चाहिए, धन्यवाद'].some((t) => isWrappingUp(t)), 'a no / busy / do-not-call / wants a person / a question is not a wrap-up');

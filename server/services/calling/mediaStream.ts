@@ -795,7 +795,9 @@ export class CallMediaSession {
     }
     if (!this.wrapWarned && maxMs > 60_000 && elapsed >= maxMs - WRAP_UP_WARN_MS && quietNow) {
       this.wrapWarned = true;
-      void this.engine?.say(PHONE_LINES.wrapUpSoon);
+      // Saved with the call: asked "why do you have to end the call?" the AI must know it said so
+      // (real call 2026-11-23: "मैंने नहीं बोली थी कि कॉल खत्म करनी पड़ेगी").
+      void this.engine?.say(PHONE_LINES.wrapUpSoon, { persist: true });
       return;
     }
 

@@ -51,6 +51,7 @@ import { appliesToChannel } from '@shared/knowledgeChannels';
 import { embeddingService } from './services/embeddingService';
 import { isBareAcknowledgement, isConversationMeta, smallTalkKind } from './services/chatContext/smallTalk';
 import { isUnsureCaller, phoneToolsForTurn } from './services/calling/phonePrompt';
+import { callerAsked, wantsDetail } from './services/voice/phoneAnswerShaper';
 import { accountHasKnowledge } from './services/chatContext/knowledgePresence';
 import { embedQueryCached } from './services/chatContext/queryEmbeddingCache';
 import { ChatTurnTiming } from './services/chatContext/chatTiming';
@@ -265,6 +266,10 @@ function isShortPhoneAnswer(msg: string): boolean {
 
 /** Phone calls: longest wait for the knowledge-search query embedding before keyword-only search. */
 const PHONE_EMBED_WAIT_MS = 800;
+// The caller told us something rather than asked ("I'm in sales, three years now"): the business
+// profile is already in the prompt and the keyword search still runs, so the meaning search gets
+// only this long before the reply starts without it.
+const PHONE_EMBED_WAIT_STATEMENT_MS = 250;
 // A question with no English words at all: the keyword search can't match English content, so
 // the meaning search is worth a little more waiting (live call 2026-10-24: 801 ms, cut off).
 const PHONE_EMBED_WAIT_NON_LATIN_MS = 1500;
@@ -5056,7 +5061,11 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           if (ok('do_not_call')) {
             continuationBlock = `${continuationBlock}\n\nTHE CALL IS ENDING: the caller asked not to be called again and it is recorded. Reply with EXACTLY ONE short sentence in the caller's language: apologise for the call and say goodbye (e.g. "Ji, pareshani ke liye maafi — aapko dobara call nahi aayega. Dhanyavaad!" / "Sorry for the trouble — we won't call you again. Take care!"). No question, nothing else.`.trim();
           } else if (ok('end_call') || ok('transfer_to_human')) {
-            continuationBlock = `${continuationBlock}\n\nTHE CALL IS ENDING now: reply with ONE short warm sentence in the caller's language (goodbye, or that you are connecting them). No question, no new topic.`.trim();
+            // A call back was agreed: the goodbye says when (simulated call 2026-11-23: "कल शाम को कॉल करना" got only "आपका दिन शुभ हो!").
+            const callback = toolCalls.some((tc: any) => tc.function?.name === 'end_call' && /callback_requested/.test(String(tc.function?.arguments || '')));
+            continuationBlock = callback
+              ? `${continuationBlock}\n\nTHE CALL IS ENDING now: reply with ONE short warm sentence in the caller's language that says when YOU will call them back, in everyday words ("Sure, I'll call you tomorrow around six. Bye!" / "ठीक है, कल शाम छह बजे के आसपास call करती हूँ।"). No question, no new topic.`.trim()
+              : `${continuationBlock}\n\nTHE CALL IS ENDING now: reply with ONE short warm sentence in the caller's language (goodbye, or that you are connecting them). No question, no new topic.`.trim();
           }
         }
 
@@ -6696,7 +6705,8 @@ This rule is MANDATORY and overrides ALL other instructions. NEVER admit lack of
             // Phone: the caller is waiting in silence. The query embedding took 0.4-1.9 s on calls (usually 0.4-0.65 s; 400 ms cut off nearly every one and the keyword search alone found nothing)
             // (2026-10-17) — past PHONE_EMBED_WAIT_MS the keyword search answers alone (the
             // embedding still finishes into the cache for the next turn).
-            return withinMs(embedding, /[a-z]/i.test(text) ? PHONE_EMBED_WAIT_MS : PHONE_EMBED_WAIT_NON_LATIN_MS, 'query embedding (phone)');
+            const wait = /[a-z]/i.test(text) ? PHONE_EMBED_WAIT_MS : PHONE_EMBED_WAIT_NON_LATIN_MS;
+            return withinMs(embedding, callerAsked(msg) || wantsDetail(msg) ? wait : PHONE_EMBED_WAIT_STATEMENT_MS, 'query embedding (phone)');
           }
           : undefined,
         channel: 'website',

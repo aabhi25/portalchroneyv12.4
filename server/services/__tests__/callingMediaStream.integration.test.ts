@@ -326,7 +326,7 @@ async function main() {
     const e = h.engine();
     expect(e.input.assistantName === "Anika" && e.input.speakingSpeed === 85, "the assistant's name and speaking speed reach the voice session", { n: e.input.assistantName, s: e.input.speakingSpeed });
     expect(e.input.voiceSelection === "el:gHu9GtaHOXcSqFTK06ux", "the call's own voice reaches the voice session", e.input.voiceSelection);
-    expect(/your name is Anika/.test(e.input.chat.instructions), "the phone rules carry the name");
+    expect(/"Anika here, from /.test(e.input.chat.instructions), "the phone rules carry the name");
     e.ready("conv-ambience");
     await flush();
     await h.clock.advance(1000, h.settle);

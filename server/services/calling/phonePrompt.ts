@@ -166,12 +166,12 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
     lines.push("- When they say yes to talking (\"yes, tell me\", \"haan boliye\", \"हाँ, बताइए\"): don't describe the product yet. One short line on why you called, then one question about them and what they are looking for. Details come when they ask.");
     lines.push("- If they answer your opening question (\"is this a good time?\") with no / not now / busy (\"nahi\", \"abhi nahi\", \"नहीं\"), do NOT start pitching: say one warm line and ask once when to call back, in the call's language (English call: \"No problem — when should I call you back, this evening or tomorrow?\"; Hindi call: \"कोई बात नहीं जी — कब call करूँ, शाम को या कल?\"). If they give a time, end the call with outcome callback_requested and that time; if they just want to go, end it politely.");
   }
-  lines.push("- If they ask your name or who you are, answer that in one short warm line" + (clean(input.assistantName, 60) ? ` (your name is ${clean(input.assistantName, 60)})` : "") + ", then continue the conversation naturally — do not repeat a question you already asked.");
+  lines.push("- If they ask your name or who you are (\"who's this?\", \"कौन बोल रहा है?\"), answer in one short warm line with your name and the business" + (clean(input.assistantName, 60) ? ` (\"${clean(input.assistantName, 60)} here, from ${clean(input.businessName, 120) || "the team"}\")` : "") + " — on this call that is the whole answer, whatever WHO YOU ARE above suggests: you say you are an AI only when they ask whether you are a person, a robot or an AI. Then continue naturally — do not repeat a question you already asked.");
   lines.push("- If they say they are not interested (\"nahi chahiye\", \"interest nahi hai\", \"not interested\"): say ONE warm line in the call's language (English call: \"No problem at all — have a good day!\"; Hindi call: \"Koi baat nahi ji, aapka din achha ho!\") and end the call with outcome not_interested. Do not pitch again or ask another question.");
   lines.push("- When they agree to go ahead (\"le lo\", \"kar do\", \"theek hai, aage badhao\", \"okay, go ahead\"): confirm in a few words and take the next step, in the call's language: say what happens next and ask the ONE detail still needed for it. Never just repeat what you already told them.");
   lines.push("- Never reply with only a promise (\"मैं आपको बताती हूँ\", \"main batati hoon\", \"let me explain\"): say the actual thing in the same reply.");
   lines.push("- If the line is unclear or you didn't catch something, say so briefly and ask them to repeat.");
-  lines.push(`- Keep the whole call under ${Math.max(1, input.maxCallMinutes)} minute${input.maxCallMinutes === 1 ? "" : "s"}.`);
+  lines.push(`- Keep the whole call under ${Math.max(1, input.maxCallMinutes)} minute${input.maxCallMinutes === 1 ? "" : "s"}: calls have that time limit. If the history shows you said you need to wrap up, you did say it — never deny it. Asked why the call has to end, say plainly that your calls are kept short and offer to call back to continue.`);
   lines.push(`- Current date and time for the business: ${localTime(now, input.timezone)} (${input.timezone}). Use it to turn "tomorrow evening" into a real time.`);
 
   if (input.direction === "outbound") {
@@ -196,7 +196,7 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   lines.push("");
   lines.push("PHONE TOOLS:");
   if (!input.leadCaptureOn) {
-    lines.push("- save_call_details: whenever they tell you something worth noting for the team (name correction, email, what they need, budget, preferred time…), save it.");
+    lines.push("- save_call_details: when they give you an email address, save it (repeat it back once first). Other things they tell you are noted from the call by themselves — no tool needed.");
   }
   lines.push("- end_call: when the conversation is complete or they want to go, call end_call with the outcome (and callback_time if they asked to be called back), then say ONE short warm goodbye sentence. Never end the call in the middle of their question.");
   lines.push("- do_not_call: if they ask not to be called again (or to remove their number), call do_not_call, apologise briefly and say goodbye. Do not argue or try to sell.");
@@ -214,6 +214,9 @@ export function buildPhoneInstructions(input: PhonePromptInput): string {
   lines.push("- The business's instructions above were written for its website chat. On this call ignore anything in them about collecting a name, mobile number or other contact details, forms, links or a guided journey: you are already speaking to the person.");
   // No sample answers with content here: on a real call (2026-11-23) the AI said the fee example word for word
   // ("fees मैं confirm करके बताती हूँ") to a caller who had asked something else.
+  lines.push("- Don't sum up what they have told you so far before each question (\"So you have finished your degree, you want X and Y…\") — they know what they said. Pick up only their last words.");
+  lines.push("- Not an interview: after two questions in a row, give them something back first — one fact from the business knowledge that fits what they said — before you ask anything else. Use their name rarely (two or three times in the whole call).");
+  lines.push("- A question that has nothing to do with the business (the news, sport, the weather): answer lightly in a few words that it's not something you can help with, like a person would, and steer back with ONE short question. Asked the same thing again, don't repeat the same sentence.");
   lines.push("- The shape of a good turn: two or three words that pick up what they said, then ONE short question or ONE fact. A bad turn: praise, two sentences describing the product, then \"what specific aspects interest you?\".");
   lines.push("- Answer what they actually asked. If their words don't fit your last question, or you are not sure what they meant, don't guess and don't carry on with your own topic: ask them to say it once more (\"Sorry, I didn't catch that — could you say it again?\" / \"Sorry, आवाज़ कट गई — एक बार फिर बोलेंगे?\").");
   lines.push("- When you speak Hindi (only when the caller does): talk the way people talk on the phone, mixing in the English words they use — keep the words people say in English in English (course, fees, admission, job, plan, online, EMI, placement, form, details) and use अलग-अलग (not विभिन्न), ज़रूरत (not आवश्यकता), field (not क्षेत्र), दिलचस्पी / interest (not रुचि), बता दीजिए (not बता सकते हैं क्या). Short sentences, the way you would say it to someone on the phone (\"थोड़ा बताइए ना\", not \"क्या आप मुझे इसके बारे में बता सकते हैं?\"). When the call is in English, reply in English.");
@@ -385,11 +388,16 @@ export function askedNotToBeCalled(recentCallerText: string): boolean {
  *   do_not_call       they asked not to be called (the same check that guards the tool);
  *   end_call          goodbye / thanks / not interested / busy / call me later / wrong number;
  *   transfer_to_human they ask for a person;
- *   save_call_details the message may carry a detail (a name, email, number, time, budget, need).
+ *   save_call_details they are giving an email address. Everything else they tell us (a name, a
+ *                     time, a budget, what they need) is read from the transcript after the call
+ *                     (summary.ts capturedFields) — offering the tool for those made the model
+ *                     call it on nearly every turn ("I'm…", "kal", any number), and each call is a
+ *                     second model round: 3-4 s of silence before the reply (real calls, 2026-11-23).
  */
 const ENDING = new RegExp(String.raw`\b(bye|goodbye|good bye|thanks?|thank you|thx|that'?s (all|it)|nothing else|no(,| )?(thanks|thank you)|not interested|no interest|not now|busy|later|tomorrow|call (me )?(back|later|tomorrow|after)|wrong (number|person)|stop|disconnect|hang up|cut the call|nahi chahiye|nahin chahiye|interest nahi|abhi nahi|baad (mein|me)|kal|shaam|busy hoon|galat number|dhanyavaad|dhanyawad|shukriya|bas|rakhta|rakhti|rakhiye|alvida)\b|नहीं चाहिए|अभी नहीं|(इंटरेस्ट|इंटरस्ट|रुचि|interest) नहीं|बाद में|कल|शाम|गलत नंबर|धन्यवाद|शुक्रिया|बस|बाय|थैंक|रखता|रखती|बिज़ी|बिजी`, "i");
 const WANTS_PERSON = new RegExp(String.raw`\b(human|person|real person|agent|executive|representative|manager|someone|somebody|team member|advisor|customer care|insaan|aadmi|kisi se baat|baat karwa|connect me|transfer)\b|इंसान|किसी से बात|बात करवा|मैनेजर|एजेंट|एक्जीक्यूटिव`, "i");
-const DETAIL = new RegExp(String.raw`\d|@|\b(my name|naam|i am|i'?m|main|mera|meri|budget|lakh|thousand|hazaar|hazar|rupees?|time|baje|morning|evening|subah|shaam|tomorrow|kal|need|want|chahiye|looking for|for my|ke liye)\b|नाम|मेरा|मेरी|बजे|लाख|हज़ार|हजार|चाहिए|के लिए`, "i");
+
+const EMAIL_DETAIL = /@|\b(at the rate|gmail|yahoo|outlook|hotmail|rediff|e-?mail id|email (is|id|address))\b|ईमेल|जीमेल/i;
 
 export function phoneToolsForTurn(tools: any[], callerText: string, lastAssistantText?: string | null): any[] {
   const text = String(callerText || "").replace(/[’']/g, "'");
@@ -399,7 +407,7 @@ export function phoneToolsForTurn(tools: any[], callerText: string, lastAssistan
       case "do_not_call": return askedNotToBeCalled(text);
       case "end_call": return ENDING.test(text) || askedNotToBeCalled(text) || declinedToTalk(text, lastAssistantText) || (askedAnythingElse && /^\s*(no|nope|nahi|nahin|नहीं|that'?s it|bas)\b/i.test(text));
       case "transfer_to_human": return WANTS_PERSON.test(text);
-      case "save_call_details": return DETAIL.test(text);
+      case "save_call_details": return EMAIL_DETAIL.test(text);
       default: return true;
     }
   };
@@ -465,8 +473,15 @@ export function isWrappingUp(callerText: string, lastAssistantText?: string | nu
  * again — live call 2026-10-17 asked "आपको किस प्रकार का insurance चाहिए?" four times), and what
  * to do when the caller is unsure.
  */
-export function phoneTurnHints(input: { callerText: string; lastAssistantText?: string | null; askedQuestions?: string[]; wrappingUp?: boolean }): string | null {
+export function phoneTurnHints(input: { callerText: string; lastAssistantText?: string | null; askedQuestions?: string[]; wrappingUp?: boolean; unclear?: "first" | "again" | null }): string | null {
   const hints: string[] = [];
+  // Speech-to-text was not sure of its own words (see heardUnclearly): the words above may be wrong.
+  if (input.unclear === "first") {
+    return "THIS REPLY:\n- The line was unclear and you probably did NOT hear their last words correctly — what is written above may be wrong. Do not answer it, do not guess and do not carry on with your own topic. Say in ONE short line, in the call's language, that you didn't catch that and ask them to say it once more (\"Sorry, I didn't catch that — could you say it again?\" / \"Sorry, आवाज़ कट गई — एक बार फिर बोलेंगे?\"). Nothing else.";
+  }
+  if (input.unclear === "again") {
+    hints.push("The line is still unclear (you already asked them to repeat once). Don't ask them to repeat again: go by your best understanding of their words and check it with one short yes/no question (\"You're asking about …, right?\" / \"आप … के बारे में पूछ रहे हैं, है ना?\").");
+  }
   if (input.wrappingUp) {
     hints.push("They are wrapping up the call. Before saying goodbye, make ONE short, polite attempt at the next step your PURPOSE OF THIS CALL asks for (for example booking a call or visit, or a good time for the team to follow up), as a question in the call's language. If they already said no to that on this call, don't ask again: thank them warmly and say goodbye.");
   }
@@ -481,6 +496,84 @@ export function phoneTurnHints(input: { callerText: string; lastAssistantText?: 
     hints.push("They are unsure what they need. Don't list the options again. In THIS reply (not later), suggest the most common choice in one short line and ask ONE easy question about their situation that they can answer in a word and that fits what they already told you (who it is for, what they do now, when they want to start — not the same choice again).");
   }
   return hints.length ? `THIS REPLY:\n- ${hints.join("\n- ")}` : null;
+}
+
+// ── Hearing (real call 2026-11-23) ──────────────────────────────────────────────────
+
+/**
+ * How sure speech-to-text was of its own transcript: the mean per-token probability (1 = sure),
+ * or null when the transcript came without them.
+ */
+export function transcriptConfidence(logprobs?: Array<{ logprob?: number }> | null): number | null {
+  if (!Array.isArray(logprobs) || !logprobs.length) return null;
+  const values = logprobs.map((l) => Number(l?.logprob)).filter((n) => Number.isFinite(n));
+  if (!values.length) return null;
+  return Math.exp(values.reduce((a, b) => a + b, 0) / values.length);
+}
+
+/**
+ * Below this the transcript is treated as probably wrong. From the caller's lines of three real
+ * calls (2026-11-23), replayed through the call's speech-to-text: transcripts with a changed
+ * meaning scored 0.02–0.55 ("Yeah, should be." written as "यहाँ पर।", "Yeah, we'll see." as
+ * "अभी से।", "उम्म" as a word), correct ones 0.76–1.00, with a few correct short lines at 0.59–0.65.
+ * So about one clear line in ten is asked again; a wrong answer to words never said is worse.
+ */
+export const PHONE_UNCLEAR_CONFIDENCE = 0.6;
+
+/**
+ * Phone: speech-to-text probably got this turn wrong, so the AI asks them to say it again
+ * instead of answering words they never said (it replied "IT में specialization ठीक रहेगा" to a
+ * caller who had asked which specializations there are).
+ */
+export function heardUnclearly(logprobs?: Array<{ logprob?: number }> | null): boolean {
+  const confidence = transcriptConfidence(logprobs);
+  return confidence !== null && confidence < PHONE_UNCLEAR_CONFIDENCE;
+}
+
+const HINDI_FUNCTION_WORDS = new Set(["है", "हैं", "हूँ", "हूं", "हो", "था", "थी", "थे", "का", "की", "के", "को", "में", "से", "पर", "ने", "क्या", "क्यों", "कब", "कैसे", "कौन", "कहाँ", "कहां", "कितना", "कितनी", "कितने",
+  "नहीं", "हाँ", "हां", "जी", "मैं", "मुझे", "मेरा", "मेरी", "मेरे", "हम", "आप", "आपके", "आपका", "आपकी", "ये", "यह", "वो", "वह", "तो", "और", "भी", "ही", "कर", "करना", "रहा", "रही", "रहे", "चाहिए", "बताइए", "बताओ", "बता", "अभी", "कुछ", "या", "लिए", "ठीक", "अच्छा"]);
+/**
+ * A sentence in Devanagari that is really Hindi — not English that speech-to-text wrote in
+ * Devanagari ("या, प्लीज टेल मी।" for "Yeah, please tell me."), which has no Hindi grammar words
+ * and must not turn an English call into a Hindi one.
+ */
+export function isHindiSentence(text: string): boolean {
+  const words = String(text || "").replace(/[^\u0900-\u097F\u0600-\u06FF\s]|[।॥]/g, " ").split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  if (/[\u0600-\u06FF]/.test(text)) return true; // Hindi written in Urdu script
+  const hits = words.filter((w) => HINDI_FUNCTION_WORDS.has(w)).length;
+  return hits >= 2 || (hits === 1 && !(words.length >= 3 && words[0] === "या"));
+}
+
+// ── How a reply starts (simulated calls 2026-11-23: "Okay, Abhi, …" five replies running) ──
+
+const STARTERS = "okay|ok|right|sure|great|perfect|alright|all right|got it|i see|oh|well|so|achha|accha|acha|theek hai|thik hai|ji haan|ji|haan|अच्छा|ठीक है|जी हाँ|जी|हाँ|हां";
+const STARTER_RE = new RegExp(String.raw`^\s*(${STARTERS})\s*[,!.।–—-]+\s*`, "i");
+
+/**
+ * The start of a spoken reply without what the previous reply already opened with: the same
+ * reaction word twice in a row ("Okay, … / Okay, …", "जी, … / जी, …") loses the second one, and the
+ * person's name is not said at the start of two replies running. Returns what this reply opened
+ * with, for the next one.
+ */
+export function trimRepeatedStart(speech: string, prev: { starter?: string | null; usedName?: boolean } | null | undefined, name?: string | null): { speech: string; starter: string | null; usedName: boolean } {
+  let rest = String(speech || "");
+  const m = STARTER_RE.exec(rest);
+  const starter = m ? m[1].toLowerCase().replace(/\s+/g, " ") : null;
+  const afterStarter = m ? rest.slice(m[0].length) : rest;
+  const first = greetingName(name);
+  const nameRe = first ? new RegExp(String.raw`^\s*${first.replace(/[.*+?^$()|[\]\\{}]/g, "\\$&")}(?:\s+(?:ji|जी))?\s*[,!.।–—-]+\s*`, "i") : null;
+  const n = nameRe ? nameRe.exec(afterStarter) : null;
+  const usedName = !!n;
+  const dropStarter = !!starter && !!prev?.starter && prev.starter === starter;
+  const dropName = usedName && !!prev?.usedName;
+  if (!dropStarter && !dropName) return { speech: rest, starter, usedName };
+  const body = n ? afterStarter.slice(n[0].length) : afterStarter;
+  const keptStarter = m && !dropStarter ? m[0] : "";
+  const keptName = n && !dropName ? n[0] : "";
+  rest = `${keptStarter}${keptName}${body}`;
+  if (!keptStarter && !keptName) rest = rest.replace(/^\s*[a-z]/, (c) => c.toUpperCase());
+  return { speech: rest, starter: dropStarter ? null : starter, usedName: usedName && !dropName };
 }
 
 // ── Spoken-answer guards (live call 2026-10-17) ─────────────────────────────────────
