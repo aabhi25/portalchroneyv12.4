@@ -186,7 +186,8 @@ async function main() {
     expect(second.pages === 3, "a PDF's pages are added in order (2 PDF pages + 1 photo)", second.pages);
     expect(second.warnings.some(w => /already uploaded for Riya/.test(w)), "a page already used for another student is pointed out", second.warnings);
     await engine.waitForIdle();
-    expect(calls.filter(c => c.kind === "paperRead").pop()!.images === 3, "all 3 pages go to the reader");
+    const read = calls.filter(c => c.kind === "paperRead").pop()!;
+    expect(read.images >= 3 && read.user.includes("show the 3 pages") && read.user.includes("overlapping strips"), "all 3 pages go to the reader (large pages as overlapping strips, so small writing stays sharp)", [read.images, read.user.slice(-200)]);
     let bad = "";
     try { await asmt.checkSheet({ businessAccountId: B, assessment: row, files: [{ name: "notes.txt", mime: "text/plain", data: Buffer.from("hi") }], studentName: "", rollNo: "", userId: null }); } catch (e: any) { bad = e.message; }
     expect(/use photos/.test(bad), "other file types are refused with a plain message", bad);

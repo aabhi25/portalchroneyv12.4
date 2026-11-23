@@ -9,6 +9,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel, Stat } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { SchemeEditor } from "./SchemeEditor";
+import { PictureStrip } from "./PictureStrip";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
 import {
   API, ASSESS_PATH, KIND_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, fileToDataUrl, fmtCost, fmtMarks, paperRunning, scopeLabel,
@@ -209,14 +210,27 @@ function AnswerKeys({ a, onChanged }: { a: AssessmentView; onChanged: () => void
             <button type="button" onClick={() => setOpen(open === q.questionKey ? null : q.questionKey)} className="flex w-full items-start gap-3 text-left" data-testid={`key-toggle-${q.number}`}>
               {open === q.questionKey ? <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" /> : <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />}
               <span className="w-10 shrink-0 font-semibold text-gray-900">Q{q.number}</span>
-              <span className="min-w-0 flex-1 text-[14px] text-gray-800">{q.scheme?.questionText ?? "(answer key missing)"}</span>
+              <span className="min-w-0 flex-1 whitespace-pre-wrap text-[14px] text-gray-800">
+                {q.scheme?.questionText ?? "(answer key missing)"}
+                {(q.section || q.externalId || !!q.scheme?.questionImages?.length || !!q.scheme?.answerImages?.length) && (
+                  <span className="mt-1 flex flex-wrap gap-1.5">
+                    {q.section && <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-700">Section {q.section}</span>}
+                    {q.externalId && <span className="rounded-full bg-cyan-50 px-2 py-0.5 text-[11px] text-cyan-700">Question ID {q.externalId}</span>}
+                    {(!!q.scheme?.questionImages?.length || !!q.scheme?.answerImages?.length) && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800" data-testid={`key-pictures-${q.number}`}>Has pictures</span>}
+                  </span>
+                )}
+              </span>
               <span className="shrink-0 text-[13px] text-gray-500">{q.scheme ? `${fmtMarks(q.scheme.maxMarks)} marks${q.scheme.questionKind ? ` · ${KIND_LABEL[q.scheme.questionKind]}` : ""}` : ""}</span>
             </button>
             {open === q.questionKey && q.scheme && (
               <div className="ml-14 mt-3 space-y-3">
+                {!!q.scheme.questionImages?.length && (
+                  <div className="text-[13px] text-gray-600">The question's picture{q.scheme.questionImages.length === 1 ? "" : "s"}<PictureStrip pictures={q.scheme.questionImages.map(id => ({ id }))} /></div>
+                )}
                 <details className="text-[13px]" open>
                   <summary className="cursor-pointer text-violet-700">Model answer{q.scheme.modelAnswerByAi ? " (written by the AI)" : ""}</summary>
                   <p className="mt-2 whitespace-pre-wrap rounded-xl bg-gray-50 p-3 text-gray-700">{q.scheme.modelAnswer || "—"}</p>
+                  <PictureStrip pictures={(q.scheme.answerImages ?? []).map(id => ({ id }))} />
                 </details>
                 <SchemeEditor scheme={q.scheme} checksCount={0} onSaved={onChanged} onRechecked={onChanged} />
               </div>

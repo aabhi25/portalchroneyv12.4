@@ -85,6 +85,10 @@ export default function SettingsPage() {
             <Input value={Math.round(s.confidenceThreshold * 100)} onChange={e => setS({ ...s, confidenceThreshold: (Number(e.target.value) || 0) / 100 })} inputMode="numeric" className="mt-1 w-24" data-testid="settings-confidence" />
           </label>
         </div>
+        <label className="mt-4 flex items-center gap-2 text-[13px] font-medium text-gray-700">
+          <Switch checked={s.drawingsToTeacher} onCheckedChange={v => setS({ ...s, drawingsToTeacher: v })} data-testid="settings-drawings" />
+          Answers with a drawing (diagram, graph, construction) go to a teacher to confirm the marks
+        </label>
         <p className="mt-2 text-[13px] text-gray-500">Blank pages and answers with three or more unreadable parts always go to a teacher.</p>
       </Panel>
 

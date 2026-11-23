@@ -11,8 +11,9 @@ import { Panel } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { AiDraftBox } from "./AiDraftBox";
 import { CurriculumSearch } from "./CurriculumSearch";
+import { PictureStrip } from "./PictureStrip";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
-import { API, ASSESS_PATH, fileToDataUrl, fmtMarks, type AssessmentView, type ImportedPaper, type QuestionInput } from "./answerCheckApi";
+import { API, ASSESS_PATH, fileToDataUrl, fmtMarks, type AssessmentView, type ImportedPaper, type PictureRef, type QuestionInput } from "./answerCheckApi";
 
 interface Row {
   number: string;
@@ -26,6 +27,12 @@ interface Row {
   fromCurriculum?: boolean;
   /** Question and model answer written by the AI from the chapter's content — shown so they get checked. */
   aiDrafted?: boolean;
+  /** From the client's own question files: the paper's section and the question's ID in their system. */
+  section?: string | null;
+  externalId?: string | null;
+  /** The question's own pictures and its model answer's diagram. */
+  questionImages?: PictureRef[];
+  answerImages?: PictureRef[];
 }
 
 const emptyRow = (n: number): Row => ({ number: String(n), questionText: "", maxMarks: "", modelAnswer: "" });
@@ -56,6 +63,8 @@ export default function AssessmentEditor({ assessmentId }: { assessmentId?: stri
     setRows(a.questions.map(q => ({
       number: q.number, questionText: q.scheme?.questionText ?? "", maxMarks: q.scheme ? String(q.scheme.maxMarks) : "",
       modelAnswer: q.scheme?.modelAnswer ?? "", modelAnswerByAi: q.scheme?.modelAnswerByAi, questionKey: q.questionKey, chapter: q.scheme?.chapter, fromCurriculum: q.questionKey.startsWith("cms:"),
+      section: q.section, externalId: q.externalId,
+      questionImages: (q.scheme?.questionImages ?? []).map(id => ({ id })), answerImages: (q.scheme?.answerImages ?? []).map(id => ({ id })),
     })));
     setLoaded(true);
   }, [existing.data]);
@@ -75,11 +84,20 @@ export default function AssessmentEditor({ assessmentId }: { assessmentId?: stri
     if (!subject && p.subject) setSubject(p.subject);
     const written = p.questions.filter(q => !q.objective);
     const skipped = p.questions.length - written.length;
-    setRows(rs => [...rs.filter(r => r.questionText.trim()), ...written.map(q => ({
-      number: q.number, questionText: q.question, maxMarks: q.marks ? String(q.marks) : "", modelAnswer: q.modelAnswer, modelAnswerByAi: q.modelAnswerByAi,
-    }))]);
+    setRows(rs => {
+      const kept = rs.filter(r => r.questionText.trim());
+      // Numbers already used by the paper's questions: the imported ones are numbered on from there.
+      const used = new Set(kept.map(r => r.number.trim().toLowerCase()));
+      const clash = written.some(q => used.has(q.number.trim().toLowerCase()));
+      let n = nextNumber(kept);
+      return [...kept, ...written.map(q => ({
+        number: clash ? String(n++) : q.number, questionText: q.question, maxMarks: q.marks ? String(q.marks) : "", modelAnswer: q.modelAnswer, modelAnswerByAi: q.modelAnswerByAi,
+        section: q.section ?? null, externalId: q.externalId ?? null, chapter: q.chapter ?? null,
+        questionImages: (q.questionImages ?? []).map(data => ({ data })), answerImages: (q.answerImages ?? []).map(data => ({ data })),
+      }))];
+    });
     setAdding("");
-    toast({ title: `${written.length} question${written.length === 1 ? "" : "s"} imported`, description: [skipped ? `${skipped} multiple-choice or objective question${skipped === 1 ? " was" : "s were"} left out (checked by the client's own system).` : "", "Check each question, its marks and model answer, then save."].filter(Boolean).join(" ") });
+    toast({ title: `${written.length} question${written.length === 1 ? "" : "s"} imported`, description: [...(p.notes ?? []), skipped ? `${skipped} multiple-choice or objective question${skipped === 1 ? " was" : "s were"} left out (checked by the client's own system).` : "", "Check each question, its marks and model answer, then save."].filter(Boolean).join(" ") });
   }
 
   function addFromCurriculum(q: QuestionInput) {
@@ -118,6 +136,7 @@ export default function AssessmentEditor({ assessmentId }: { assessmentId?: stri
         title, mockTestId, board, medium, grade, subject,
         questions: rows.filter(r => r.questionText.trim() || r.modelAnswer.trim()).map(r => ({
           number: r.number, questionText: r.questionText, maxMarks: Number(r.maxMarks), modelAnswer: r.modelAnswer, questionKey: r.questionKey ?? null, chapter: r.chapter ?? null,
+          section: r.section ?? null, externalId: r.externalId ?? null, questionImages: r.questionImages ?? [], answerImages: r.answerImages ?? [],
         })),
       };
       const res = assessmentId
@@ -176,10 +195,15 @@ export default function AssessmentEditor({ assessmentId }: { assessmentId?: stri
                   <div key={i} className="rounded-xl border border-black/[0.08] p-4" data-testid={`asmt-row-${i}`}>
                     <div className="flex flex-wrap items-start gap-3">
                       <label className="w-16 text-[12px] font-medium text-gray-600">No.<Input value={r.number} onChange={e => setRow(i, { number: e.target.value.slice(0, 10) })} className="mt-1 h-9" /></label>
-                      <label className="min-w-[240px] flex-1 text-[12px] font-medium text-gray-600">Question{r.fromCurriculum && <span className="ml-2 rounded-full bg-cyan-50 px-2 py-0.5 text-[11px] text-cyan-700">From the curriculum{r.chapter ? ` · ${r.chapter}` : ""}</span>}
+                      <div className="min-w-[240px] flex-1">
+                      <label className="block text-[12px] font-medium text-gray-600">Question{r.fromCurriculum && <span className="ml-2 rounded-full bg-cyan-50 px-2 py-0.5 text-[11px] text-cyan-700">From the curriculum{r.chapter ? ` · ${r.chapter}` : ""}</span>}
                         {r.aiDrafted && <span className="ml-2 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700" data-testid={`asmt-drafted-${i}`}>Written by AI from the chapter content{r.chapter ? ` · ${r.chapter}` : ""} — please check</span>}
+                        {r.section && <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-700" data-testid={`asmt-section-${i}`}>Section {r.section}</span>}
+                        {r.externalId && <span className="ml-2 rounded-full bg-cyan-50 px-2 py-0.5 text-[11px] text-cyan-700" data-testid={`asmt-external-${i}`}>Question ID {r.externalId}</span>}
                         <Textarea value={r.questionText} onChange={e => setRow(i, { questionText: e.target.value })} rows={2} className="mt-1" data-testid={`asmt-q-${i}`} />
                       </label>
+                      <PictureStrip pictures={r.questionImages ?? []} onChange={next => setRow(i, { questionImages: next })} addLabel="Add the question's picture" testId={`asmt-q-pics-${i}`} />
+                      </div>
                       <label className="w-24 text-[12px] font-medium text-gray-600">Marks<Input value={r.maxMarks} onChange={e => setRow(i, { maxMarks: e.target.value })} inputMode="decimal" className="mt-1 h-9" placeholder="e.g. 3" data-testid={`asmt-marks-${i}`} /></label>
                       <Button size="icon" variant="ghost" className="mt-5" onClick={() => setRows(rs => rs.filter((_, j) => j !== i))} aria-label="Remove question"><Trash2 className="h-4 w-4" /></Button>
                     </div>
@@ -187,6 +211,7 @@ export default function AssessmentEditor({ assessmentId }: { assessmentId?: stri
                       {r.modelAnswerByAi && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800">Written by the AI — not in the document, please check</span>}
                       <Textarea value={r.modelAnswer} onChange={e => setRow(i, { modelAnswer: e.target.value, modelAnswerByAi: false })} rows={3} className="mt-1" placeholder="The full-marks answer. Leave empty and the AI writes one." data-testid={`asmt-answer-${i}`} />
                     </label>
+                    <PictureStrip pictures={r.answerImages ?? []} onChange={next => setRow(i, { answerImages: next })} addLabel="Add the answer's diagram" testId={`asmt-a-pics-${i}`} />
                   </div>
                 ))}
               </div>
@@ -206,6 +231,9 @@ export default function AssessmentEditor({ assessmentId }: { assessmentId?: stri
   );
 }
 
+/** Files in one import: a paper's question files come one per question. */
+const MAX_IMPORT_FILES = 60;
+
 function ImportBox({ disabled, onImported, onClose }: { disabled: boolean; onImported: (p: ImportedPaper) => void; onClose: () => void }) {
   const [files, setFiles] = useState<File[]>([]);
   const [text, setText] = useState("");
@@ -224,13 +252,13 @@ function ImportBox({ disabled, onImported, onClose }: { disabled: boolean; onImp
   return (
     <div className="mb-4 space-y-3 rounded-xl border border-violet-200 bg-violet-50/40 p-4" data-testid="import-box">
       <div className="flex items-start justify-between gap-3">
-        <p className="text-[14px] text-gray-800"><Sparkles className="mr-1 inline h-4 w-4 text-violet-600" />Upload the client's question paper with its answer key (PDF, Word, or photos), or paste the text. The AI fills in the questions, marks and model answers for you to check.</p>
+        <p className="text-[14px] text-gray-800"><Sparkles className="mr-1 inline h-4 w-4 text-violet-600" />Upload the client's question paper with its answer key (PDF, Word, or photos), or paste the text. The AI fills in the questions, marks and model answers for you to check. The client's own question files (.json, one per question) are read exactly as they are — choose all of them together and they come in arranged by marks, with their pictures.</p>
         <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700" aria-label="Close"><X className="h-4 w-4" /></button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-input bg-white px-3 py-2 text-[13px] font-medium hover:bg-gray-50">
           <FileUp className="h-4 w-4" />Choose files
-          <input type="file" multiple accept=".pdf,.docx,image/jpeg,image/png,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={e => { setFiles([...files, ...Array.from(e.target.files || [])].slice(0, 10)); e.target.value = ""; }} data-testid="import-files" />
+          <input type="file" multiple accept=".pdf,.docx,.json,.txt,image/jpeg,image/png,image/webp,application/pdf,application/json,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="hidden" onChange={e => { setFiles([...files, ...Array.from(e.target.files || [])].slice(0, MAX_IMPORT_FILES)); e.target.value = ""; }} data-testid="import-files" />
         </label>
         {files.map((f, i) => (
           <span key={i} className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[12px] text-gray-700 shadow-sm">{f.name}

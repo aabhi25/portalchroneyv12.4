@@ -21,6 +21,8 @@ export interface JsonCall {
   /** Text, optionally followed by images (data URLs) — the photos of the answer. */
   user: string;
   images?: string[];
+  /** One line said before each image ("Page 2, strip 1 of 3"), in the images' order. */
+  imageLabels?: string[];
   maxTokens: number;
   temperature?: number;
   timeoutMs?: number;
@@ -48,7 +50,10 @@ export function openAiAnswerCheck(client: OpenAI): AnswerCheckAi {
     costUsd: () => spent,
     async json(call: JsonCall) {
       const content: any = call.images?.length
-        ? [{ type: "text", text: call.user }, ...call.images.map(url => ({ type: "image_url", image_url: { url, detail: "high" } }))]
+        ? [{ type: "text", text: call.user }, ...call.images.flatMap((url, i) => [
+          ...(call.imageLabels?.[i] ? [{ type: "text", text: call.imageLabels[i] }] : []),
+          { type: "image_url", image_url: { url, detail: "high" } },
+        ])]
         : call.user;
       const response = await client.chat.completions.create({
         model: call.model,

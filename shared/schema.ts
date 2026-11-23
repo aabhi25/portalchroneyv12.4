@@ -6075,14 +6075,16 @@ export const answerChecks = pgTable("answer_checks", {
   index("answer_checks_paper_idx").on(table.paperId),
 ]);
 
-// Photos: the student's answer pages and the marked sheet. Kept in the private R2 bucket when
-// one is configured, else in the database (never in the public bucket).
+// Photos: the student's answer pages and the marked sheet, and the pictures (diagrams, figures) that
+// belong to a question or its model answer. Kept in the private R2 bucket when one is configured,
+// else in the database (never in the public bucket).
 export const answerCheckImages = pgTable("answer_check_images", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   checkId: varchar("check_id").references(() => answerChecks.id, { onDelete: "cascade" }), // one answer's photos and marked sheet
   paperId: varchar("paper_id").references(() => answerPapers.id, { onDelete: "cascade" }), // or a whole answer sheet's pages
+  questionKey: text("question_key"), // or a question's own pictures (answer_marking_schemes.question_key)
   businessAccountId: varchar("business_account_id").notNull(),
-  kind: text("kind").notNull(), // 'answer' | 'marked' | 'paper_page'
+  kind: text("kind").notNull(), // 'answer' | 'marked' | 'paper_page' | 'question_picture' | 'answer_picture'
   position: integer("position").notNull().default(0),
   storageRef: text("storage_ref"), // r2private://… when stored in R2
   data: bytea("data"), // when stored in the database
@@ -6092,6 +6094,7 @@ export const answerCheckImages = pgTable("answer_check_images", {
 }, (table) => [
   index("answer_check_images_check_idx").on(table.checkId),
   index("answer_check_images_paper_idx").on(table.paperId),
+  index("answer_check_images_question_idx").on(table.businessAccountId, table.questionKey),
 ]);
 
 export type AnswerCheckSettingsRow = typeof answerCheckSettings.$inferSelect;

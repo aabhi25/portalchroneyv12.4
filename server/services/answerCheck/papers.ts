@@ -17,8 +17,9 @@ import {
   type PaperQuestion,
 } from "./prompts";
 import { checkView, contextOf, currentScheme, enqueue, answerCheckAi, runCheck, schemeOf, STALE_AFTER_MS } from "./engine";
-import { deletePaperFiles, imageBytes, listPaperImages, saveImage, toDataUrl } from "./images";
+import { deletePaperFiles, imageBytes, listPaperImages, readerPhotos, saveImage, toDataUrl } from "./images";
 import { renderPracticeSheet } from "./drawing";
+import { listQuestionPictures } from "./pictures";
 
 /**
  * Answer checking pilot — whole answer sheets. A paper is a list of numbered questions (each with
@@ -33,6 +34,31 @@ import { renderPracticeSheet } from "./drawing";
 export interface PaperQuestionRef {
   number: string;
   questionKey: string;
+  /** The paper's section this question sits in ("A", "B" …), when it has sections. */
+  section?: string | null;
+  /** The question's ID in the client's own system (students may label their answers with it). */
+  externalId?: string | null;
+}
+
+/**
+ * Other labels a student may write for a question: its number inside its section ("B2", as the
+ * client's app numbers each section from 1) and its ID in the client's system.
+ */
+export function questionAliases(questions: PaperQuestionRef[]): Map<string, string[]> {
+  const inSection = new Map<string, number>();
+  const out = new Map<string, string[]>();
+  for (const q of questions) {
+    const aliases: string[] = [];
+    const section = (q.section || "").trim();
+    if (section) {
+      const i = (inSection.get(section) || 0) + 1;
+      inSection.set(section, i);
+      aliases.push(`${section}${i}`, `Section ${section} Q${i}`);
+    }
+    if (q.externalId?.trim()) aliases.push(q.externalId.trim());
+    if (aliases.length) out.set(q.number, aliases);
+  }
+  return out;
 }
 
 export const MAX_PAPER_QUESTIONS = 20;
@@ -188,13 +214,24 @@ export async function runPaper(paperId: string): Promise<void> {
     if (!pageBytes.length) return fail("The answer sheet's pages are missing.");
     const first = schemes.get(questions[0].questionKey)!;
 
-    // 1. Read the whole sheet into parts (the questions are not shown).
-    const readReply = await ai.json({ model: ANSWER_CHECK_MODEL, system: READ_PAPER_SYSTEM, user: readPaperUserText(contextOf(first), pageBytes.length), images: pageBytes.map(b => toDataUrl(b)), maxTokens: 8000, timeoutMs: 180_000 });
+    // 1. Read the whole sheet into parts (the questions are not shown). Pages go enlarged, as
+    //    overlapping strips, so small handwriting reaches the AI at full sharpness.
+    const photos = await readerPhotos(pageBytes);
+    const readReply = await ai.json({
+      model: ANSWER_CHECK_MODEL,
+      system: READ_PAPER_SYSTEM,
+      user: readPaperUserText(contextOf(first), pageBytes.length, photos.strips),
+      images: photos.images.map(b => toDataUrl(b)),
+      imageLabels: photos.labels,
+      maxTokens: 12000,
+      timeoutMs: 240_000,
+    });
     if (!readReply) return fail("The AI could not read the answer sheet. Try again.");
     const read = parsePaperRead(readReply, pageBytes.length);
 
     // 2. Match the parts to the questions.
-    const paperQuestions: PaperQuestion[] = questions.map(q => ({ number: q.number, maxMarks: n(schemes.get(q.questionKey)!.maxMarks), questionText: schemes.get(q.questionKey)!.questionText }));
+    const aliases = questionAliases(questions);
+    const paperQuestions: PaperQuestion[] = questions.map(q => ({ number: q.number, maxMarks: n(schemes.get(q.questionKey)!.maxMarks), questionText: schemes.get(q.questionKey)!.questionText, aliases: aliases.get(q.number) }));
     let matchReply: Record<string, any> | null = { answers: [] };
     if (read.parts.length) {
       matchReply = await ai.json({ model: ANSWER_CHECK_MODEL, system: MATCH_SYSTEM, user: matchUserText(paperQuestions, read.parts), maxTokens: 2000 });
@@ -333,8 +370,9 @@ export async function paperView(paper: AnswerPaperRow) {
     .where(and(eq(answerCheckImages.paperId, paper.id), eq(answerCheckImages.kind, "paper_page")));
   const questions = paper.questions as unknown as PaperQuestionRef[];
   const order = (num: string | null) => questions.findIndex(q => q.number === num);
+  const pictures = await listQuestionPictures(paper.businessAccountId, schemes.map(s => s.questionKey));
   const checks = rows
-    .map(r => checkView(r, schemes.find(s => s.id === r.schemeId) ?? null, images.filter(i => i.checkId === r.id).map(i => ({ id: i.id, kind: i.kind, position: i.position }))))
+    .map(r => checkView(r, schemes.find(s => s.id === r.schemeId) ?? null, images.filter(i => i.checkId === r.id).map(i => ({ id: i.id, kind: i.kind, position: i.position })), pictures))
     .sort((a, b) => order(a.questionNumber) - order(b.questionNumber));
   return {
     id: paper.id,

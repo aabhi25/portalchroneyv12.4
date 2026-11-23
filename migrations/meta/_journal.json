@@ -512,6 +512,13 @@
       "when": 1795432718947,
       "tag": "0072_call_quick_acknowledgement",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1795436965234,
+      "tag": "0073_answer_question_pictures",
+      "breakpoints": true
     }
   ]
 }

@@ -97,6 +97,8 @@ async function main() {
       { label: "", pages: [2], text: "at constant temperature", legibility: 0.8 },
     ] });
     queues.match.push({ answers: [{ number: "2", parts: [1], confidence: 0.95 }, { number: "1", parts: [2, 3], confidence: 0.85 }], notAttempted: ["3"], unassigned: [{ part: 0, reason: "heading" }] });
+    // Preparing the questions already marked each model answer against its own answer key.
+    const marksBefore = callsOf("mark");
     const p = await papers.createPaper({ businessAccountId: B, title: "Mock test 1", studentLabel: "Riya", questions: qs, photos: [await photo("#ffffff"), await photo("#f4f4f4")], userId: null });
     paperId = p.id;
     expect(p.status === "reading", "a new paper starts as 'reading'");
@@ -106,7 +108,7 @@ async function main() {
     expect(v.checks.length === 3 && v.checks.map(c => c.questionNumber).join() === "1,2,3", "one answer per question, in the paper's order", v.checks.map(c => c.questionNumber));
     expect(v.status === "done", "all answers checked → paper done", v.status);
     const readCall = calls.find(c => c.kind === "paperRead")!;
-    expect(readCall.images === 2 && !readCall.user.includes("Ohm") && readCall.model === "gpt-4.1", "the whole sheet is read once, both pages, without the questions", readCall);
+    expect(readCall.images >= 2 && readCall.user.includes("show the 2 pages") && !readCall.user.includes("Ohm") && readCall.model === "gpt-4.1", "the whole sheet is read once, both pages (as enlarged strips), without the questions", { images: readCall.images, user: readCall.user.slice(0, 200) });
     expect(calls.find(c => c.kind === "match")!.user.includes("Question 2 (4 marks): Find the resistance"), "the matcher sees the questions");
     expect(q("1").readText === "Current is proportional to voltage\nat constant temperature" && (q("1").reading as any).pages.join() === "1,2", "question 1 = its part plus the continuation on page 2");
     expect(q("2").readText === "R = V/I = 440 ohm" && q("2").aiMarks === 4, "'Ans 2)' written first is still question 2, marked 4/4");
@@ -114,7 +116,7 @@ async function main() {
     expect(q("3").images.length === 0 && q("1").images.some(i => i.kind === "marked"), "marked sheets for answered questions only");
     expect(v.totals.aiMarks === 6 && v.totals.maxMarks === 8 && v.totals.notAttempted === 1, "paper total 6/8, one not attempted", v.totals);
     expect(q("2").studentLabel === "Riya · Q2", "answers are labelled with the student and question number");
-    expect(callsOf("paperRead") === 1 && callsOf("mark") === 2, "one reading for the sheet, marking only for answered questions");
+    expect(callsOf("paperRead") === 1 && callsOf("mark") === marksBefore + 2, "one reading for the sheet, marking only for answered questions");
     expect(v.pages.length === 2 && v.costUsd > 0, "pages and cost on the paper");
     const marked = (await db.select().from(schema.answerCheckImages).where(eq(schema.answerCheckImages.checkId, q("1").id))).find(i => i.kind === "marked")!;
     const meta = await sharp(marked.data as Buffer).metadata();

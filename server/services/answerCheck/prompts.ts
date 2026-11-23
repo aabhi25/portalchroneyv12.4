@@ -75,8 +75,31 @@ function schemeText(scheme: MarkingScheme): string {
   if (scheme.niceKeywords.length) lines.push(`Nice-to-have keywords: ${scheme.niceKeywords.join("; ")}`);
   if (scheme.alternatives.length) lines.push(`Also accept: ${scheme.alternatives.join("; ")}`);
   if (scheme.finalAnswerOnlyMarks !== null) lines.push(`A correct final answer with no working earns ${scheme.finalAnswerOnlyMarks} mark(s) in total.`);
+  if (scheme.needsDrawing) lines.push("A full-marks answer must include the drawing the steps ask for.");
   lines.push(scheme.allowHalfMarks ? "Half marks are allowed (e.g. 0.5, 1.5)." : "Only whole marks.");
   return lines.join("\n");
+}
+
+/** How many pictures go with a call: the question's own, its model answer's, and photos of the student's page(s). */
+export interface PictureCounts {
+  question: number;
+  answer: number;
+  pages?: number;
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** Tells the AI which attached picture is which (they are sent in this order). Empty when there are none. */
+export function picturesNote(p: PictureCounts | undefined): string {
+  if (!p) return "";
+  const parts = [
+    p.question ? `${count(p.question, "picture", "pictures")} of the question` : "",
+    p.answer ? `${count(p.answer, "picture", "pictures")} of the model answer (its diagram)` : "",
+    p.pages ? `${count(p.pages, "photo", "photos")} of the student's answer page${p.pages === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  if (!parts.length) return "";
+  const marks = p.question || p.answer ? ' "[Picture 1]" in the question means the question\'s first picture; in the model answer, the model answer\'s first picture.' : "";
+  return `Pictures attached, in this order: ${parts.join("; then ")}.${marks}`;
 }
 
 /** Parses a JSON reply, tolerating ``` fences or text around the object. */
@@ -119,9 +142,16 @@ legibility: 1 = every word easy to read, 0.5 = readable with effort, 0.2 = mostl
  * The question itself is deliberately NOT shown to the reader: knowing the right working made
  * GPT-4.1 "fix" students' mistakes while copying (it read "2x = 10 + 4" as "10 − 4").
  */
-export function readUserText(q: Pick<QuestionContext, "board" | "grade" | "medium" | "subject" | "chapter">, pages: number): string {
+export function readUserText(q: Pick<QuestionContext, "board" | "grade" | "medium" | "subject" | "chapter">, pages: number, strips = false): string {
+  if (strips) return `${contextLine(q)}\n\nThe photos show ${pages === 1 ? "the page" : `the ${pages} pages, in order,`} of a student's handwritten exam answer. Copy it exactly, mistakes included. ${STRIPS_NOTE}`;
   return `${contextLine(q)}\n\nThe ${pages === 1 ? "photo is" : `${pages} photos are the pages, in order, of`} a student's handwritten exam answer. Copy it exactly, mistakes included.`;
 }
+
+/**
+ * Pages are sent enlarged, as overlapping strips, so small handwriting stays sharp (see
+ * readingStrips); the reader is told how to put them back together.
+ */
+export const STRIPS_NOTE = 'Each photo is named before it. A page may come as several overlapping strips, top to bottom ("Page 2, strip 1 of 3"): the last lines of a strip appear again at the top of the next — copy each line once, and read a line from the strip where it is whole. Page numbers are the pages, never the strips.';
 
 export interface ReadResult {
   text: string;
@@ -167,18 +197,35 @@ Rules:
 - mustKeywords: words or concepts a full-marks answer must contain. niceKeywords: helpful but optional.
 - alternatives: other correct methods or wordings that must also get credit.
 - If no model answer is given, write a concise model answer suitable for the grade first, then base the scheme on it.
+- A model answer that is given is the full-marks standard: a student who writes what it writes must earn every step. Never add a step for something the model answer itself does not do — a closing sentence in words when it ends at "x = 4", a unit, a definition, a reason or a statement of a law it does not give.
+- One step for each point that earns marks. Never one step that stands for several ("each correct sentence — 1 mark each"): write them as separate steps.
+- Pictures may be attached: the question's own figure and the model answer's diagram. Read them — a question that says "in the figure" cannot be understood without its picture.
+- needsDrawing: true when a full-marks answer must include something drawn (a diagram, graph, construction, labelled figure, map) — because the question asks for it or the model answer draws one. Then give the drawing its own step or steps, worth the marks a board would give it, and say exactly what must be drawn and which labels must be there (take them from the model answer's diagram when one is attached). Otherwise false.
 Reply with JSON only:
-{"modelAnswer": "...", "questionKind": "short|long|numerical", "steps": [{"id": "s1", "label": "...", "marks": 1}], "mustKeywords": [], "niceKeywords": [], "alternatives": [], "finalAnswerOnlyMarks": null, "allowHalfMarks": true}`;
+{"modelAnswer": "...", "questionKind": "short|long|numerical", "steps": [{"id": "s1", "label": "...", "marks": 1}], "mustKeywords": [], "niceKeywords": [], "alternatives": [], "finalAnswerOnlyMarks": null, "allowHalfMarks": true, "needsDrawing": false}`;
 }
 
-export function schemeUserText(q: QuestionContext, rules: SubjectRules): string {
+export function schemeUserText(q: QuestionContext, rules: SubjectRules, pictures?: PictureCounts): string {
   return [
     contextLine(q),
     `Question (${q.maxMarks} marks): ${q.questionText}`,
     q.modelAnswer.trim() ? `Model answer:\n${q.modelAnswer.trim()}` : "No model answer is available — write one first.",
     q.questionKind ? `Question type: ${q.questionKind}` : "",
     `Subject marking rules:\n${rulesText(rules)}`,
+    picturesNote(pictures),
   ].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Said to the scheme writer when the model answer did not earn full marks on the first draft:
+ * which steps it missed, and that the model answer is the standard.
+ */
+export function schemeCorrectionText(missed: Array<{ label: string; marks: number; awarded: number; comment: string }>): string {
+  return [
+    "Your first draft of this scheme was checked by marking the model answer itself against it. The model answer did not earn these steps:",
+    ...missed.map(m => `- "${m.label}" (${m.awarded} of ${m.marks})${m.comment ? ` — ${m.comment}` : ""}`),
+    "The model answer is the full-marks standard. Write the scheme again so that the model answer, exactly as it is written, earns every step: drop or reword what it does not show, ask for nothing it does not do, and keep the steps adding up to the maximum marks.",
+  ].join("\n");
 }
 
 export interface DraftedScheme {
@@ -204,7 +251,7 @@ export function markSystem(settings: Pick<AnswerCheckSettings, "feedbackTone">):
 How to mark:
 1. Compare the answer with each step of the scheme and award marks for every step that is correctly shown.
 2. Give partial marks (halves) when the concept or method is right but the explanation is incomplete.
-3. No marks for wrong concepts, irrelevant statements or unsupported conclusions.
+3. No marks for wrong concepts, irrelevant statements or unsupported conclusions. A step is earned only when what it asks for is RIGHT in the answer: a final-answer step with a wrong value gets 0, however clearly it is written. If your comment on a step says it is wrong, incorrect or missing, its marks are 0 (or part marks only for what is right in it).
 4. Judge meaning and understanding, not only keywords: accept synonyms, equivalent terms and the student's own words. Do not give full marks just because keywords appear if the explanation is wrong.
 5. Accept any other method that is scientifically or mathematically valid.
 6. Never cut marks twice for the same mistake (error carried forward): a mistake costs marks only at the step where it happens. Every later step that is done correctly ON THE STUDENT'S OWN (wrong) VALUES keeps its marks, except the final answer step, which needs the right answer.
@@ -213,7 +260,9 @@ How to mark:
 8. Expect the depth of explanation that suits the grade and the board.
 9. Parts written as [unclear] could not be read: give no marks for them unless the rest of the answer makes the meaning certain. Never guess what the student meant.
 10. Must-have keywords and conditions: a step whose must-have keyword, condition or unit is missing from the answer (in any wording) cannot get its full marks — give part marks and name what is missing.
-11. Each step's marks must be between 0 and that step's marks.
+11. Each step's marks must be between 0 and that step's marks. When one step covers several points worth marks each, add up the points that are right (all five right in a 5-mark step → 5).
+12. Pictures. When pictures are attached, the message says which is which. The typed copy of the student's answer stays the record of what the student WROTE: never re-read the handwriting from a photo to change a word, number or sign. Use the photos of the student's page only to judge what was DRAWN — diagrams, graphs, constructions, labelled figures. A page may also hold other answers: judge only the drawing that belongs to this answer.
+13. Judging a drawing: compare it with the model answer's diagram, or with what the scheme asks to be drawn. Is it the right kind of drawing, are its parts there and in the right place, are the labels right? Neatness and artistic skill neither earn nor lose marks. A drawing that is asked for but missing gets no marks for the drawing steps. When the photo is too unclear to judge the drawing, say so and lower the confidence — never guess.
 Feedback for the student (in the language the student wrote in, simple words for the grade):
 - full marks: ${t.full}
 - high marks: ${t.high}
@@ -223,11 +272,12 @@ Feedback for the student (in the language the student wrote in, simple words for
 Make the feedback specific to this question, never generic. Each step comment is at most 12 words, written like an examiner's margin note.
 confidence (0–1): how sure you are that a careful human examiner would give the same marks. Lower it when the reading is uncertain, the scheme does not fit the answer, or the answer uses an unusual method.
 Reply with JSON only:
-{"steps": [{"stepId": "s1", "awarded": 1, "comment": "..."}], "finalAnswerCorrect": true|false|null, "workingShown": true|false|null, "correctPoints": [], "mistakes": [], "missingConcepts": [], "missingKeywords": [], "alternativeMethod": false, "confidence": 0.0-1.0, "confidenceNote": "...", "feedback": {"summary": "2-3 sentences to the student", "improvement": "one specific thing to do better, or empty", "revision": "what to revise if marks are low, or empty"}, "teacherComment": "one short line, like a teacher's remark on the sheet"}
-finalAnswerCorrect / workingShown: only for questions with a final answer (maths, numericals); otherwise null.`;
+{"steps": [{"stepId": "s1", "awarded": 1, "comment": "..."}], "finalAnswerCorrect": true|false|null, "workingShown": true|false|null, "correctPoints": [], "mistakes": [], "missingConcepts": [], "missingKeywords": [], "alternativeMethod": false, "confidence": 0.0-1.0, "confidenceNote": "...", "feedback": {"summary": "2-3 sentences to the student", "improvement": "one specific thing to do better, or empty", "revision": "what to revise if marks are low, or empty"}, "teacherComment": "one short line, like a teacher's remark on the sheet", "drawing": {"status": "none|correct|partly|wrong|missing|unclear", "note": "one line on what the drawing shows and what is wrong or missing in it, or empty"}}
+finalAnswerCorrect / workingShown: only for questions with a final answer (maths, numericals); otherwise null.
+drawing.status: "none" when the answer needs no drawing and the student drew none; "missing" when one is asked for and not drawn; "unclear" when it cannot be seen well enough to judge.`;
 }
 
-export function markUserText(q: QuestionContext, scheme: MarkingScheme, rules: SubjectRules, readText: string): string {
+export function markUserText(q: QuestionContext, scheme: MarkingScheme, rules: SubjectRules, readText: string, pictures?: PictureCounts): string {
   return [
     contextLine(q),
     `Question (${q.maxMarks} marks): ${q.questionText}`,
@@ -235,7 +285,16 @@ export function markUserText(q: QuestionContext, scheme: MarkingScheme, rules: S
     `Marking scheme:\n${schemeText(scheme)}`,
     `Subject marking rules:\n${rulesText(rules)}`,
     `The student's answer, exactly as written (read from the photos):\n"""\n${readText || "(nothing written)"}\n"""`,
+    picturesNote(pictures),
   ].filter(Boolean).join("\n\n");
+}
+
+export const DRAWING_STATUSES = ["none", "correct", "partly", "wrong", "missing", "unclear"] as const;
+export type DrawingStatus = typeof DRAWING_STATUSES[number];
+
+/** True when the student's answer, as read, mentions something drawn ("[Diagram: …]"). */
+export function mentionsDrawing(readText: string | null | undefined): boolean {
+  return /\[\s*(diagram|figure|graph|drawing|sketch|construction|picture|map|chart)\b/i.test(readText || "");
 }
 
 export interface MarkReply {
@@ -251,12 +310,15 @@ export interface MarkReply {
   confidenceNote: string;
   feedback: { summary: string; improvement: string; revision: string };
   teacherComment: string;
+  /** What the AI saw of the student's drawing ("none" when no drawing was involved). */
+  drawing: { status: DrawingStatus; note: string };
 }
 
 export function parseMark(raw: Record<string, any> | null): MarkReply {
   const r = raw || {};
   const fb = r.feedback && typeof r.feedback === "object" ? r.feedback : {};
   const tri = (v: unknown) => (v === true ? true : v === false ? false : null);
+  const drawing = r.drawing && typeof r.drawing === "object" ? r.drawing : {};
   return {
     judgements: (Array.isArray(r.steps) ? r.steps : [])
       .filter((s: any) => s && typeof s === "object")
@@ -272,7 +334,54 @@ export function parseMark(raw: Record<string, any> | null): MarkReply {
     confidenceNote: str(r.confidenceNote).slice(0, 300),
     feedback: { summary: str(fb.summary).slice(0, 1200), improvement: str(fb.improvement).slice(0, 600), revision: str(fb.revision).slice(0, 600) },
     teacherComment: str(r.teacherComment).slice(0, 200),
+    drawing: { status: DRAWING_STATUSES.includes(drawing.status) ? drawing.status : "none", note: str(drawing.note).slice(0, 300) },
   };
+}
+
+// ---- Marks and comments must agree --------------------------------------------------------------
+// Seen with the real AI: a wrong final answer kept its step's full mark with the comment "value is
+// wrong" (4 markings in 5), and on the live pilot an answer got 1 of 5 with the comment "correct"
+// and "Excellent work!" as feedback. Both are caught here, in code, and the answer is marked again.
+
+const SAYS_WRONG = /\b(wrong|incorrect|not correct|missing|omitted|not (shown|given|stated|written|mentioned|drawn|labelled|labeled|marked|attempted|simplified|calculated)|did not|didn't|does not|doesn't|no (calculation|working|units?|diagram|labels?|answer))\b/i;
+const SAYS_NOTHING_WRONG = /\b(no|nothing|not|isn't|is not|without)\s+(\w+\s+)?(wrong|incorrect|missing|mistakes?|errors?)\b/i;
+const HINTS_AT_A_FAULT = /\b(incomplete|partial|partly|partially|only|some|lacks?|lacking|without|errors?|mistakes?|unclear|but|however|except|though|should|needs?|not|no|one|two|three|first|part)\b/i;
+const SAYS_RIGHT = /\b(correct|correctly|right|accurate|accurately|complete|completely|fully|well|good|excellent|perfect)\b/i;
+
+const saysWrong = (comment: string) => SAYS_WRONG.test(comment) && !SAYS_NOTHING_WRONG.test(comment);
+
+/**
+ * Places where the marker's marks contradict its own words (empty = consistent): a step with full
+ * marks whose comment says it is wrong or missing; a final-answer step with full marks when the
+ * marker says the final answer is not correct; a step that lost marks although its comment only
+ * says it is right. A step with no comment says nothing, so it contradicts nothing.
+ */
+export function markContradictions(
+  reply: Pick<MarkReply, "finalAnswerCorrect">,
+  result: { steps: Array<{ label: string; marks: number; awarded: number; comment: string }>; total: number; maxMarks: number; finalAnswerOnlyApplied?: boolean },
+): string[] {
+  if (result.finalAnswerOnlyApplied) return [];
+  const out: string[] = [];
+  for (const s of result.steps) {
+    if (s.marks <= 0) continue;
+    const marksText = `${s.marks} mark${s.marks === 1 ? "" : "s"}`;
+    if (s.awarded >= s.marks) {
+      if (saysWrong(s.comment)) out.push(`"${s.label}" was given its full ${marksText}, but your comment on it says: "${s.comment}"`);
+      else if (reply.finalAnswerCorrect === false && /final answer/i.test(s.label)) out.push(`"${s.label}" was given its full ${marksText}, but you say the final answer is not correct`);
+    } else if (s.comment && SAYS_RIGHT.test(s.comment) && !HINTS_AT_A_FAULT.test(s.comment) && !SAYS_WRONG.test(s.comment)) {
+      out.push(`"${s.label}" was given only ${s.awarded} of its ${marksText}, but your comment on it only says: "${s.comment}"`);
+    }
+  }
+  return out;
+}
+
+/** Said to the marker when its marks and words disagree: mark again, consistently. */
+export function remarkNote(contradictions: string[]): string {
+  return [
+    "Your marking of this answer contradicts itself:",
+    ...contradictions.map(c => `- ${c}.`),
+    "Mark the answer again from the start. Marks and comments must agree: a step whose comment says something is wrong or missing cannot keep its full marks, and a step loses marks only for something its comment names.",
+  ].join("\n");
 }
 
 // ---- AI-written estimate ----------------------------------------------------------------------
@@ -505,7 +614,8 @@ Split the sheet into parts: start a new part wherever the student starts a new a
 Reply with JSON only:
 {"parts": [{"label": "Q1", "pages": [1], "text": "...", "legibility": 0.0-1.0, "unclear": [{"where": "...", "guess": "..."}]}], "blank": false, "notes": "short note for the examiner, or empty"}`;
 
-export function readPaperUserText(q: Pick<QuestionContext, "board" | "grade" | "medium" | "subject" | "chapter">, pages: number): string {
+export function readPaperUserText(q: Pick<QuestionContext, "board" | "grade" | "medium" | "subject" | "chapter">, pages: number, strips = false): string {
+  if (strips) return `${contextLine({ ...q, chapter: null })}\n\nThe photos show the ${pages} page${pages === 1 ? "" : "s"}, in order, of one student's handwritten answer sheet. Copy it exactly, mistakes included, split into parts. ${STRIPS_NOTE}`;
   return `${contextLine({ ...q, chapter: null })}\n\nThe ${pages} photo${pages === 1 ? " is" : "s are"} the page${pages === 1 ? "" : "s"}, in order, of one student's handwritten answer sheet. Copy it exactly, mistakes included, split into parts.`;
 }
 
@@ -537,10 +647,13 @@ export interface PaperQuestion {
   number: string;
   maxMarks: number;
   questionText: string;
+  /** Other labels a student may write for this question: its section number ("B2"), its ID in the school's app. */
+  aliases?: string[];
 }
 
 export const MATCH_SYSTEM = `You match the parts of a student's handwritten answer sheet to the questions of the exam paper.
 - Use the student's own labels first ("Q3", "Ans 3", "3)", "iii" all mean question 3). Students often answer out of order.
+- A question may list other labels students use for it (its number inside its section, such as "B2", or its ID in the school's app, such as "169335"): a part labelled with one of them answers that question.
 - When a label is missing, unclear or wrong, use what the part says: which question does it answer?
 - A part with no label straight after another part usually continues that answer (for example on the next page).
 - Every part belongs to at most one question; one question may have several parts (give them in reading order).
@@ -551,7 +664,7 @@ Reply with JSON only:
 {"answers": [{"number": "1", "parts": [0, 2], "confidence": 0.0-1.0, "note": "short reason when not a clear label, else empty"}], "notAttempted": ["4"], "unassigned": [{"part": 3, "reason": "rough work"}]}`;
 
 export function matchUserText(questions: PaperQuestion[], parts: SheetPart[]): string {
-  const qs = questions.map(q => `Question ${q.number} (${q.maxMarks} marks): ${q.questionText.replace(/\s+/g, " ").slice(0, 400)}`).join("\n");
+  const qs = questions.map(q => `Question ${q.number} (${q.maxMarks} marks)${q.aliases?.length ? ` [also labelled: ${q.aliases.join(", ")}]` : ""}: ${q.questionText.replace(/\s+/g, " ").slice(0, 400)}`).join("\n");
   const ps = parts.map((p, i) => `Part ${i} — label "${p.label}", page ${p.pages.join(", ")}:\n${p.text.slice(0, 700)}${p.text.length > 700 ? " …" : ""}`).join("\n\n");
   return `The exam paper's questions:\n${qs}\n\nThe parts of the student's answer sheet:\n${ps}`;
 }
@@ -645,6 +758,12 @@ export interface ImportedQuestion {
   modelAnswer: string;
   modelAnswerByAi: boolean;
   objective: boolean;
+  /** From the client's own question files: section letter, the question's ID there, chapter, pictures (data: URLs). */
+  section?: string | null;
+  externalId?: string | null;
+  chapter?: string | null;
+  questionImages?: string[];
+  answerImages?: string[];
 }
 
 export interface ImportedPaper {
@@ -654,6 +773,8 @@ export interface ImportedPaper {
   medium: string;
   subject: string;
   questions: ImportedQuestion[];
+  /** Plain-words notes for the admin: what was left out, pictures that could not be fetched. */
+  notes?: string[];
 }
 
 /** The AI's reading of a question paper, cleaned: empty questions dropped, numbers unique, marks sane. */

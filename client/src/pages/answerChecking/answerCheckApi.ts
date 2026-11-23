@@ -46,6 +46,9 @@ export interface SchemeView {
   board: string | null; medium: string | null; grade: string | null; subject: string | null; chapter: string | null;
   maxMarks: number;
   scheme: MarkingScheme;
+  /** The question's own pictures and its model answer's diagram (image ids, in order). */
+  questionImages: string[];
+  answerImages: string[];
   status: "ai_draft" | "approved";
   approvedAt: string | null;
   createdAt: string;
@@ -68,6 +71,9 @@ export interface CheckResult {
   confidenceNote: string;
   feedback: { summary: string; improvement: string; revision: string };
   teacherComment: string;
+  /** What the AI saw of the student's drawing ("none" when no drawing was involved). */
+  drawing?: { status: "none" | "correct" | "partly" | "wrong" | "missing" | "unclear"; note: string };
+  drawingExpected?: boolean;
   schemeVersion: number;
   practiceWhy?: string;
 }
@@ -118,6 +124,20 @@ export interface ChecksResponse {
 }
 
 export const imageUrl = (id: string) => `${API}/images/${id}`;
+
+/** A question's picture: one already saved (`id`) or a new one not saved yet (`data`, a data: URL). */
+export interface PictureRef { id?: string; data?: string }
+export const pictureSrc = (p: PictureRef) => (p.id ? imageUrl(p.id) : p.data || "");
+export const MAX_QUESTION_PICTURES = 4;
+
+export const DRAWING_LABEL: Record<NonNullable<CheckResult["drawing"]>["status"], string> = {
+  none: "No drawing",
+  correct: "Drawing correct",
+  partly: "Drawing partly correct",
+  wrong: "Drawing wrong",
+  missing: "Drawing missing",
+  unclear: "Drawing unclear",
+};
 
 export interface PaperTotals { maxMarks: number; aiMarks: number | null; teacherMarks: number | null; expectedMarks: number | null; answered: number; notAttempted: number; needsTeacher: number }
 
@@ -265,7 +285,7 @@ export interface AssessmentView {
   title: string;
   mockTestId: string | null;
   board: string | null; medium: string | null; grade: string | null; subject: string | null;
-  questions: Array<{ number: string; questionKey: string; scheme: SchemeView | null }>;
+  questions: Array<{ number: string; questionKey: string; section: string | null; externalId: string | null; scheme: SchemeView | null }>;
   totalMarks: number;
   sheets: PaperSummary[];
   stats: { checked: number; averageMarks: number | null; humanIntervention: number; teacher: AccuracySummary; expected: AccuracySummary };
@@ -275,7 +295,12 @@ export interface AssessmentView {
 
 export interface ImportedPaper {
   title: string; board: string; grade: string; medium: string; subject: string;
-  questions: Array<{ number: string; question: string; marks: number | null; modelAnswer: string; modelAnswerByAi: boolean; objective: boolean }>;
+  questions: Array<{
+    number: string; question: string; marks: number | null; modelAnswer: string; modelAnswerByAi: boolean; objective: boolean;
+    /** From the client's own question files. */
+    section?: string | null; externalId?: string | null; chapter?: string | null; questionImages?: string[]; answerImages?: string[];
+  }>;
+  notes?: string[];
 }
 
 /** A file as a data URL (PDFs and Word files as they are; photos shrunk like answer photos). */

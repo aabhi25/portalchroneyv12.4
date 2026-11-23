@@ -26,29 +26,35 @@ import { ANSWER_CHECK_MINI_MODEL, ANSWER_CHECK_MODEL, AnswerCheckAiError, create
 import {
   AI_WRITTEN_SYSTEM,
   aiWrittenUserText,
+  markContradictions,
   markSystem,
   markUserText,
+  mentionsDrawing,
   parseAiWritten,
   parseMark,
   parsePractice,
   parseRead,
   parseSchemeDraft,
+  schemeCorrectionText,
   practiceSystem,
   practiceUserText,
   READ_SYSTEM,
   readUserText,
+  remarkNote,
   schemeSystem,
   schemeUserText,
   type QuestionContext,
 } from "./prompts";
-import { imageBytes, listImages, listPaperImages, replaceMarkedImage, saveImage, toDataUrl } from "./images";
+import { imageBytes, listImages, listPaperImages, readerPhotos, replaceMarkedImage, saveImage, toDataUrl } from "./images";
 import { renderMarkedSheet, renderPracticeSheet } from "./drawing";
+import { questionPictureBytes, type QuestionPictureIds } from "./pictures";
 import type { QuestionInput } from "./questions";
 
 /**
  * Answer checking pilot — one check from photos to marks:
  *   read the handwriting (GPT-4.1, photos attached) → mark against the question's saved scheme
- *   (GPT-4.1) → final marks by the shared rules → AI-written estimate (GPT-4.1 mini) → decide if
+ *   (GPT-4.1; with the question's own pictures, and the student's page when something is drawn)
+ *   → final marks by the shared rules → AI-written estimate (GPT-4.1 mini) → decide if
  *   a teacher must look → draw the marked sheet → save, with time taken and cost.
  * Checks run in the background, a few at a time; the screen polls. A re-check keeps the reading
  * and marks again with the question's current scheme; the earlier result goes into `history`.
@@ -130,23 +136,60 @@ export function schemeOf(row: Pick<AnswerMarkingSchemeRow, "scheme" | "maxMarks"
  * The question's current scheme, drafted by the AI when the question is new or its maximum
  * marks changed (a new version — earlier checks keep the version they were marked with).
  */
-export async function prepareQuestion(businessAccountId: string, q: QuestionInput, userId: string | null, opts: { redraftIfChanged?: boolean } = {}): Promise<AnswerMarkingSchemeRow> {
+export async function prepareQuestion(businessAccountId: string, q: QuestionInput, userId: string | null, opts: { redraftIfChanged?: boolean; picturesChanged?: boolean } = {}): Promise<AnswerMarkingSchemeRow> {
   const existing = await currentScheme(businessAccountId, q.questionKey);
   // A blank model answer keeps the one the AI wrote earlier (it isn't a change).
   const incomingAnswer = q.modelAnswer.trim();
   const changed = !!existing && (existing.questionText.trim() !== q.questionText.trim()
     || (incomingAnswer ? existing.modelAnswer.trim() !== incomingAnswer : !existing.modelAnswerByAi));
-  if (existing && n(existing.maxMarks) === q.maxMarks && !(opts.redraftIfChanged && changed)) return existing;
+  if (existing && n(existing.maxMarks) === q.maxMarks && !(opts.redraftIfChanged && changed) && !opts.picturesChanged) return existing;
   const settings = await getSettings(businessAccountId);
+  // The question's figure and the model answer's diagram, so the scheme is written with them in view.
+  const pictures = await questionPictureBytes(businessAccountId, q.questionKey);
   const ctx: QuestionContext = {
     questionText: q.questionText, modelAnswer: q.modelAnswer, maxMarks: q.maxMarks, subject: q.subject, subjectKind: subjectKindOf(q.subject),
     board: q.board, grade: q.grade, medium: q.medium, chapter: q.chapter, questionKind: q.questionKind,
   };
   const ai = await aiFactory(businessAccountId);
-  const reply = await ai.json({ model: ANSWER_CHECK_MODEL, system: schemeSystem(), user: schemeUserText(ctx, settings.subjectRules[ctx.subjectKind]), maxTokens: 2500 });
-  if (!reply) throw new AnswerCheckAiError("The AI could not write a marking scheme for this question. Try again.");
-  const draft = parseSchemeDraft(reply);
-  const scheme = normalizeScheme(draft.raw, q.maxMarks);
+  const rules = settings.subjectRules[ctx.subjectKind];
+  const draftScheme = async (correction = "") => {
+    const reply = await ai.json({
+      model: ANSWER_CHECK_MODEL,
+      system: schemeSystem(),
+      user: [schemeUserText(ctx, rules, { question: pictures.question.length, answer: pictures.answer.length }), correction].filter(Boolean).join("\n\n"),
+      images: [...pictures.question, ...pictures.answer].map(b => toDataUrl(b)),
+      maxTokens: 2500,
+    });
+    return reply ? parseSchemeDraft(reply) : null;
+  };
+  let draft = await draftScheme();
+  if (!draft) throw new AnswerCheckAiError("The AI could not write a marking scheme for this question. Try again.");
+  let scheme = normalizeScheme(draft.raw, q.maxMarks);
+
+  // The given model answer is the full-marks standard, so it must earn full marks on its own answer
+  // key. On a real paper the key asked for "the final answer in words" when the school's solution
+  // ended at "x = 4", and a student who copied the solution lost half a mark. The model answer is
+  // marked against the draft; steps it does not earn are rewritten once, then taken out.
+  if (incomingAnswer && !scheme.needsDrawing) {
+    const unearned = async (s: MarkingScheme) => {
+      const marked = parseMark(await ai.json({ model: ANSWER_CHECK_MODEL, system: markSystem(settings), user: markUserText(ctx, s, rules, incomingAnswer), maxTokens: 2500 }).catch(() => null));
+      // No usable reply: the key can't be checked, so it is left as drafted.
+      if (!marked.judgements.length) return [];
+      return applyJudgement(s, q.maxMarks, marked.judgements).steps.filter(st => st.awarded < st.marks);
+    };
+    let missed = await unearned(scheme);
+    if (missed.length) {
+      const again = await draftScheme(schemeCorrectionText(missed));
+      if (again) {
+        const rewritten = normalizeScheme(again.raw, q.maxMarks);
+        const stillMissed = rewritten.needsDrawing ? missed : await unearned(rewritten);
+        if (stillMissed.length < missed.length || !stillMissed.length) { draft = again; scheme = rewritten; missed = rewritten.needsDrawing ? [] : stillMissed; }
+      }
+      // Still asking for something the model answer doesn't show: those steps go, their marks move to the steps it does earn.
+      const ids = new Set(missed.map(m => m.stepId));
+      if (ids.size && ids.size < scheme.steps.length) scheme = normalizeScheme({ ...scheme, steps: scheme.steps.filter(st => !ids.has(st.id)) }, q.maxMarks);
+    }
+  }
   const modelAnswerByAi = !q.modelAnswer.trim() && !!draft.modelAnswer;
   const [row] = await db.insert(answerMarkingSchemes).values({
     businessAccountId,
@@ -183,6 +226,7 @@ export async function saveSchemeEdit(businessAccountId: string, questionKey: str
     mustKeywords: [], niceKeywords: [], alternatives: [],
     finalAnswerOnlyMarks: raw.finalAnswerOnlyMarks === null || raw.finalAnswerOnlyMarks === undefined || raw.finalAnswerOnlyMarks === "" ? null : Number(raw.finalAnswerOnlyMarks),
     allowHalfMarks: raw.allowHalfMarks !== false,
+    needsDrawing: raw.needsDrawing === true,
   };
   const problems = schemeProblems(typed, maxMarks);
   if (typed.steps.some(s => s.marks <= 0)) problems.push("Every step needs more than 0 marks.");
@@ -345,6 +389,9 @@ async function writePractice(scheme: AnswerMarkingSchemeRow, rows: AnswerCheckRo
 /** Below this, a teacher confirms that the matched part of a sheet answers the question. */
 export const MATCH_CONFIDENCE_MIN = 0.6;
 
+/** Most photos of the student's pages shown to the marker to judge a drawing. */
+const MAX_PAGES_FOR_DRAWING = 4;
+
 /** The sheet's pages an answer was found on (1 = first page); all pages when that's unknown. */
 async function paperPagesFor(paperId: string, wanted: unknown) {
   const all = await listPaperImages(paperId);
@@ -382,7 +429,8 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
     let readText = check.readText;
     let reading = check.reading as any;
     if (readText === null || readText === undefined || (opts.reread && !fromPaper)) {
-      const replied = await ai.json({ model: ANSWER_CHECK_MODEL, system: READ_SYSTEM, user: readUserText(ctx, pageBytes.length), images: pageBytes.map(b => toDataUrl(b)), maxTokens: 3000 });
+      const photos = await readerPhotos(pageBytes);
+      const replied = await ai.json({ model: ANSWER_CHECK_MODEL, system: READ_SYSTEM, user: readUserText(ctx, pageBytes.length, photos.strips), images: photos.images.map(b => toDataUrl(b)), imageLabels: photos.labels, maxTokens: 3000 });
       if (!replied) return fail("The AI could not read the photos. Try again.", ai.costUsd());
       const read = parseRead(replied);
       readText = read.text;
@@ -396,16 +444,40 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
 
     // 2. Mark against the scheme (nothing to mark on a blank page or an unanswered question).
     let markReply = parseMark(null);
+    let drawingExpected = false;
+    let marksDisagree = false;
+    const judgementOpts = (r: typeof markReply) => ({ finalAnswerCorrect: r.finalAnswerCorrect ?? undefined, workingShown: r.workingShown ?? undefined });
     if (notAttempted) {
       markReply = { ...markReply, confidence: 1, feedback: { summary: "This question was not attempted.", improvement: "", revision: "Revise this topic and try the question." }, teacherComment: "Not attempted" };
     } else if (!blank) {
-      const replied = await ai.json({ model: ANSWER_CHECK_MODEL, system: markSystem(settings), user: markUserText(ctx, scheme, rules, readText || ""), maxTokens: 2500 });
+      // The marker sees the question's own pictures, and — only when something is drawn or must be
+      // drawn — the student's page(s), to judge the drawing (never to re-read the handwriting).
+      const own = await questionPictureBytes(check.businessAccountId, schemeRow.questionKey);
+      drawingExpected = scheme.needsDrawing === true || own.answer.length > 0;
+      const lookAtPages = drawingExpected || mentionsDrawing(readText);
+      const studentPages = lookAtPages ? pageBytes.slice(0, MAX_PAGES_FOR_DRAWING) : [];
+      const markCall = {
+        model: ANSWER_CHECK_MODEL,
+        system: markSystem(settings),
+        user: markUserText(ctx, scheme, rules, readText || "", { question: own.question.length, answer: own.answer.length, pages: studentPages.length }),
+        images: [...own.question, ...own.answer, ...studentPages].map(b => toDataUrl(b)),
+        maxTokens: 2500,
+      };
+      const replied = await ai.json(markCall);
       if (!replied) return fail("The AI could not mark this answer. Try again.", ai.costUsd());
       markReply = parseMark(replied);
+      // Marks that contradict the marker's own comments: mark once more, saying where; a second
+      // contradiction goes to a teacher.
+      const contradictions = markContradictions(markReply, applyJudgement(scheme, ctx.maxMarks, markReply.judgements, judgementOpts(markReply)));
+      if (contradictions.length) {
+        const again = await ai.json({ ...markCall, user: `${markCall.user}\n\n${remarkNote(contradictions)}` }).catch(() => null);
+        if (again) markReply = parseMark(again);
+        marksDisagree = !again || markContradictions(markReply, applyJudgement(scheme, ctx.maxMarks, markReply.judgements, judgementOpts(markReply))).length > 0;
+      }
     } else {
       markReply = { ...markReply, confidence: 1, feedback: { summary: "No answer was found on the page.", improvement: "", revision: "" } };
     }
-    const marks = applyJudgement(scheme, ctx.maxMarks, markReply.judgements, { finalAnswerCorrect: markReply.finalAnswerCorrect ?? undefined, workingShown: markReply.workingShown ?? undefined });
+    const marks = applyJudgement(scheme, ctx.maxMarks, markReply.judgements, judgementOpts(markReply));
 
     // 3. AI-written estimate (separate from the marks; short answers are not judged).
     const words = wordCount(readText || "");
@@ -423,6 +495,11 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
     if (fromPaper && !notAttempted && typeof reading?.matchConfidence === "number" && reading.matchConfidence < MATCH_CONFIDENCE_MIN) {
       reasons.push("The AI isn't sure this part of the sheet is the answer to this question.");
     }
+    if (marksDisagree) reasons.push("The AI's marks and its own comments don't agree on this answer — please check the marks.");
+    // Drawings: the AI's judgement of a diagram is a first opinion until a teacher confirms it.
+    const drew = markReply.drawing.status !== "none" && markReply.drawing.status !== "missing";
+    if (markReply.drawing.status === "unclear") reasons.push("The AI could not see the drawing clearly enough to mark it.");
+    else if (settings.drawingsToTeacher && !notAttempted && !blank && (drawingExpected || drew)) reasons.push("This answer involves a drawing — a teacher should confirm the marks.");
 
     // 5. The marked sheet (none for a question that wasn't attempted).
     const remark = markReply.teacherComment || markReply.feedback.summary.split(/(?<=[.!?])\s/)[0] || "";
@@ -455,6 +532,8 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
         confidenceNote: markReply.confidenceNote,
         feedback: markReply.feedback,
         teacherComment: markReply.teacherComment,
+        drawing: markReply.drawing,
+        drawingExpected,
         schemeVersion: schemeRow.version,
         ...(practiceWhy ? { practiceWhy } : {}),
       } as any,
@@ -536,7 +615,7 @@ export async function deleteCheck(businessAccountId: string, checkId: string): P
 
 // ---- Reading checks for the screens -----------------------------------------------------------
 
-export function checkView(row: AnswerCheckRow, scheme: AnswerMarkingSchemeRow | null, images: Array<{ id: string; kind: string; position: number }>) {
+export function checkView(row: AnswerCheckRow, scheme: AnswerMarkingSchemeRow | null, images: Array<{ id: string; kind: string; position: number }>, pictures?: Map<string, QuestionPictureIds>) {
   return {
     id: row.id,
     questionKey: row.questionKey,
@@ -567,13 +646,16 @@ export function checkView(row: AnswerCheckRow, scheme: AnswerMarkingSchemeRow | 
     error: row.error || (effectiveStatus(row) === "failed" && row.status !== "failed" ? "This check was interrupted (for example by a server restart). Try again." : null),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    scheme: scheme ? schemeView(scheme) : null,
+    scheme: scheme ? schemeView(scheme, pictures?.get(scheme.questionKey)) : null,
     images: images.map(i => ({ id: i.id, kind: i.kind, position: i.position })),
   };
 }
 
-export function schemeView(row: AnswerMarkingSchemeRow) {
+export function schemeView(row: AnswerMarkingSchemeRow, pictures?: QuestionPictureIds) {
   return {
+    /** The question's own pictures and its model answer's diagram (image ids, in order). */
+    questionImages: pictures?.question ?? [],
+    answerImages: pictures?.answer ?? [],
     id: row.id,
     questionKey: row.questionKey,
     version: row.version,

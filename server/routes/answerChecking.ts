@@ -33,6 +33,7 @@ import { cleanQuestionList, createPaper, createPracticePaper, deletePaper, listP
 import { answerPapers } from "@shared/schema";
 import { AssessmentError, assessmentView, checkSheet, deleteAssessment, getAssessment, importQuestions, listAssessments, sampleSheet, saveAssessment } from "../services/answerCheck/assessments";
 import { readDataUrls } from "../services/answerCheck/files";
+import { listQuestionPictures } from "../services/answerCheck/pictures";
 
 /**
  * AI assessment (answer checking pilot): a business account's Education › Assessment, for super
@@ -45,7 +46,8 @@ import { readDataUrls } from "../services/answerCheck/files";
  *   GET  /api/answer-checking/assessments/:id     questions with answer keys, students' sheets, accuracy
  *   PUT  /api/answer-checking/assessments/:id     update (changed questions get a new answer key)
  *   DELETE /api/answer-checking/assessments/:id   with its sheets
- *   POST /api/answer-checking/assessments/import  question paper / answer key (PDF, Word, photos, text) → questions to review
+ *   POST /api/answer-checking/assessments/import  question paper / answer key (PDF, Word, photos, text) or the client's own
+ *                                                 question files (read as they are, with their pictures) → questions to review
  *   POST /api/answer-checking/assessments/:id/sheets   a student's answer sheet (photos or PDF) → checked as a whole paper
  *   POST /api/answer-checking/assessments/:id/sample   a sample sheet written by the AI, checked the same way
  *   GET  /api/answer-checking/overview            account, on/off, settings
@@ -239,7 +241,8 @@ router.get(`${BASE}/schemes/:key`, ...superAdmin, async (req, res) => {
     const versions = await schemeVersions(accountId(req), req.params.key);
     if (!versions.length) return res.status(404).json({ error: "Question not found." });
     const counts = await countChecksByQuestion(accountId(req), [req.params.key]);
-    res.json({ scheme: schemeView(versions[0]), versions: versions.map(schemeView), checks: counts.get(req.params.key) || 0 });
+    const pictures = (await listQuestionPictures(accountId(req), [req.params.key])).get(req.params.key);
+    res.json({ scheme: schemeView(versions[0], pictures), versions: versions.map(v => schemeView(v, pictures)), checks: counts.get(req.params.key) || 0 });
   } catch (e) { fail(res, "scheme", e); }
 });
 
@@ -247,7 +250,7 @@ router.put(`${BASE}/schemes/:key`, ...superAdmin, async (req, res) => {
   try {
     const maxMarks = req.body?.maxMarks === undefined ? undefined : Number(req.body.maxMarks);
     const row = await saveSchemeEdit(accountId(req), req.params.key, { scheme: req.body?.scheme, maxMarks, modelAnswer: typeof req.body?.modelAnswer === "string" ? req.body.modelAnswer : undefined }, userId(req));
-    res.json({ scheme: schemeView(row) });
+    res.json({ scheme: schemeView(row, (await listQuestionPictures(accountId(req), [req.params.key])).get(req.params.key)) });
   } catch (e) { fail(res, "scheme edit", e); }
 });
 
@@ -255,7 +258,7 @@ router.post(`${BASE}/schemes/:key/approve`, ...superAdmin, async (req, res) => {
   try {
     const row = await approveScheme(accountId(req), req.params.key, userId(req));
     if (!row) return res.status(404).json({ error: "Question not found." });
-    res.json({ scheme: schemeView(row) });
+    res.json({ scheme: schemeView(row, (await listQuestionPictures(accountId(req), [req.params.key])).get(req.params.key)) });
   } catch (e) { fail(res, "approve", e); }
 });
 
@@ -316,7 +319,8 @@ async function viewsFor(rows: Array<typeof answerChecks.$inferSelect>) {
   const schemes = schemeIds.length ? await db.select().from(answerMarkingSchemes).where(inArray(answerMarkingSchemes.id, schemeIds)) : [];
   const images = await db.select({ id: answerCheckImages.id, checkId: answerCheckImages.checkId, kind: answerCheckImages.kind, position: answerCheckImages.position })
     .from(answerCheckImages).where(inArray(answerCheckImages.checkId, rows.map(r => r.id)));
-  return rows.map(r => checkView(r, schemes.find(s => s.id === r.schemeId) ?? null, images.filter(i => i.checkId === r.id).sort((a, b) => a.position - b.position)));
+  const pictures = await listQuestionPictures(rows[0].businessAccountId, schemes.map(s => s.questionKey));
+  return rows.map(r => checkView(r, schemes.find(s => s.id === r.schemeId) ?? null, images.filter(i => i.checkId === r.id).sort((a, b) => a.position - b.position), pictures));
 }
 
 router.get(`${BASE}/checks`, ...superAdmin, async (req, res) => {

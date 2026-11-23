@@ -129,6 +129,7 @@ export function SchemeEditor({ scheme, checksCount, off = false, onSaved, onRech
             {s.alternatives.length > 0 && <p className="md:col-span-2"><span className="font-medium text-gray-900">Also accept:</span> {s.alternatives.join("; ")}</p>}
             <p><span className="font-medium text-gray-900">Right answer, no working:</span> {s.finalAnswerOnlyMarks === null ? "marked by steps only" : `${fmtMarks(s.finalAnswerOnlyMarks)} mark(s)`}</p>
             <p><span className="font-medium text-gray-900">Half marks:</span> {s.allowHalfMarks ? "allowed" : "not allowed"}</p>
+            {s.needsDrawing && <p data-testid="scheme-needs-drawing"><span className="font-medium text-gray-900">Drawing:</span> the answer must include one — the AI looks at the student's page to mark it</p>}
           </div>
         </>
       ) : (
@@ -172,6 +173,9 @@ export function SchemeEditor({ scheme, checksCount, off = false, onSaved, onRech
             </label>
             <label className="flex items-center gap-2 text-[13px] font-medium text-gray-700">
               <Switch checked={draft.allowHalfMarks} onCheckedChange={v => setDraft(d => ({ ...d, allowHalfMarks: v }))} />Half marks allowed
+            </label>
+            <label className="flex items-center gap-2 text-[13px] font-medium text-gray-700">
+              <Switch checked={draft.needsDrawing === true} onCheckedChange={v => setDraft(d => ({ ...d, needsDrawing: v }))} data-testid="scheme-needs-drawing-switch" />The answer must include a drawing (diagram, graph, construction)
             </label>
           </div>
           {[...problems, ...serverProblems].length > 0 && (

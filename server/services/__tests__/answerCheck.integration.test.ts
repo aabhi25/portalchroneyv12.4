@@ -272,7 +272,7 @@ async function main() {
     const aiw = row.aiWritten as any;
     expect(aiw.status === "inconclusive" && aiw.percent === 80, "a short answer is never called AI-written, even at 80 %", aiw);
     const readCall = calls.filter(c => c.kind === "read").pop()!;
-    expect(readCall.images === 2 && readCall.model === "gpt-4.1" && !readCall.user.includes("Solve 2x + 4 = 10") && readCall.user.includes("Mathematics"), "both photos go to GPT-4.1 with the subject, not the question", readCall);
+    expect(readCall.images >= 2 && readCall.user.includes("show the 2 pages") && readCall.model === "gpt-4.1" && !readCall.user.includes("Solve 2x + 4 = 10") && readCall.user.includes("Mathematics"), "both photos go to GPT-4.1 (as enlarged strips) with the subject, not the question", readCall);
     expect(calls.filter(c => c.kind === "mark").pop()?.user.includes("[s5] States x = 3 — 1 mark"), "the marker sees the scheme with step ids");
     expect(calls.filter(c => c.kind === "aiWritten").pop()?.model === "gpt-4.1-mini", "the AI-written estimate uses GPT-4.1 mini");
     expect(Number(row.costUsd) > 0.0029 && (row.durationMs ?? -1) >= 0 && row.model === "gpt-4.1", "cost, time and model are recorded", { cost: row.costUsd, ms: row.durationMs });
@@ -402,7 +402,7 @@ async function main() {
     const pages = await db.select().from(schema.answerCheckImages).where(and(eq(schema.answerCheckImages.checkId, by("weak").id), eq(schema.answerCheckImages.kind, "answer")));
     expect(pages.length === 1 && (await sharp(pages[0].data as Buffer).metadata()).format === "jpeg", "the practice answer is drawn as a handwritten page");
     expect(calls.filter(c => c.kind === "practice").pop()?.model === "gpt-4.1", "practice answers are written by GPT-4.1 (mini did not keep to the levels)");
-    expect(calls.filter(c => c.kind === "read").slice(-3).every(c => c.images === 1), "the drawn pages are read like real photos");
+    expect(calls.filter(c => c.kind === "read").slice(-3).every(c => c.images >= 1), "the drawn pages are read like real photos (a tall page as overlapping strips)");
     expect((by("weak").result as any)?.practiceWhy === "Added 4 instead of subtracting", "why the practice answer should get its marks is kept");
   }
 

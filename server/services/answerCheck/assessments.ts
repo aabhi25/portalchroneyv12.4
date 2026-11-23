@@ -5,10 +5,12 @@ import { answerAssessments, answerMarkingSchemes, answerPapers, type AnswerAsses
 import { accuracySummary, QUESTION_KINDS, type QuestionKind } from "@shared/answerCheck";
 import { ANSWER_CHECK_MODEL, AnswerCheckAiError } from "./ai";
 import { answerCheckAi, currentScheme, prepareQuestion, schemeView } from "./engine";
-import { IMPORT_SYSTEM, parseImport, type ImportedPaper } from "./prompts";
+import { IMPORT_SYSTEM, parseImport, type ImportedPaper, type ImportedQuestion } from "./prompts";
+import { isCmsQuestionJson, parseCmsQuestionFiles } from "./cmsQuestions";
+import { deleteQuestionPictures, listQuestionPictures, loadPictureSource, MAX_QUESTION_PICTURES, syncQuestionPictures, type PictureRef } from "./pictures";
 import { createPaper, createPracticePaper, deletePaper, listPapers, paperView, PaperError } from "./papers";
 import { docxText, isDocx, isImage, isPdf, pdfPages, pdfText, sheetPages, type IncomingFile } from "./files";
-import { prepareUpload, toDataUrl } from "./images";
+import { ImageError, prepareUpload, toDataUrl } from "./images";
 import type { QuestionInput } from "./questions";
 
 /**
@@ -16,8 +18,8 @@ import type { QuestionInput } from "./questions";
  * with marks, a model answer and its own answer key (drafted once by the AI from the model answer,
  * redrafted when the question, marks or model answer change). Students' answer sheets (photos or
  * a PDF) are checked against it as whole papers. Questions can be typed, imported from the
- * client's question paper / answer key (PDF, Word, photos or pasted text) or taken from the
- * synced curriculum.
+ * client's question paper / answer key (PDF, Word, photos or pasted text), read straight from the
+ * client's own question files (with their pictures) or taken from the synced curriculum.
  */
 
 export const MAX_ASSESSMENT_QUESTIONS = 40;
@@ -31,6 +33,12 @@ export interface AssessmentQuestionDraft {
   /** Kept for a question already saved, or a curriculum question ("cms:…"). */
   questionKey?: string | null;
   chapter?: string | null;
+  /** The paper's section ("A", "B" …) and the question's ID in the client's own system. */
+  section?: string | null;
+  externalId?: string | null;
+  /** The question's own pictures and its model answer's diagram; left out = keep what is saved. */
+  questionImages?: PictureRef[];
+  answerImages?: PictureRef[];
 }
 
 export interface AssessmentDraft {
@@ -119,12 +127,19 @@ export async function saveAssessment(businessAccountId: string, draft: Assessmen
       maxMarks: Math.round(Number(q.maxMarks) * 2) / 2,
     };
     try {
-      await prepareQuestion(businessAccountId, input, userId, { redraftIfChanged: true });
+      // Pictures first, so the answer key is written (or rewritten) with them in view.
+      const questionPics = await syncQuestionPictures(businessAccountId, key, "question_picture", q.questionImages);
+      const answerPics = await syncQuestionPictures(businessAccountId, key, "answer_picture", q.answerImages);
+      await prepareQuestion(businessAccountId, input, userId, { redraftIfChanged: true, picturesChanged: questionPics || answerPics });
     } catch (err: any) {
       throw new AssessmentError([`Question ${q.number}: ${err?.message || "the AI could not write its answer key"}`]);
     }
-    return { number: clean(q.number, 10), questionKey: key };
+    const section = clean(q.section, 10);
+    const externalId = clean(q.externalId, 60);
+    return { number: clean(q.number, 10), questionKey: key, ...(section ? { section } : {}), ...(externalId ? { externalId } : {}) };
   });
+  // Pictures of questions that were taken out of this assessment.
+  await deleteQuestionPictures(businessAccountId, `asmt:${row.id}:`, refs.map(r => r.questionKey));
   const [saved] = await db.update(answerAssessments).set({ ...meta, questions: refs as any, updatedAt: new Date() })
     .where(eq(answerAssessments.id, row.id)).returning();
   return saved;
@@ -135,14 +150,15 @@ export async function getAssessment(businessAccountId: string, id: string): Prom
   return row ?? null;
 }
 
-type Ref = { number: string; questionKey: string };
+type Ref = { number: string; questionKey: string; section?: string | null; externalId?: string | null };
 
 /** The assessment with each question's current answer key, its students' sheets and accuracy. */
 export async function assessmentView(row: AnswerAssessmentRow) {
   const refs = row.questions as unknown as Ref[];
+  const pictures = await listQuestionPictures(row.businessAccountId, refs.map(r => r.questionKey));
   const questions = await Promise.all(refs.map(async r => {
     const s = await currentScheme(row.businessAccountId, r.questionKey);
-    return { number: r.number, questionKey: r.questionKey, scheme: s ? schemeView(s) : null };
+    return { number: r.number, questionKey: r.questionKey, section: r.section ?? null, externalId: r.externalId ?? null, scheme: s ? schemeView(s, pictures.get(r.questionKey)) : null };
   }));
   const sheets = await listPapers(row.businessAccountId, { assessmentId: row.id });
   const finished = sheets.filter(s => s.totals.aiMarks !== null);
@@ -211,6 +227,7 @@ export async function deleteAssessment(businessAccountId: string, id: string): P
   if (!row) return false;
   const sheets = await db.select({ id: answerPapers.id }).from(answerPapers).where(eq(answerPapers.assessmentId, id));
   for (const s of sheets) await deletePaper(businessAccountId, s.id);
+  await deleteQuestionPictures(businessAccountId, `asmt:${id}:`);
   await db.delete(answerAssessments).where(eq(answerAssessments.id, id));
   return true;
 }
@@ -249,25 +266,97 @@ export async function sampleSheet(businessAccountId: string, assessment: AnswerA
 
 // ---- Importing the client's question paper / answer key ---------------------------------------
 
+/** Text of a file that may be one of the client's question files (a .json file, or JSON by its content). */
+function jsonText(f: IncomingFile): string | null {
+  if (!/json/.test(f.mime) && !/\.json$/i.test(f.name) && !/^text\//.test(f.mime) && f.mime) return null;
+  const text = f.data.toString("utf8");
+  return isCmsQuestionJson(text) ? text : null;
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * The client's own question files as questions for review: read exactly (no AI), arranged as a
+ * paper, with each question's pictures fetched and shrunk. A picture that can't be fetched leaves
+ * its "[Picture n]" mark in the text and is named in the notes.
+ */
+async function importCmsFiles(files: Array<{ name: string; text: string }>): Promise<ImportedPaper> {
+  const cms = parseCmsQuestionFiles(files);
+  const notes: string[] = [];
+  let missing = 0;
+  let tooMany = 0;
+  const fetchAll = async (sources: string[]): Promise<string[]> => {
+    const out: string[] = [];
+    for (const src of sources) {
+      if (out.length >= MAX_QUESTION_PICTURES) { tooMany++; continue; }
+      try { out.push(toDataUrl(await loadPictureSource(src))); }
+      catch (err) { if (!(err instanceof ImageError)) console.warn("[Answer Check] question picture:", (err as any)?.message || err); missing++; }
+    }
+    return out;
+  };
+  const questions: ImportedQuestion[] = [];
+  for (const q of cms.questions) {
+    questions.push({
+      number: q.number,
+      question: q.questionText,
+      marks: q.marks,
+      modelAnswer: q.modelAnswer,
+      modelAnswerByAi: false,
+      objective: false,
+      section: q.section,
+      externalId: q.externalId,
+      chapter: q.chapter,
+      questionImages: await fetchAll(q.questionPictures),
+      answerImages: await fetchAll(q.answerPictures),
+    });
+  }
+  const sections = Array.from(new Set(cms.questions.map(q => q.section).filter(Boolean)));
+  if (questions.length) notes.push(`${plural(questions.length, "question", "questions")} read from the question files${sections.length ? `, arranged in ${plural(sections.length, "section", "sections")} (${sections.join(", ")}) by marks` : ""}.`);
+  const withPictures = questions.filter(q => q.questionImages?.length || q.answerImages?.length).length;
+  if (withPictures) notes.push(`${plural(withPictures, "question has", "questions have")} pictures.`);
+  if (cms.objectiveLeftOut) notes.push(`${plural(cms.objectiveLeftOut, "multiple-choice or objective question was", "multiple-choice or objective questions were")} left out.`);
+  if (missing) notes.push(`${plural(missing, "picture", "pictures")} could not be downloaded — add ${missing === 1 ? "it" : "them"} by hand where the question shows "[Picture …]".`);
+  if (tooMany) notes.push(`A question keeps at most ${MAX_QUESTION_PICTURES} pictures; ${plural(tooMany, "more was", "more were")} left out.`);
+  if (cms.unreadable.length) notes.push(`No question was found in ${cms.unreadable.join(", ")}.`);
+  return { title: cms.title, board: cms.board, grade: cms.grade, medium: cms.medium, subject: cms.subject, questions, notes };
+}
+
 /**
  * Reads a question paper (with answers when given) into questions for the admin to review — nothing
- * is saved. Typed PDFs and Word files are read as text; scanned PDFs and photos are read by GPT-4.1.
+ * is saved. The client's own question files are read exactly as they are, without the AI; typed PDFs
+ * and Word files are read as text and scanned PDFs and photos by GPT-4.1.
  */
 export async function importQuestions(businessAccountId: string, input: { text?: string; files: IncomingFile[] }): Promise<ImportedPaper & { costUsd: number }> {
-  const ai = await answerCheckAi(businessAccountId);
   let text = (input.text || "").trim();
   const images: Buffer[] = [];
+  const cmsFiles: Array<{ name: string; text: string }> = [];
+  const skipped: string[] = [];
+  if (text && isCmsQuestionJson(text)) { cmsFiles.push({ name: "the pasted text", text }); text = ""; }
   for (const f of input.files) {
-    if (isDocx(f)) text += `\n\n${await docxText(f)}`;
+    const json = jsonText(f);
+    if (json) cmsFiles.push({ name: f.name, text: json });
+    else if (isDocx(f)) text += `\n\n${await docxText(f)}`;
     else if (isPdf(f)) {
       const t = await pdfText(f);
       if (t.replace(/\s/g, "").length > 200) text += `\n\n${t}`;
       else images.push(...await pdfPages(f, 10));
     } else if (isImage(f)) images.push(await prepareUpload(f.data));
-    else if (/^text\//.test(f.mime)) text += `\n\n${f.data.toString("utf8")}`;
-    else throw new AnswerCheckAiError(`${f.name}: use a PDF, a Word file (.docx), photos or paste the text.`);
+    else if (/^text\//.test(f.mime) || /\.txt$/i.test(f.name)) {
+      // A note sent along with the question files (which section holds which question) isn't needed.
+      if (cmsFiles.length || input.files.some(o => o !== f && jsonText(o))) skipped.push(f.name);
+      else text += `\n\n${f.data.toString("utf8")}`;
+    }
+    else if (/json/.test(f.mime) || /\.json$/i.test(f.name)) throw new AnswerCheckAiError(`${f.name}: no question was found in this file.`);
+    else throw new AnswerCheckAiError(`${f.name}: use a PDF, a Word file (.docx), photos, the question files or paste the text.`);
   }
-  if (!text && !images.length) throw new AnswerCheckAiError("Paste the questions or add the question paper.");
+  const fromFiles = cmsFiles.length ? await importCmsFiles(cmsFiles) : null;
+  if (fromFiles && skipped.length) fromFiles.notes!.push(`${skipped.join(", ")} was not needed: the questions are arranged by their marks.`);
+  if (!text && !images.length) {
+    if (!fromFiles) throw new AnswerCheckAiError("Paste the questions or add the question paper.");
+    if (!fromFiles.questions.length) throw new AnswerCheckAiError(fromFiles.notes?.slice(-2).join(" ") || "No questions were found in the question files.");
+    return { ...fromFiles, costUsd: 0 };
+  }
+  const ai = await answerCheckAi(businessAccountId);
   if (images.length > 10) images.splice(10);
   const reply = await ai.json({
     model: ANSWER_CHECK_MODEL,
@@ -278,6 +367,16 @@ export async function importQuestions(businessAccountId: string, input: { text?:
     timeoutMs: 180_000,
   });
   const paper = parseImport(reply);
-  if (!paper.questions.length) throw new AnswerCheckAiError("No questions were found in it. Check the file, or paste the questions.");
-  return { ...paper, costUsd: ai.costUsd() };
+  if (!paper.questions.length && !fromFiles?.questions.length) throw new AnswerCheckAiError("No questions were found in it. Check the file, or paste the questions.");
+  if (!fromFiles) return { ...paper, costUsd: ai.costUsd() };
+  // Both kinds at once: the question files first, then what the AI read, numbered on.
+  const taken = new Set(fromFiles.questions.map(q => q.number.toLowerCase()));
+  let next = fromFiles.questions.length;
+  const more = paper.questions.map(q => (taken.has(q.number.toLowerCase()) ? { ...q, number: String(++next) } : q));
+  return {
+    title: fromFiles.title || paper.title, board: fromFiles.board || paper.board, grade: fromFiles.grade || paper.grade, medium: fromFiles.medium || paper.medium, subject: fromFiles.subject || paper.subject,
+    questions: [...fromFiles.questions, ...more],
+    notes: fromFiles.notes,
+    costUsd: ai.costUsd(),
+  };
 }

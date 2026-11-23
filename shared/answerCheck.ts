@@ -63,6 +63,8 @@ export interface AnswerCheckSettings {
   legibilityThreshold: number;
   /** Below this marking confidence (0–1) the answer goes to a teacher. */
   confidenceThreshold: number;
+  /** An answer with a drawing (a diagram, graph, construction) goes to a teacher to confirm the marks. */
+  drawingsToTeacher: boolean;
   feedbackTone: FeedbackTone;
 }
 
@@ -106,6 +108,7 @@ export function defaultAnswerCheckSettings(): AnswerCheckSettings {
     subjectRules: JSON.parse(JSON.stringify(DEFAULT_SUBJECT_RULES)),
     legibilityThreshold: 0.6,
     confidenceThreshold: 0.5,
+    drawingsToTeacher: true,
     feedbackTone: { ...DEFAULT_FEEDBACK_TONE },
   };
 }
@@ -151,6 +154,7 @@ export function resolveAnswerCheckSettings(raw: unknown): AnswerCheckSettings {
     subjectRules,
     legibilityThreshold: clamp(num(r.legibilityThreshold, d.legibilityThreshold), 0, 1),
     confidenceThreshold: clamp(num(r.confidenceThreshold, d.confidenceThreshold), 0, 1),
+    drawingsToTeacher: typeof r.drawingsToTeacher === "boolean" ? r.drawingsToTeacher : d.drawingsToTeacher,
     feedbackTone,
   };
 }
@@ -183,6 +187,8 @@ export interface MarkingScheme {
   /** Marks for a correct final answer whose working is missing (null = mark by steps only). */
   finalAnswerOnlyMarks: number | null;
   allowHalfMarks: boolean;
+  /** A full-marks answer must include something drawn (diagram, graph, construction). */
+  needsDrawing?: boolean;
 }
 
 /** Rounds marks to the scheme's granularity: halves, or whole marks. */
@@ -249,6 +255,7 @@ export function normalizeScheme(raw: unknown, maxMarks: number): MarkingScheme {
     alternatives: cleanList(r.alternatives, 10),
     finalAnswerOnlyMarks,
     allowHalfMarks,
+    ...(r.needsDrawing === true ? { needsDrawing: true } : {}),
   };
 }
 

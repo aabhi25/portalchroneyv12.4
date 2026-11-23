@@ -10,8 +10,9 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
+import { PictureStrip } from "./PictureStrip";
 import { ASSESS_PATH,
-  AI_WRITTEN_LABEL, API, KIND_LABEL, LEVEL_LABEL, STATUS_LABEL, STATUS_STYLE, fmtCost, fmtMarks, imageUrl, isRunning, scopeLabel,
+  AI_WRITTEN_LABEL, API, DRAWING_LABEL, KIND_LABEL, LEVEL_LABEL, STATUS_LABEL, STATUS_STYLE, fmtCost, fmtMarks, imageUrl, isRunning, scopeLabel,
   type CheckView,
 } from "./answerCheckApi";
 
@@ -120,6 +121,10 @@ function TeacherView({ c, onDeleted }: { c: CheckView; onDeleted: () => void }) 
         <Panel title="Question">
           <p className="whitespace-pre-wrap text-[15px] text-gray-900">{c.scheme?.questionText}</p>
           <p className="mt-1 text-[12px] text-gray-500">{fmtMarks(c.maxMarks)} marks{c.scheme?.questionKind ? ` · ${KIND_LABEL[c.scheme.questionKind]}` : ""}</p>
+          <PictureStrip pictures={(c.scheme?.questionImages ?? []).map(id => ({ id }))} testId="question-pictures" />
+          {!!c.scheme?.answerImages?.length && (
+            <div className="mt-3 text-[13px] text-gray-600" data-testid="answer-pictures">The correct answer's diagram<PictureStrip pictures={c.scheme.answerImages.map(id => ({ id }))} /></div>
+          )}
         </Panel>
         <Panel title="Answer sheet"><Photos c={c} /></Panel>
       </div>
@@ -195,6 +200,9 @@ function TeacherView({ c, onDeleted }: { c: CheckView; onDeleted: () => void }) 
               <ListBlock title="Missing concepts" items={r.missingConcepts} />
               <ListBlock title="Missing keywords" items={r.missingKeywords} />
             </div>
+            {r.drawing && r.drawing.status !== "none" && (
+              <p className="mt-3 text-[14px] text-gray-800" data-testid="drawing-note"><span className="font-medium">{DRAWING_LABEL[r.drawing.status]}</span>{r.drawing.note ? ` — ${r.drawing.note}` : ""}</p>
+            )}
             {r.alternativeMethod && <p className="mt-3 text-[13px] text-gray-600">The student used a different valid method.</p>}
             {r.confidenceNote && <p className="mt-3 text-[13px] text-gray-500">How sure the AI is: {r.confidenceNote}</p>}
           </Panel>
