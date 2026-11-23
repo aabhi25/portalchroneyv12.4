@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDownUp, Loader2, Wand2, ZoomIn } from "lucide-react";
 import { pageOrderByQuestion, questionSpan } from "@shared/answerCheck";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
@@ -43,7 +44,7 @@ export function SheetPages({ p, off }: { p: PaperView; off: boolean }) {
   const moved = !!draft && differs(draft, p.pages);
   async function save(checkAgain: boolean) {
     if (!draft) return;
-    if (checkAgain && !window.confirm("Save this order and check the whole sheet again? This paper's current results — including any teacher marks — are replaced.")) return;
+    if (checkAgain && !(await confirmDialog({ title: "Save this order and check again?", text: "The whole sheet is checked again. This paper's current results, including any teacher marks, are replaced.", confirmLabel: "Save and check", danger: true }))) return;
     setBusy(checkAgain ? "check" : "save");
     try {
       await apiRequest("PUT", `${API}/papers/${p.id}/pages`, { order: draft.map(d => d.id), checkAgain });

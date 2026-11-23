@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -988,8 +989,8 @@ export default function ContentSync() {
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    if (window.confirm("Replace the entire saved Plan ID list with what you pasted? Plans not in your list (and their resolved cp_ids) will be removed.")) {
+                  onClick={async () => {
+                    if (await confirmDialog({ title: "Replace the whole Plan ID list?", text: "The saved list becomes what you pasted. Plans not in it (and their resolved cp_ids) are removed.", confirmLabel: "Replace list", danger: true })) {
                       savePlanIds.mutate();
                     }
                   }}

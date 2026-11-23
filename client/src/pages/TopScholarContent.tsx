@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -489,10 +490,13 @@ export default function TopScholarContent() {
   });
 
   // Confirm-then-delete a whole content pack (all extracted/embedded chunks for a cp_id).
-  const requestDelete = (pack: Pack) => {
-    const ok = window.confirm(
-      `Delete all extracted content for "${pack.label}"?\n\nThis permanently removes every embedded note, transcript, and question for this content pack and the chatbot will immediately stop using it. This cannot be undone.`,
-    );
+  const requestDelete = async (pack: Pack) => {
+    const ok = await confirmDialog({
+      title: `Delete all extracted content for "${pack.label}"?`,
+      text: "This permanently removes every embedded note, transcript, and question for this content pack and the chatbot will immediately stop using it. This can't be undone.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
     if (!ok) return;
     setDeletingCpId(pack.cpId);
     deleteContent.mutate(pack.cpId);

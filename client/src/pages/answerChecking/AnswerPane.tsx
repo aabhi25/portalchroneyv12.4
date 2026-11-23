@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { confirmDialogOpen } from "@/components/ui/confirm-dialog";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { TeacherView } from "./CheckDetailPage";
@@ -46,7 +47,7 @@ export function AnswerPane({ p, number, onGo, onClose, onDirty }: {
   // ← → go through the questions (not while typing, nor while a page is open in the viewer).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || confirmDialogOpen()) return;
       if ((e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable=true], [data-testid=page-viewer]")) return;
       if (e.key === "ArrowRight") step(1);
       else if (e.key === "ArrowLeft") step(-1);
@@ -55,9 +56,9 @@ export function AnswerPane({ p, number, onGo, onClose, onDirty }: {
     return () => window.removeEventListener("keydown", onKey);
   }, [step]);
 
-  // Esc closes the pane — first, before a toast on screen takes the key; a page open in the viewer closes on its own.
+  // Esc closes the pane — first, before a toast on screen takes the key; a page open in the viewer or a question box closes on its own.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector("[data-testid=page-viewer]")) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !confirmDialogOpen() && !document.querySelector("[data-testid=page-viewer]")) onClose(); };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);

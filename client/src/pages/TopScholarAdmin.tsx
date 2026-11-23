@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
@@ -458,8 +459,8 @@ export default function TopScholarAdmin() {
                   size="sm"
                   className="gap-2 border-amber-300 bg-white hover:bg-amber-100"
                   disabled={!contentDbUrl.trim() || externalContentDbDisabled || reconcileSubjects.isPending}
-                  onClick={() => {
-                    if (window.confirm("Import the current subject names from the client content database into the app's Tester mappings? This does not modify client content.")) {
+                  onClick={async () => {
+                    if (await confirmDialog({ title: "Import subject names?", text: "The current subject names in the client content database are copied into the app's Tester mappings. Client content is not changed.", confirmLabel: "Import" })) {
                       reconcileSubjects.mutate();
                     }
                   }}

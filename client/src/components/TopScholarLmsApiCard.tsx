@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Copy, KeyRound, Loader2 } from "lucide-react";
@@ -112,8 +113,8 @@ export default function TopScholarLmsApiCard() {
             type="button"
             className="bg-violet-600 gap-1.5"
             disabled={busy}
-            onClick={() => {
-              if (status?.configured && !window.confirm("Create a new key? The current key stops working immediately.")) return;
+            onClick={async () => {
+              if (status?.configured && !(await confirmDialog({ title: "Create a new key?", text: "The current key stops working immediately.", confirmLabel: "Create new key", danger: true }))) return;
               generate.mutate();
             }}
           >
@@ -126,8 +127,8 @@ export default function TopScholarLmsApiCard() {
               variant="outline"
               className="text-red-600 hover:text-red-700"
               disabled={busy}
-              onClick={() => {
-                if (window.confirm("Revoke the key? The LMS can no longer request embeddings until you create a new one.")) {
+              onClick={async () => {
+                if (await confirmDialog({ title: "Revoke the key?", text: "The LMS can no longer request embeddings until you create a new one.", confirmLabel: "Revoke", danger: true })) {
                   revoke.mutate();
                 }
               }}

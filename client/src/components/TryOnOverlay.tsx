@@ -30,6 +30,7 @@ export function TryOnOverlay({
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -123,7 +124,8 @@ export function TryOnOverlay({
         });
       } else {
         await navigator.clipboard.writeText(resultImage.substring(0, 100) + '...');
-        alert('Image link copied to clipboard!');
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2500);
       }
     } catch (err) {
       console.error('Share failed:', err);
@@ -333,7 +335,7 @@ export function TryOnOverlay({
                     onClick={handleShare}
                   >
                     <Share2 className="w-4 h-4" />
-                    Share
+                    {copied ? 'Link copied' : 'Share'}
                   </Button>
                 </div>
               </motion.div>
@@ -378,7 +380,7 @@ export function TryOnOverlay({
                     onClick={handleShare}
                   >
                     <Share2 className="w-4 h-4" />
-                    Share
+                    {copied ? 'Link copied' : 'Share'}
                   </Button>
                 </div>
               </motion.div>

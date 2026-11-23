@@ -5,6 +5,7 @@ import { useLocation } from "wouter";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -230,8 +231,8 @@ function DocumentTypesSection() {
                     variant="outline"
                     size="sm"
                     className="h-7 text-xs text-red-500 hover:text-red-700"
-                    onClick={() => {
-                      if (confirm(`Delete "${dt.name}"? This cannot be undone.`)) {
+                    onClick={async () => {
+                      if (await confirmDialog({ title: `Delete "${dt.name}"?`, text: "This can't be undone.", confirmLabel: "Delete", danger: true })) {
                         deleteMutation.mutate(dt.id);
                       }
                     }}

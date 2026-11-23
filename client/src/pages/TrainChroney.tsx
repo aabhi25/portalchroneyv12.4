@@ -22,6 +22,7 @@ import { LeadTimingSettings, LeadWarningList } from "@/components/LeadTimingSett
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -50,7 +51,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Brain, Save, Check, Plus, Trash2, Edit2, X, AlertCircle, Sparkles, Loader2, Bold, Italic, GraduationCap, Info, Route, ShieldCheck, AlertTriangle, Lightbulb, TrendingUp, UserCheck, Phone, Mail, MessageSquare, ChevronUp, ChevronDown, User, Settings2, ExternalLink, Globe2 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import AiLanguageSettingsPanel from "@/components/AiLanguageSettings";
 import { SETTINGS_PATHS } from "@/pages/settings/settingsPaths";
 import { Switch } from "@/components/ui/switch";
@@ -138,6 +139,7 @@ function withChannels(instr: Instruction, channels: readonly string[] | null | u
 /** `only="lead-training"` shows just the lead training settings (used by Website chat › Settings). */
 export default function TrainChroney({ only }: { only?: "lead-training" } = {}) {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const [instructions, setInstructions] = useState<Instruction[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -443,10 +445,10 @@ export default function TrainChroney({ only }: { only?: "lead-training" } = {}) 
       let url: URL;
       try { url = new URL(anchor.href, window.location.href); } catch { return; }
       if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
-      if (!window.confirm(message)) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
+      e.preventDefault();
+      e.stopPropagation();
+      void confirmDialog({ title: 'Leave this page?', text: 'Your lead training changes are not saved yet.', confirmLabel: 'Leave anyway', cancelLabel: 'Stay here', danger: true })
+        .then((leave) => { if (leave) setLocation(`${url.pathname}${url.search}${url.hash}`); });
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     document.addEventListener('click', onClickCapture, true);

@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, FileCheck2, Loader2, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Panel, Stat } from "@/components/agency/agencyUi";
@@ -58,11 +59,11 @@ export default function PaperDetailPage({ paperId }: { paperId: string }) {
             {p && (
               <>
                 <Button size="sm" variant="outline" disabled={running || off || !!busy} data-testid="paper-rerun"
-                  onClick={() => { if (window.confirm("Read the whole sheet again? This paper's current results — including any teacher marks — are replaced.")) act("rerun", () => apiRequest("POST", `${API}/papers/${p.id}/rerun`), "Reading the sheet again"); }}>
+                  onClick={async () => { if (await confirmDialog({ title: "Read the whole sheet again?", text: "This paper's current results, including any teacher marks, are replaced.", confirmLabel: "Read again", danger: true })) act("rerun", () => apiRequest("POST", `${API}/papers/${p.id}/rerun`), "Reading the sheet again"); }}>
                   <RotateCcw className="mr-1 h-3.5 w-3.5" />{p.status === "failed" ? "Try again" : "Read again"}
                 </Button>
                 <Button size="sm" variant="ghost" disabled={!!busy} data-testid="paper-delete"
-                  onClick={() => { if (window.confirm("Delete this paper, its pages and all its answers' marks? This can't be undone.")) act("delete", async () => { await apiRequest("DELETE", `${API}/papers/${p.id}`); setLocation(back.href); }); }}>
+                  onClick={async () => { if (await confirmDialog({ title: "Delete this paper?", text: "Its pages and all its answers' marks are deleted too. This can't be undone.", confirmLabel: "Delete", danger: true })) act("delete", async () => { await apiRequest("DELETE", `${API}/papers/${p.id}`); setLocation(back.href); }); }}>
                   <Trash2 className="mr-1 h-3.5 w-3.5" />Delete
                 </Button>
               </>
@@ -86,13 +87,13 @@ function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
   const [question, setQuestion] = useState<string | null>(() => new URLSearchParams(window.location.search).get("q"));
   const unsaved = useRef(false);
   const onDirty = useCallback((dirty: boolean) => { unsaved.current = dirty; }, []);
-  const mayLeave = useCallback(() => {
-    if (unsaved.current && !window.confirm("Leave this question without saving the teacher's marks?")) return false;
+  const mayLeave = useCallback(async () => {
+    if (unsaved.current && !(await confirmDialog({ title: "Leave this question?", text: "The teacher's marks are not saved yet.", confirmLabel: "Leave without saving", cancelLabel: "Stay here", danger: true }))) return false;
     unsaved.current = false;
     return true;
   }, []);
-  const show = useCallback((q: string | null) => {
-    if (!mayLeave()) return;
+  const show = useCallback(async (q: string | null) => {
+    if (!(await mayLeave())) return;
     setQuestion(q);
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${q ? `?q=${encodeURIComponent(q)}` : ""}`);
   }, [mayLeave]);

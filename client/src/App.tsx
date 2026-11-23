@@ -3,6 +3,7 @@ import { Switch, Route, useLocation, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
+import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
@@ -642,6 +643,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AppWithProviders />
+      <ConfirmDialogHost />
     </QueryClientProvider>
   );
 }

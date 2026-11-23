@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -885,7 +886,7 @@ function RuleList({ ruleSetId }: { ruleSetId: string }) {
                 <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditing(rule); }} data-testid={`button-edit-rule-${rule.id}`}>
                   <Pencil className="h-3.5 w-3.5 text-gray-500" />
                 </Button>
-                <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { if (confirm(`Delete rule "${rule.name}"?`)) deleteRule.mutate(rule.id); }} data-testid={`button-delete-rule-${rule.id}`}>
+                <Button size="icon" variant="ghost" className="h-7 w-7" onClick={async () => { if (await confirmDialog({ title: `Delete rule "${rule.name}"?`, confirmLabel: "Delete", danger: true })) deleteRule.mutate(rule.id); }} data-testid={`button-delete-rule-${rule.id}`}>
                   <Trash2 className="h-3.5 w-3.5 text-red-500" />
                 </Button>
               </div>

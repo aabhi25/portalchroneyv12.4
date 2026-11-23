@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, Eye, FileCheck2, Loader2, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -144,7 +145,7 @@ export function TeacherView({ c, onDeleted, pane, onDirty, onSaveNext }: { c: Ch
               <Eye className="mr-1 h-3.5 w-3.5" />Read again
             </Button>
           )}
-          {!c.paperId && <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => { if (window.confirm("Delete this answer, its photos and its marks? This can't be undone.")) act("delete", async () => { await apiRequest("DELETE", `${API}/checks/${c.id}`); onDeleted(); }); }} data-testid="delete-check">
+          {!c.paperId && <Button size="sm" variant="ghost" disabled={!!busy} onClick={async () => { if (await confirmDialog({ title: "Delete this answer?", text: "Its photos and marks are deleted too. This can't be undone.", confirmLabel: "Delete", danger: true })) act("delete", async () => { await apiRequest("DELETE", `${API}/checks/${c.id}`); onDeleted(); }); }} data-testid="delete-check">
             <Trash2 className="mr-1 h-3.5 w-3.5" />Delete
           </Button>}
         </div>

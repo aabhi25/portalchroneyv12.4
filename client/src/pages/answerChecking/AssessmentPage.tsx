@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, FileCheck2, FileUp, Loader2, Pencil, Play, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -35,7 +36,7 @@ export default function AssessmentPage({ assessmentId }: { assessmentId: string 
   const refresh = () => qc.invalidateQueries({ queryKey: key });
 
   async function remove() {
-    if (!a || !window.confirm(`Delete "${a.title}" and all ${a.sheets.length} checked sheet${a.sheets.length === 1 ? "" : "s"}? This can't be undone.`)) return;
+    if (!a || !(await confirmDialog({ title: `Delete "${a.title}"?`, text: `${a.sheets.length ? `${a.sheets.length === 1 ? "Its checked sheet is" : `All ${a.sheets.length} checked sheets are`} deleted too. ` : ""}This can't be undone.`, confirmLabel: "Delete", danger: true }))) return;
     try {
       await apiRequest("DELETE", `${API}/assessments/${a.id}`);
       qc.invalidateQueries({ queryKey: [`${API}/assessments`] });

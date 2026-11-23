@@ -4,6 +4,7 @@ import type { MeResponseDto } from "@shared/dto";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -259,10 +260,11 @@ function useUnsavedChangesGuard(dirty: boolean) {
     // In-app links navigate with history.pushState (wouter); ask before letting them through.
     const original = window.history.pushState;
     window.history.pushState = function (this: History, ...args: Parameters<History["pushState"]>) {
-      if (window.confirm("You have unsaved changes to your calling settings. Leave without saving?")) {
-        window.history.pushState = original;
-        return original.apply(this, args);
-      }
+      void confirmDialog({ title: "Leave without saving?", text: "You have unsaved changes to your calling settings.", confirmLabel: "Leave", cancelLabel: "Stay here", danger: true }).then((leave) => {
+        if (!leave) return;
+        if (window.history.pushState !== original) window.history.pushState = original;
+        original.apply(window.history, args);
+      });
     } as History["pushState"];
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
