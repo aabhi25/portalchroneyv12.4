@@ -131,7 +131,34 @@ export async function renderPracticeSheet(opts: { text: string; studentLabel: st
   return out;
 }
 
+/** Row numbers for both margins of a page, and a thin line under each row, on a clear background. */
+export async function renderRowNumbers(opts: { width: number; height: number; margin: number; edges: number[] }): Promise<Buffer> {
+  const c = await loadCanvas();
+  const canvas = c.createCanvas(opts.width, opts.height);
+  const g = canvas.getContext("2d");
+  g.font = `36px "Kalam"`;
+  g.textBaseline = "middle";
+  g.textAlign = "center";
+  opts.edges.slice(1).forEach((edge, i) => {
+    const top = Math.round(opts.edges[i] * opts.height);
+    const bottom = Math.round(edge * opts.height);
+    for (const x of [0, opts.width - opts.margin]) {
+      g.fillStyle = i % 2 ? "#ffe4e6" : "#dbeafe";
+      g.fillRect(x, top, opts.margin, bottom - top);
+      g.fillStyle = "#111111";
+      g.fillText(String(i + 1), x + opts.margin / 2, (top + bottom) / 2 + 3);
+    }
+    g.fillStyle = "rgba(37,99,235,0.45)";
+    g.fillRect(0, bottom - 1, opts.width, 2);
+  });
+  return canvas.toBuffer("image/png");
+}
+
 const PEN = "#d42020";
+const BOUNDARY = "#2563eb";
+
+/** At most `max` lines, the last one ending in "…" when something was cut. */
+const clip = (lines: string[], max: number) => (lines.length > max ? [...lines.slice(0, max - 1), `${lines[max - 1]}…`] : lines);
 
 function drawTick(g: any, x: number, y: number, size: number) {
   g.beginPath();
@@ -150,30 +177,46 @@ function fmt(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, "");
 }
 
+/** How much of the page is kept, faded, above and below an answer's boundary (of the page's height). */
+const AROUND = 0.035;
+
 /**
  * The marked answer sheet: pages stacked (900 px wide) with a red-pen strip on the right —
  * total in a circle, then each step with a tick (full), a half-tick (part) or a cross (none),
- * its marks and the examiner's short note, and the remark at the end.
+ * its marks and the examiner's short note, and the remark at the end. Where the answer's place on
+ * a page is known (`bounds`, one list per page) only that part is shown, with a boundary around it.
  */
-export async function renderMarkedSheet(opts: { pages: Buffer[]; steps: StepResult[]; total: number; maxMarks: number; remark: string; needsTeacher: boolean }): Promise<Buffer> {
+export async function renderMarkedSheet(opts: { pages: Buffer[]; bounds?: Array<Array<{ top: number; bottom: number }>>; steps: StepResult[]; total: number; maxMarks: number; remark: string; needsTeacher: boolean }): Promise<Buffer> {
   const c = await loadCanvas();
   const PAGE_WIDTH = 900;
   const STRIP = 420;
   const GAP = 14;
   const imgs = await Promise.all(opts.pages.map(p => c.loadImage(p)));
-  const scaled = imgs.map(img => ({ img, h: Math.round(img.height * (PAGE_WIDTH / img.width)) }));
+  // What is shown of each page: the stretch around each boundary, or all of it.
+  const scaled = imgs.flatMap((img, i) => {
+    const full = Math.round(img.height * (PAGE_WIDTH / img.width));
+    const bounds = opts.bounds?.[i] ?? [];
+    if (!bounds.length) return [{ img, from: 0, h: full, full, box: null as { y: number; h: number } | null }];
+    return bounds.map(b => {
+      const from = Math.round(Math.max(0, b.top - AROUND) * full);
+      const to = Math.max(from + 1, Math.round(Math.min(1, b.bottom + AROUND) * full));
+      return { img, from, h: to - from, full, box: { y: Math.round(b.top * full) - from, h: Math.round((b.bottom - b.top) * full) } };
+    });
+  });
   const pagesHeight = scaled.reduce((a, s) => a + s.h, 0) + GAP * Math.max(0, scaled.length - 1);
 
   // Lay out the strip first to know how tall it must be.
   const measure = c.createCanvas(10, 10).getContext("2d");
-  // Step text sits between the tick (50 px) and the marks on the right (about 80 px).
-  const labelW = STRIP - 30 - 50 - 90;
+  // Step text sits between the tick (50 px) and the marks on the right ("0.5/0.5").
+  measure.font = `30px "Caveat"`;
+  const marksW = Math.max(0, ...opts.steps.map(s => measure.measureText(`${fmt(s.awarded)}/${fmt(s.marks)}`).width));
+  const labelW = STRIP - 30 - 50 - 24 - 16 - marksW;
   const noteW = STRIP - 30 - 50 - 24;
   const stepBlocks = opts.steps.map(s => {
     measure.font = penFont(s.label, 30);
-    const label = wrapLines(s.label, labelW, t => measure.measureText(t).width).slice(0, 3);
+    const label = clip(wrapLines(s.label, labelW, t => measure.measureText(t).width), 5);
     measure.font = penFont(s.comment, 26);
-    const note = s.comment ? wrapLines(s.comment, noteW, t => measure.measureText(t).width).slice(0, 3) : [];
+    const note = s.comment ? clip(wrapLines(s.comment, noteW, t => measure.measureText(t).width), 4) : [];
     return { s, label, note, h: 16 + label.length * 32 + note.length * 28 + 18 };
   });
   measure.font = penFont(opts.remark, 30);
@@ -185,7 +228,17 @@ export async function renderMarkedSheet(opts: { pages: Buffer[]; steps: StepResu
   g.fillStyle = "#ffffff";
   g.fillRect(0, 0, PAGE_WIDTH + STRIP, H);
   let y = 0;
-  for (const s of scaled) { g.drawImage(s.img, 0, y, PAGE_WIDTH, s.h); y += s.h + GAP; }
+  for (const s of scaled) {
+    g.drawImage(s.img, 0, (s.from / s.full) * s.img.height, s.img.width, (s.h / s.full) * s.img.height, 0, y, PAGE_WIDTH, s.h);
+    if (s.box) {
+      g.fillStyle = "rgba(255,255,255,0.62)";
+      g.fillRect(0, y, PAGE_WIDTH, s.box.y);
+      g.fillRect(0, y + s.box.y + s.box.h, PAGE_WIDTH, s.h - s.box.y - s.box.h);
+      g.strokeStyle = BOUNDARY; g.lineWidth = 4;
+      g.strokeRect(6, y + s.box.y, PAGE_WIDTH - 12, s.box.h);
+    }
+    y += s.h + GAP;
+  }
   g.fillStyle = "#fff7f5";
   g.fillRect(PAGE_WIDTH, 0, STRIP, H);
   g.strokeStyle = "#f0c9c4"; g.lineWidth = 2;

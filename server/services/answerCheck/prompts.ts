@@ -804,3 +804,48 @@ export function parseImport(raw: Record<string, any> | null): ImportedPaper {
   }
   return { title: str(r.title).slice(0, 120), board: str(r.board).slice(0, 60), grade: str(r.grade).slice(0, 20), medium: str(r.medium).slice(0, 40), subject: str(r.subject).slice(0, 80), questions };
 }
+
+// ---- Where each answer is on the page ---------------------------------------------------------
+
+export const LOCATE_SYSTEM = `You find where answers are on a photo of a student's handwritten page. The page is shown enlarged as overlapping strips, top to bottom. It is divided into rows, numbered from 1 at the top in both margins; a thin line separates each row from the next.
+For each answer say in which row its FIRST line of writing on this page is. When the answer has a label, that is the line where the student wrote the label — even when the same words or numbers come again lower down. Without a label it is the line its text begins with. Where that line has a fraction written over two rows, give the upper row. Read the row number in the margin straight beside the line.
+An answer that continues from another page begins at its first line on THIS page. For each answer also copy the first few words of that line ("begins").
+The list can be wrong: an answer none of whose writing is on this page belongs in "notHere" — look at the writing itself, not at what would be likely.
+Reply with JSON only: {"places": [{"part": 0, "row": 1, "begins": "Let the number be"}], "notHere": []}`;
+
+export function locateUserText(parts: Array<{ id: number; label: string; text: string; continues: boolean; goesOn: boolean }>, rows: number): string {
+  const list = parts.map(p => {
+    const text = p.text.replace(/\s+/g, " ").trim();
+    const note = p.continues ? " (began on another page; some of this text is on this page)" : p.goesOn ? " (begins on this page and goes on to another)" : "";
+    return `Part ${p.id}${p.label ? `, labelled "${p.label}"` : ""}${note}: "${p.continues ? text.slice(0, 900) : text.slice(0, 140)}${text.length > (p.continues ? 900 : 140) ? " …" : ""}"`;
+  }).join("\n");
+  return `The page has rows 1 to ${rows}. The answers on it:\n${list}`;
+}
+
+export interface PartStart { part: number; row: number; begins: string }
+
+/** The row each part begins in, and parts that aren't on the page; unknown and repeated ones are dropped. */
+export function parseLocate(raw: Record<string, any> | null, ids: number[]): { places: PartStart[]; notHere: number[] } {
+  const seen = new Set<number>();
+  const places = (Array.isArray(raw?.places) ? raw!.places : [])
+    .map((p: any): PartStart => ({ part: Math.round(num(p?.part, -1)), row: Math.round(num(p?.row, 0)), begins: str(p?.begins).slice(0, 120) }))
+    .filter((p: PartStart) => ids.includes(p.part) && p.row >= 1 && !seen.has(p.part) && !!seen.add(p.part));
+  const notHere = (Array.isArray(raw?.notHere) ? raw!.notHere : []).map((x: unknown) => Math.round(num(x, -1))).filter((x: number) => ids.includes(x) && !seen.has(x));
+  return { places, notHere };
+}
+
+// ---- The order of one answer's pieces -----------------------------------------------------------
+
+export const PIECES_SYSTEM = `A student's answer to one exam question runs over several pages, and the pages may have been uploaded in any order. You are given its pieces, each copied from one place on a page, in no particular order. Put them in the order the student wrote them.
+How to tell: the piece with the question's number or "Solution" / "Given" / "Let" is first. Sub-part i) is finished before ii) begins, and ii) before iii). Within a sub-part the working goes on: an expression is stated, values are substituted, it is simplified, then the conclusion ("LHS = RHS", "Hence proved", the result asked for). A piece that begins in the middle of some working follows the piece whose working it carries on: compare what it proves or calculates — its expressions and its last line — with the sub-parts of the question, and put it before any later sub-part. A piece that repeats lines of another sits beside it.
+Reply with JSON only: {"why": "for each piece after the first: which sub-part it belongs to and what it carries on from", "order": ["B", "A", "C"]}`;
+
+export function piecesUserText(q: { number: string; questionText: string }, pieces: string[]): string {
+  return `Question ${q.number}: ${q.questionText}\n\n${pieces.map((t, i) => `Piece ${String.fromCharCode(65 + i)}:\n"""\n${t.length > 900 ? `${t.slice(0, 600)}\n…\n${t.slice(-250)}` : t}\n"""`).join("\n\n")}`;
+}
+
+/** The pieces' order (0-based), or null when the reply isn't every piece once. */
+export function parsePieces(raw: Record<string, any> | null, count: number): number[] | null {
+  const list = (Array.isArray(raw?.order) ? raw!.order : []).map((x: unknown) => str(x).toUpperCase().replace(/^PIECE\s+/, "").charCodeAt(0) - 65);
+  return list.length === count && new Set(list).size === count && list.every((k: number) => k >= 0 && k < count) ? list : null;
+}

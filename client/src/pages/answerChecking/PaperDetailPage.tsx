@@ -10,25 +10,24 @@ import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
 import { AnswerPane } from "./AnswerPane";
 import { usePageViewer } from "./PageViewer";
-import { SheetPages, questionsOnPage, viewerPages } from "./SheetPages";
+import { SheetPages, viewerPages } from "./SheetPages";
 import { ASSESS_PATH,
-  API, LEVEL_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, STATUS_LABEL, STATUS_STYLE, fmtMarks, imageUrl, isRunning, paperRunning,
+  API, LEVEL_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, STATUS_LABEL, STATUS_STYLE, fmtMarks, isRunning, paperRunning,
   type CheckView, type PaperView,
 } from "./answerCheckApi";
 
-/** Super admin › Answer checking › one whole paper: totals, each question's answer, the sheet, and a student view. */
+/** Super admin › Answer checking › one whole paper: totals, each question's answer and the sheet. */
 export default function PaperDetailPage({ paperId }: { paperId: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [, setLocation] = useLocation();
-  const [view, setView] = useState<"teacher" | "student">("teacher");
   const [busy, setBusy] = useState("");
   const { on, overview } = useAssessmentOn();
   const off = on === false;
   const key = [`${API}/papers/${paperId}`];
   const { data, isLoading, isError } = useQuery<{ paper: PaperView }>({
     queryKey: key,
-    refetchInterval: q => (q.state.data && paperRunning(q.state.data.paper.status) ? 2500 : false),
+    refetchInterval: q => (q.state.data && (paperRunning(q.state.data.paper.status) || q.state.data.paper.locating) ? 2500 : false),
     staleTime: 0,
     refetchOnMount: "always",
   });
@@ -56,14 +55,6 @@ export default function PaperDetailPage({ paperId }: { paperId: string }) {
         back={back}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-full bg-gray-100 p-1" role="tablist">
-              {(["teacher", "student"] as const).map(v => (
-                <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} data-testid={`paper-view-${v}`}
-                  className={`rounded-full px-3 py-1 text-[13px] font-medium ${view === v ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"}`}>
-                  {v === "teacher" ? "Teacher view" : "Student view"}
-                </button>
-              ))}
-            </div>
             {p && (
               <>
                 <Button size="sm" variant="outline" disabled={running || off || !!busy} data-testid="paper-rerun"
@@ -83,7 +74,7 @@ export default function PaperDetailPage({ paperId }: { paperId: string }) {
         {off && <AssessmentOffBanner accountName={overview?.account?.name} />}
         {isLoading && <p className="text-[14px] text-gray-500">Loading…</p>}
         {isError && <p className="text-[14px] text-red-600">This paper could not be loaded. It may have been deleted.</p>}
-        {p && (view === "student" ? <StudentReport p={p} /> : <TeacherPaper p={p} off={off} />)}
+        {p && <TeacherPaper p={p} off={off} />}
       </SaBody>
     </>
   );
@@ -106,6 +97,13 @@ function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${q ? `?q=${encodeURIComponent(q)}` : ""}`);
   }, [mayLeave]);
   const hide = useCallback(() => show(null), [show]);
+  // Boundaries found on a sheet checked earlier: its answers and marked sheets have changed.
+  const qc = useQueryClient();
+  const wasLocating = useRef(p.locating);
+  useEffect(() => {
+    if (wasLocating.current && !p.locating) qc.invalidateQueries({ predicate: q => String(q.queryKey[0]).startsWith(`${API}/checks/`) });
+    wasLocating.current = p.locating;
+  }, [p.locating]);
   const t = p.totals;
   const lost = (p.matching?.unassigned ?? []).filter(u => !/^\((heading|rough work)\)/i.test(u.text.trim()));
   return (
@@ -152,7 +150,7 @@ function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
                 </tr>
               </thead>
               <tbody>
-                {p.checks.map(c => <AnswerRow key={c.id} c={c} practice={p.source === "practice"} open={c.questionNumber === question} onOpen={() => { if (c.questionNumber !== question) show(c.questionNumber); }} onPage={n => open(viewerPages(p.pages, p), n - 1)} />)}
+                {p.checks.map(c => <AnswerRow key={c.id} c={c} practice={p.source === "practice"} open={c.questionNumber === question} onOpen={() => { if (c.questionNumber !== question) show(c.questionNumber); }} onPage={n => open(viewerPages(p.pages, p, c), n - 1)} />)}
               </tbody>
             </table>
           </div>
@@ -166,7 +164,7 @@ function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
           <pre className="whitespace-pre-wrap rounded-xl bg-violet-50/50 p-3 font-sans text-[13px] text-gray-700">{p.practice.sheet}</pre>
         </Panel>
       )}
-      {question !== null && <AnswerPane p={p} number={question} onGo={show} onClose={hide} onDirty={onDirty} mayLeave={mayLeave} />}
+      {question !== null && <AnswerPane p={p} number={question} onGo={show} onClose={hide} onDirty={onDirty} />}
       {viewer}
     </div>
   );
@@ -200,64 +198,5 @@ function AnswerRow({ c, practice, open, onOpen, onPage }: { c: CheckView; practi
         {gap !== null && <span className={`ml-1.5 text-[12px] ${Math.abs(gap) <= 0.5 ? "text-emerald-600" : "text-red-600"}`}>({gap > 0 ? "+" : ""}{fmtMarks(gap)})</span>}
       </td>
     </tr>
-  );
-}
-
-/** What a student would see for the whole paper: total, then each question's marks and feedback. */
-function StudentReport({ p }: { p: PaperView }) {
-  const { open, viewer } = usePageViewer();
-  const t = p.totals;
-  const finalTotal = t.teacherMarks ?? t.aiMarks;
-  if (t.aiMarks === null) return <p className="text-[14px] text-gray-500">The student view appears once every answer is marked.</p>;
-  return (
-    <div className="mx-auto max-w-[460px]" data-testid="paper-student-view">
-      <p className="mb-2 text-center text-[12px] text-gray-500">Preview: how a student would see this in the app</p>
-      <div className="overflow-hidden rounded-[28px] border-[6px] border-gray-900 bg-white shadow-xl">
-        <div className="bg-teal-700 px-5 py-4 text-white">
-          <p className="text-[12px] opacity-80">{p.title || "Mock Test"}</p>
-          <div className="flex items-end justify-between">
-            <p className="text-[17px] font-semibold">{t.teacherMarks !== null ? "Teacher evaluated" : "AI Teacher evaluated"}</p>
-            <p className="text-[26px] font-semibold tabular-nums">{fmtMarks(finalTotal)}<span className="text-[15px] opacity-80">/{fmtMarks(t.maxMarks)}</span></p>
-          </div>
-        </div>
-        <div className="divide-y divide-black/[0.06]">
-          {p.checks.map(c => {
-            const marked = c.images.find(i => i.kind === "marked");
-            const final = c.teacherMarks ?? c.aiMarks;
-            return (
-              <div key={c.id} className="space-y-2 p-4 text-[14px]">
-                <div className="flex items-start justify-between gap-3">
-                  <p className="font-medium text-gray-900">Question {c.questionNumber} · {fmtMarks(c.maxMarks)} marks</p>
-                  <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-0.5 font-semibold text-teal-800">{fmtMarks(final)}/{fmtMarks(c.maxMarks)}</span>
-                </div>
-                <p className="line-clamp-2 text-gray-600">{c.scheme?.questionText}</p>
-                {c.reading?.notAttempted ? <p className="text-gray-500">Not attempted.</p> : c.result && (
-                  <>
-                    <p className="text-gray-800">{c.result.feedback.summary}</p>
-                    {c.result.feedback.improvement && <p className="text-gray-600">{c.result.feedback.improvement}</p>}
-                    {(c.teacherComment || c.result.teacherComment) && <p className="text-[13px] italic text-gray-600">Comment: {c.teacherComment || c.result.teacherComment}</p>}
-                  </>
-                )}
-                {marked && <button type="button" onClick={() => open([{ src: imageUrl(marked.id), label: `Question ${c.questionNumber} · evaluated answer sheet` }])} className="text-[13px] font-medium text-teal-700 hover:underline">View evaluated answer sheet</button>}
-              </div>
-            );
-          })}
-        </div>
-        {p.pages.length > 0 && (
-          <div className="border-t border-black/[0.06] p-4" data-testid="paper-student-pages">
-            <p className="text-[14px] font-medium text-gray-900">Your answer sheet</p>
-            <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-              {p.pages.map((pg, i) => (
-                <button key={pg.id} type="button" onClick={() => open(viewerPages(p.pages, p), i)} className="w-[78px] shrink-0 text-[11px] text-gray-600" aria-label={`Open page ${pg.position + 1}`}>
-                  <img src={imageUrl(pg.id)} alt="" className="h-24 w-full rounded-lg border bg-gray-50 object-cover" />{questionsOnPage(p, pg.position) || `Page ${pg.position + 1}`}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {t.needsTeacher > 0 && t.teacherMarks === null && <p className="px-4 pb-4 text-[12px] text-amber-700">Admin note (not shown to students): {t.needsTeacher} answer{t.needsTeacher === 1 ? " is" : "s are"} waiting for a teacher, so this result would not be published yet.</p>}
-      </div>
-      {viewer}
-    </div>
   );
 }

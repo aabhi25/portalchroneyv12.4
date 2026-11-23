@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../../db";
 import { answerCheckImages, answerChecks, answerMarkingSchemes, answerPapers, type AnswerMarkingSchemeRow, type AnswerPaperRow } from "@shared/schema";
-import { applyJudgement, pageOrderByQuestion, renumberPages, type PracticeLevel } from "@shared/answerCheck";
+import { answerRegions, applyJudgement, movedRegions, pageOrderByQuestion, renumberPages, type AnswerRegion, type PracticeLevel } from "@shared/answerCheck";
 import { ANSWER_CHECK_MODEL, AnswerCheckAiError, type AnswerCheckAi } from "./ai";
 import {
   assembleAnswers,
@@ -9,16 +9,22 @@ import {
   unplacedAnswerParts,
   MATCH_SYSTEM,
   parsePaperRead,
+  parsePieces,
   parsePractice,
+  PIECES_SYSTEM,
+  piecesUserText,
   practiceSystem,
   practiceUserText,
   READ_PAPER_SYSTEM,
   readPaperUserText,
+  type PaperMatching,
   type PaperQuestion,
+  type SheetPart,
 } from "./prompts";
 import { checkView, contextOf, currentScheme, effectiveStatus, enqueue, answerCheckAi, redrawMarkedSheet, runCheck, schemeOf, STALE_AFTER_MS } from "./engine";
 import { deletePaperFiles, imageBytes, listPaperImages, readerPhotos, saveImage, toDataUrl } from "./images";
 import { renderPracticeSheet } from "./drawing";
+import { locateParts } from "./regions";
 import { listQuestionPictures } from "./pictures";
 
 /**
@@ -196,6 +202,62 @@ async function writePracticePaper(paperId: string): Promise<void> {
 
 // ---- Reading and matching a sheet -------------------------------------------------------------
 
+interface ReadSheet {
+  read: { parts: SheetPart[]; blank: boolean; notes: string };
+  matching: PaperMatching;
+  places: Map<number, AnswerRegion[]>;
+}
+
+/**
+ * One reading of a sheet: its parts (the questions are not shown to the reader; pages go enlarged,
+ * as overlapping strips, so small handwriting reaches the AI at full sharpness), which question each
+ * answers, and where each is on its pages. A plain reason when the AI couldn't.
+ */
+async function readSheet(ai: AnswerCheckAi, ctx: ReturnType<typeof contextOf>, pages: Buffer[], questions: PaperQuestion[]): Promise<ReadSheet | string> {
+  const photos = await readerPhotos(pages);
+  const readReply = await ai.json({
+    model: ANSWER_CHECK_MODEL,
+    system: READ_PAPER_SYSTEM,
+    user: readPaperUserText(ctx, pages.length, photos.strips),
+    images: photos.images.map(b => toDataUrl(b)),
+    imageLabels: photos.labels,
+    maxTokens: 12000,
+    timeoutMs: 240_000,
+  });
+  if (!readReply) return "The AI could not read the answer sheet. Try again.";
+  const read = parsePaperRead(readReply, pages.length);
+  let matchReply: Record<string, any> | null = { answers: [] };
+  const locating = locateParts(ai, pages, read.parts);
+  if (read.parts.length) {
+    matchReply = await ai.json({ model: ANSWER_CHECK_MODEL, system: MATCH_SYSTEM, user: matchUserText(questions, read.parts), maxTokens: 2000 });
+    if (!matchReply) return "The AI could not match the sheet to the questions. Try again.";
+  }
+  // What the pages really show corrects the pages the reader gave (kept for an answer left with none).
+  const located = await locating;
+  const parts = read.parts.map((part, i) => ({ ...part, pages: located.pages[i] }));
+  const matching = assembleAnswers(questions, parts, matchReply);
+  for (const a of matching.answers) if (!a.notAttempted && !a.pages.length) a.pages = Array.from(new Set(a.parts.flatMap(i => read.parts[i].pages))).sort((x, y) => x - y);
+  // An answer in several pieces over several pages: the pieces in the order they were written.
+  await Promise.all(matching.answers.map(async a => {
+    if (a.parts.length < 2 || a.parts.length > 20 || new Set(a.parts.flatMap(i => parts[i].pages)).size < 2) return;
+    const q = questions.find(x => x.number === a.number)!;
+    const reply = await ai.json({ model: ANSWER_CHECK_MODEL, system: PIECES_SYSTEM, user: piecesUserText(q, a.parts.map(i => `${parts[i].label} ${parts[i].text}`.trim())), maxTokens: 900 }).catch(() => null);
+    const pieces = parsePieces(reply, a.parts.length);
+    if (!pieces) return;
+    a.parts = pieces.map(k => a.parts[k]);
+    a.text = a.parts.map(i => parts[i].text).join("\n");
+  }));
+  return { read: { ...read, parts }, matching, places: located.places };
+}
+
+/** An answer whose working carries on to a page before the one it left: the pages are in a jumble. */
+export function carriesOnBackwards(parts: Array<{ pages: number[] }>, answers: Array<{ parts: number[] }>): boolean {
+  return answers.some(a => {
+    const pages = a.parts.flatMap(i => parts[i]?.pages ?? []);
+    return pages.some((p, i) => i > 0 && p < pages[i - 1] && !pages.slice(0, i).includes(p));
+  });
+}
+
 export async function runPaper(paperId: string): Promise<void> {
   const started = Date.now();
   const [paper] = await db.select().from(answerPapers).where(eq(answerPapers.id, paperId));
@@ -214,43 +276,38 @@ export async function runPaper(paperId: string): Promise<void> {
     if (!pageBytes.length) return fail("The answer sheet's pages are missing.");
     const first = schemes.get(questions[0].questionKey)!;
 
-    // 1. Read the whole sheet into parts (the questions are not shown). Pages go enlarged, as
-    //    overlapping strips, so small handwriting reaches the AI at full sharpness.
-    const photos = await readerPhotos(pageBytes);
-    const readReply = await ai.json({
-      model: ANSWER_CHECK_MODEL,
-      system: READ_PAPER_SYSTEM,
-      user: readPaperUserText(contextOf(first), pageBytes.length, photos.strips),
-      images: photos.images.map(b => toDataUrl(b)),
-      imageLabels: photos.labels,
-      maxTokens: 12000,
-      timeoutMs: 240_000,
-    });
-    if (!readReply) return fail("The AI could not read the answer sheet. Try again.");
-    const read = parsePaperRead(readReply, pageBytes.length);
-
-    // 2. Match the parts to the questions.
+    // 1. Read the whole sheet into parts and match them to the questions.
     const aliases = questionAliases(questions);
     const paperQuestions: PaperQuestion[] = questions.map(q => ({ number: q.number, maxMarks: n(schemes.get(q.questionKey)!.maxMarks), questionText: schemes.get(q.questionKey)!.questionText, aliases: aliases.get(q.number) }));
-    let matchReply: Record<string, any> | null = { answers: [] };
-    if (read.parts.length) {
-      matchReply = await ai.json({ model: ANSWER_CHECK_MODEL, system: MATCH_SYSTEM, user: matchUserText(paperQuestions, read.parts), maxTokens: 2000 });
-      if (!matchReply) return fail("The AI could not match the sheet to the questions. Try again.");
-    }
-    const matching = assembleAnswers(paperQuestions, read.parts, matchReply);
-    // Answer-like parts no question claimed: a "not attempted" may really be one of them.
-    const unplaced = unplacedAnswerParts(matching).length > 0;
+    let sheet = await readSheet(ai, contextOf(first), pageBytes, paperQuestions);
+    if (typeof sheet === "string") return fail(sheet);
 
-    // The pages go in question order (Q1's page first), unless someone arranged them by hand.
+    // 2. The pages go in question order (Q1's page first), unless someone arranged them by hand.
+    //    When an answer carries on to an earlier page the pages were in a jumble, which confuses the
+    //    reader (lines copied twice, or to a page they aren't on): the sheet is read once more in order.
     const arranged = (paper.reading as any)?.arranged === "manual" ? "manual" : "auto";
-    const order = arranged === "auto" && pageBytes.length === pageRows.length ? pageOrderByQuestion(pageRows.length, read.parts, matching.answers) : [];
+    let order = arranged === "auto" && pageBytes.length === pageRows.length ? pageOrderByQuestion(pageRows.length, sheet.read.parts, sheet.matching.answers) : [];
     if (!inOrder(order)) {
+      const rows = order.map(p => pageRows[p - 1]);
       await db.transaction(async tx => {
-        for (let i = 0; i < order.length; i++) await tx.update(answerCheckImages).set({ position: i }).where(eq(answerCheckImages.id, pageRows[order[i] - 1].id));
+        for (let i = 0; i < rows.length; i++) await tx.update(answerCheckImages).set({ position: i }).where(eq(answerCheckImages.id, rows[i].id));
       });
+      if (carriesOnBackwards(sheet.read.parts, sheet.matching.answers)) {
+        const again = await readSheet(ai, contextOf(first), order.map(p => pageBytes[p - 1]), paperQuestions).catch(() => "failed");
+        if (typeof again !== "string") { sheet = again; order = []; }
+      }
+    }
+    const { read, matching, places } = sheet;
+    const regionsOf = (parts: number[]) => {
+      const regions = answerRegions(parts, places);
+      return inOrder(order) ? regions : movedRegions(regions, order);
+    };
+    if (!inOrder(order)) {
       read.parts = movedParts(read.parts, order);
       matching.answers = movedAnswers(matching.answers, order);
     }
+    // Answer-like parts no question claimed: a "not attempted" may really be one of them.
+    const unplaced = unplacedAnswerParts(matching).length > 0;
 
     // 3. One check per question (a re-read replaces the earlier ones).
     await db.delete(answerChecks).where(eq(answerChecks.paperId, paperId));
@@ -281,6 +338,7 @@ export async function runPaper(paperId: string): Promise<void> {
           blank: !a.text,
           notes: a.note,
           pages: a.pages,
+          regions: regionsOf(a.parts),
           parts: a.parts,
           matchConfidence: a.confidence,
           matchNote: a.note,
@@ -293,7 +351,7 @@ export async function runPaper(paperId: string): Promise<void> {
     }
     await db.update(answerPapers).set({
       status: "checked",
-      reading: { parts: read.parts, blank: read.blank, notes: read.notes, pages: pageBytes.length, arranged } as any,
+      reading: { parts: read.parts, blank: read.blank, notes: read.notes, pages: pageBytes.length, arranged, located: true } as any,
       matching: matching as any,
       costUsd: String(priorCost + ai.costUsd()),
       durationMs: Date.now() - started,
@@ -326,6 +384,51 @@ export async function rerunPaper(businessAccountId: string, paperId: string): Pr
   return row;
 }
 
+/** Sheets whose answers are being located now. */
+const locatingNow = new Set<string>();
+
+/**
+ * Finds where the answers are on a sheet checked before boundaries were drawn (or whose answers
+ * were read in another way), in the background, once; the marks stay.
+ */
+export function locateOnce(paper: AnswerPaperRow): void {
+  const reading = paper.reading as any;
+  if (paper.status !== "checked" || !paper.matching || !reading?.parts?.length || reading.located !== undefined || locatingNow.has(paper.id)) return;
+  locatingNow.add(paper.id);
+  enqueue(async () => {
+    try {
+      const ids = await pageIds(db, paper.id);
+      const rows = await listPaperImages(paper.id);
+      const pages = (await Promise.all(rows.map(r => imageBytes(r)))).filter((b): b is Buffer => !!b);
+      const ai = await answerCheckAi(paper.businessAccountId);
+      const places = pages.length === rows.length ? (await locateParts(ai, pages, reading.parts)).places : new Map();
+      const saved = await db.transaction(async tx => {
+        const [now] = await tx.select().from(answerPapers).where(eq(answerPapers.id, paper.id)).for("update");
+        // Read again or rearranged meanwhile: these places no longer fit.
+        if (!now || now.status !== "checked" || (now.reading as any)?.located !== undefined || (await pageIds(tx, paper.id)).join() !== ids.join()) return false;
+        const checks = await tx.select({ id: answerChecks.id, reading: answerChecks.reading }).from(answerChecks).where(eq(answerChecks.paperId, paper.id));
+        for (const c of checks) {
+          const r = c.reading as any;
+          if (Array.isArray(r?.parts)) await tx.update(answerChecks).set({ reading: { ...r, regions: answerRegions(r.parts, places) } }).where(eq(answerChecks.id, c.id));
+        }
+        await tx.update(answerPapers).set({ reading: { ...(now.reading as any), located: places.size > 0 }, costUsd: String(n(now.costUsd) + ai.costUsd()) }).where(eq(answerPapers.id, paper.id));
+        return places.size > 0;
+      });
+      if (saved) {
+        const checks = await db.select({ id: answerChecks.id }).from(answerChecks).where(eq(answerChecks.paperId, paper.id));
+        for (const c of checks) await redrawMarkedSheet(c.id).catch(err => console.warn("[Answer Check] marked sheet not redrawn:", err?.message || err));
+      }
+    } catch (err: any) {
+      // Not tried again on every visit; "Read again" locates them afresh.
+      console.warn("[Answer Check] answers not located:", err?.message || err);
+      const [now] = await db.select({ reading: answerPapers.reading }).from(answerPapers).where(eq(answerPapers.id, paper.id));
+      if (now?.reading) await db.update(answerPapers).set({ reading: { ...(now.reading as any), located: false } }).where(eq(answerPapers.id, paper.id));
+    } finally {
+      locatingNow.delete(paper.id);
+    }
+  });
+}
+
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** An answer's pages are listed first to last; a part of the sheet keeps its pages as it reads. */
@@ -354,7 +457,7 @@ async function movePages(tx: Tx, paper: AnswerPaperRow, ids: string[], order: nu
     const checks = await tx.select({ id: answerChecks.id, reading: answerChecks.reading }).from(answerChecks).where(eq(answerChecks.paperId, paper.id));
     for (const c of checks) {
       const r = c.reading as any;
-      if (Array.isArray(r?.pages)) await tx.update(answerChecks).set({ reading: { ...r, pages: answerPages(r.pages, order) } }).where(eq(answerChecks.id, c.id));
+      if (Array.isArray(r?.pages)) await tx.update(answerChecks).set({ reading: { ...r, pages: answerPages(r.pages, order), ...(r.regions ? { regions: movedRegions(r.regions, order) } : {}) } }).where(eq(answerChecks.id, c.id));
     }
   }
   const [row] = await tx.update(answerPapers).set({
@@ -364,7 +467,7 @@ async function movePages(tx: Tx, paper: AnswerPaperRow, ids: string[], order: nu
   return row;
 }
 
-/** Draws a sheet's marked answers again after its pages moved. */
+/** Draws a sheet's marked answers again after its pages moved or its answers were located. */
 function redrawMarked(paperId: string) {
   enqueue(async () => {
     const checks = await db.select({ id: answerChecks.id }).from(answerChecks).where(eq(answerChecks.paperId, paperId));
@@ -479,6 +582,8 @@ export async function paperView(paper: AnswerPaperRow) {
     status: paperStatus(paper, checks),
     questions,
     pages: pages.sort((a, b) => a.position - b.position).map(p => ({ id: p.id, position: p.position })),
+    /** Where the answers are is being found now. */
+    locating: locatingNow.has(paper.id),
     reading: paper.reading,
     matching: paper.matching,
     practice: paper.practice,

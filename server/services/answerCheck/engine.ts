@@ -5,6 +5,7 @@ import {
   answerChecks,
   businessAccounts,
   answerMarkingSchemes,
+  type AnswerCheckImageRow,
   type AnswerCheckRow,
   type AnswerMarkingSchemeRow,
 } from "@shared/schema";
@@ -18,6 +19,7 @@ import {
   teacherReasons,
   wordCount,
   type AnswerCheckSettings,
+  type AnswerRegion,
   type MarkingScheme,
   type PracticeLevel,
   type QuestionKind,
@@ -400,6 +402,13 @@ async function paperPagesFor(paperId: string, wanted: unknown) {
   return mine.length ? mine : all;
 }
 
+/** An answer's photos with its boundaries on each (none for an answer that wasn't located). */
+async function withBounds(pages: AnswerCheckImageRow[], reading: any): Promise<{ pages: Buffer[]; bounds: Array<Array<{ top: number; bottom: number }>> }> {
+  const regions: AnswerRegion[] = Array.isArray(reading?.regions) ? reading.regions : [];
+  const loaded = (await Promise.all(pages.map(async p => ({ p, data: await imageBytes(p) })))).filter((x): x is { p: AnswerCheckImageRow; data: Buffer } => !!x.data);
+  return { pages: loaded.map(x => x.data), bounds: loaded.map(x => regions.filter(r => r.page === x.p.position + 1)) };
+}
+
 /** The line written on the marked sheet: the teacher's comment, else the feedback's first sentence. */
 function markedRemark(teacherComment: string | undefined, summary: string | undefined): string {
   return teacherComment || (summary || "").split(/(?<=[.!?])\s/)[0] || "";
@@ -427,7 +436,7 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
     const pages = fromPaper
       ? await paperPagesFor(check.paperId!, (check.reading as any)?.pages)
       : (await listImages(checkId, "answer")).sort((a, b) => a.position - b.position);
-    const pageBytes = (await Promise.all(pages.map(p => imageBytes(p)))).filter((b): b is Buffer => !!b);
+    const { pages: pageBytes, bounds } = await withBounds(pages, fromPaper ? check.reading : null);
     if (!pageBytes.length) return fail("The answer photos are missing.");
 
     // 1. Read the handwriting (kept on a re-check unless asked to read again).
@@ -510,7 +519,7 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
     const remark = markedRemark(markReply.teacherComment, markReply.feedback.summary);
     if (!notAttempted) {
       try {
-        const marked = await renderMarkedSheet({ pages: pageBytes, steps: marks.steps, total: marks.total, maxMarks: ctx.maxMarks, remark, needsTeacher: reasons.length > 0 });
+        const marked = await renderMarkedSheet({ pages: pageBytes, bounds, steps: marks.steps, total: marks.total, maxMarks: ctx.maxMarks, remark, needsTeacher: reasons.length > 0 });
         await replaceMarkedImage(checkId, check.businessAccountId, marked);
       } catch (err: any) {
         console.warn("[Answer Check] marked sheet not drawn:", err?.message || err);
@@ -560,15 +569,15 @@ export async function runCheck(checkId: string, opts: { reread?: boolean } = {})
   }
 }
 
-/** Draws a checked answer's marked sheet again (its sheet's pages were rearranged); the marks stay. */
+/** Draws a checked answer's marked sheet again (its sheet's pages were rearranged, or its boundaries found); the marks stay. */
 export async function redrawMarkedSheet(checkId: string): Promise<void> {
   const [check] = await db.select().from(answerChecks).where(eq(answerChecks.id, checkId));
   const result = check?.result as any;
   if (!check?.paperId || !result || check.aiMarks === null || (check.reading as any)?.notAttempted) return;
   const pages = await paperPagesFor(check.paperId, (check.reading as any)?.pages);
-  const pageBytes = (await Promise.all(pages.map(p => imageBytes(p)))).filter((b): b is Buffer => !!b);
+  const { pages: pageBytes, bounds } = await withBounds(pages, check.reading);
   if (!pageBytes.length) return;
-  const marked = await renderMarkedSheet({ pages: pageBytes, steps: result.steps ?? [], total: n(check.aiMarks), maxMarks: n(check.maxMarks), remark: markedRemark(result.teacherComment, result.feedback?.summary), needsTeacher: (check.teacherReasons ?? []).length > 0 });
+  const marked = await renderMarkedSheet({ pages: pageBytes, bounds, steps: result.steps ?? [], total: n(check.aiMarks), maxMarks: n(check.maxMarks), remark: markedRemark(result.teacherComment, result.feedback?.summary), needsTeacher: (check.teacherReasons ?? []).length > 0 });
   await replaceMarkedImage(checkId, check.businessAccountId, marked);
 }
 

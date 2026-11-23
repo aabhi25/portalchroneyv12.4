@@ -490,3 +490,29 @@ export function questionSpan(numbers: string[], paperOrder: string[]): string {
   }
   return runs.flatMap(r => r.length > 2 ? [`Q${paperOrder[r[0]]}–Q${paperOrder[r[r.length - 1]]}`] : r.map(i => `Q${paperOrder[i]}`)).join(", ");
 }
+
+/** Where an answer is on its sheet: a stretch of a page, from 0 (top) to 1 (bottom). */
+export interface AnswerRegion { page: number; top: number; bottom: number }
+
+/**
+ * An answer's boundaries from its parts' places, in page order. Stretches that touch are one; a page
+ * the answer is on but was not found on has no boundary (it is shown whole).
+ */
+export function answerRegions(parts: number[], places: Map<number, AnswerRegion[]>): AnswerRegion[] {
+  const all = parts.flatMap(i => places.get(i) ?? []).sort((a, b) => a.page - b.page || a.top - b.top);
+  const out: AnswerRegion[] = [];
+  for (const r of all) {
+    const last = out[out.length - 1];
+    if (last && last.page === r.page && r.top <= last.bottom + 0.03) last.bottom = Math.max(last.bottom, r.bottom);
+    else out.push({ ...r });
+  }
+  return out;
+}
+
+/** An answer's boundaries after its sheet's pages are put in `order` (the old page numbers, in their new order). */
+export function movedRegions(regions: unknown, order: number[]): AnswerRegion[] {
+  return (Array.isArray(regions) ? regions as AnswerRegion[] : [])
+    .map(r => ({ ...r, page: order.indexOf(Number(r.page)) + 1 }))
+    .filter(r => r.page >= 1)
+    .sort((a, b) => a.page - b.page || a.top - b.top);
+}

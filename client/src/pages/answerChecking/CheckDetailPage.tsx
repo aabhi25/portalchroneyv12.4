@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BookOpen, ChevronDown, Eye, FileCheck2, Loader2, RotateCcw, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, Eye, FileCheck2, Loader2, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,7 +10,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
-import { usePageViewer } from "./PageViewer";
+import { Boundaries, usePageViewer } from "./PageViewer";
 import { PictureStrip } from "./PictureStrip";
 import { viewerPages } from "./SheetPages";
 import { ASSESS_PATH,
@@ -20,16 +20,18 @@ import { ASSESS_PATH,
 
 const CORRECTNESS: Record<string, string> = { correct: "Correct", partial: "Partly correct", incorrect: "Incorrect" };
 
-/** Super admin › Answer checking › one checked answer: teacher view (everything) or student view (what a student would see). */
+/** Super admin › Answer checking › one checked answer (an answer of a whole sheet opens in its paper). */
 export default function CheckDetailPage({ checkId }: { checkId: string }) {
   const [, setLocation] = useLocation();
-  const [view, setView] = useState<"teacher" | "student">("teacher");
   const key = [`${API}/checks/${checkId}`];
   const { data, isLoading, isError } = useQuery<{ check: CheckView }>({
     queryKey: key,
     refetchInterval: q => (q.state.data && isRunning(q.state.data.check) ? 2000 : false),
   });
   const c = data?.check;
+  // An answer of a whole sheet is shown in its paper's side pane.
+  const inPaper = c?.paperId && c.questionNumber ? `${ASSESS_PATH}/papers/${c.paperId}?q=${encodeURIComponent(c.questionNumber)}` : null;
+  useEffect(() => { if (inPaper) setLocation(inPaper, { replace: true }); }, [inPaper]);
   const back = c?.paperId
     ? { label: "Back to the paper", href: `${ASSESS_PATH}/papers/${c.paperId}` }
     : { label: "Assessment", href: c ? `${ASSESS_PATH}?q=${encodeURIComponent(c.questionKey)}` : `${ASSESS_PATH}` };
@@ -42,21 +44,11 @@ export default function CheckDetailPage({ checkId }: { checkId: string }) {
         title={c ? (c.studentLabel || "Uploaded answer") : "Answer"}
         subtitle={c?.scheme ? scopeLabel(c.scheme) : undefined}
         back={back}
-        actions={
-          <div className="inline-flex rounded-full bg-gray-100 p-1" role="tablist">
-            {(["teacher", "student"] as const).map(v => (
-              <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} data-testid={`view-${v}`}
-                className={`rounded-full px-3 py-1 text-[13px] font-medium ${view === v ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"}`}>
-                {v === "teacher" ? "Teacher view" : "Student view"}
-              </button>
-            ))}
-          </div>
-        }
       />
       <SaBody>
         {isLoading && <p className="text-[14px] text-gray-500">Loading…</p>}
         {isError && <p className="text-[14px] text-red-600">This answer could not be loaded. It may have been deleted.</p>}
-        {c && (view === "student" ? <StudentView c={c} /> : <TeacherView c={c} onDeleted={() => setLocation(back.href)} />)}
+        {c && !inPaper && <TeacherView c={c} onDeleted={() => setLocation(back.href)} />}
       </SaBody>
     </>
   );
@@ -72,9 +64,10 @@ function Photos({ c, pane }: { c: CheckView; pane?: boolean }) {
   const { open, viewer } = usePageViewer();
   const [show, setShow] = useState<"marked" | "pages">(marked ? "marked" : "pages");
   useEffect(() => { if (marked) setShow("marked"); }, [marked?.id]);
-  // The pane shows the top of a page; it opens whole in the viewer.
-  const shot = `relative block w-full cursor-zoom-in overflow-hidden rounded-xl border ${pane ? "max-h-[380px]" : ""}`;
-  const more = pane && <span className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-white/95 to-transparent pb-2 pt-10"><span className="rounded-full border bg-white px-3 py-1 text-[12px] font-medium text-gray-800">Open and zoom</span></span>;
+  // Without a boundary the pane shows the top of a page; it opens whole in the viewer.
+  const short = pane && !c.reading?.regions?.length;
+  const shot = `relative block w-full cursor-zoom-in overflow-hidden rounded-xl border ${short ? "max-h-[380px]" : ""}`;
+  const more = short && <span className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-white/95 to-transparent pb-2 pt-10"><span className="rounded-full border bg-white px-3 py-1 text-[12px] font-medium text-gray-800">Open and zoom</span></span>;
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
@@ -83,7 +76,7 @@ function Photos({ c, pane }: { c: CheckView; pane?: boolean }) {
       </div>
       {show === "marked" && marked
         ? <button type="button" className={shot} onClick={() => open([{ src: imageUrl(marked.id), label: c.questionNumber ? `Question ${c.questionNumber} · marked sheet` : "Marked sheet" }])}><img src={imageUrl(marked.id)} alt="Marked answer sheet" className="w-full" data-testid="marked-image" />{more}</button>
-        : pages.map((p, i) => <button key={p.id} type="button" className={shot} onClick={() => open(viewerPages(pages), i)}><img src={imageUrl(p.id)} alt={`Page ${p.position + 1}`} className="w-full" />{more}</button>)}
+        : pages.map((p, i) => <button key={p.id} type="button" className={shot} onClick={() => open(viewerPages(pages, undefined, c), i)}><img src={imageUrl(p.id)} alt={`Page ${p.position + 1}`} className="w-full" /><Boundaries bounds={c.paperId ? c.reading?.regions?.filter(r => r.page === p.position + 1) : undefined} />{more}</button>)}
       {!pages.length && <p className="text-[13px] text-gray-500">{c.status === "writing" ? "The practice answer is being written…" : "No photos."}</p>}
       {viewer}
     </div>
@@ -319,56 +312,6 @@ function ListBlock({ title, items }: { title: string; items: string[] }) {
     <div>
       <p className="font-medium text-gray-900">{title}</p>
       <ul className="mt-1 list-disc space-y-0.5 pl-5 text-gray-700">{items.map(i => <li key={i}>{i}</li>)}</ul>
-    </div>
-  );
-}
-
-/** What a student would see in the app, laid out like the client's document (section 4.7). */
-export function StudentView({ c }: { c: CheckView }) {
-  const r = c.result;
-  const marked = c.images.find(i => i.kind === "marked");
-  const pages = c.paperId ? c.sheetPages ?? [] : c.images.filter(i => i.kind === "answer");
-  const { open, viewer } = usePageViewer();
-  if (!r) return <p className="text-[14px] text-gray-500">The student view appears once the answer is checked.</p>;
-  const finalMarks = c.teacherMarks ?? c.aiMarks;
-  const reviewed = c.teacherAt && c.teacherMarks !== null;
-  return (
-    <div className="mx-auto max-w-[420px]" data-testid="student-view">
-      <p className="mb-2 text-center text-[12px] text-gray-500">Preview: how a student would see this in the app</p>
-      <div className="overflow-hidden rounded-[28px] border-[6px] border-gray-900 bg-white shadow-xl">
-        <div className="bg-teal-700 px-5 py-4 text-white">
-          <p className="text-[12px] opacity-80">Mock Test{c.scheme?.subject ? ` – ${c.scheme.subject}` : ""}</p>
-          <p className="text-[17px] font-semibold">{reviewed ? "Teacher evaluated" : "AI Teacher evaluated"}</p>
-        </div>
-        <div className="space-y-4 p-5 text-[14px]">
-          <div className="flex items-center justify-between">
-            <p className="font-medium text-gray-900">Question {c.questionNumber ?? 1} · Maximum marks: {fmtMarks(c.maxMarks)}</p>
-            <span className="rounded-full bg-teal-50 px-3 py-1 text-[15px] font-semibold text-teal-800">{fmtMarks(finalMarks)}/{fmtMarks(c.maxMarks)}</span>
-          </div>
-          <p className="whitespace-pre-wrap text-gray-700">{c.scheme?.questionText}</p>
-          <div className="rounded-2xl bg-gray-50 p-4">
-            <p className="text-[12px] font-semibold uppercase tracking-wide text-gray-500">AI Teacher Evaluation</p>
-            <p className="mt-1 text-gray-900">AI marks: <b>{fmtMarks(c.aiMarks)}/{fmtMarks(c.maxMarks)}</b></p>
-            <p className="mt-2 text-gray-800">{r.feedback.summary}</p>
-            {r.feedback.improvement && <p className="mt-2 text-gray-700">{r.feedback.improvement}</p>}
-            {r.feedback.revision && <p className="mt-2 flex items-start gap-1.5 text-gray-700"><BookOpen className="mt-0.5 h-4 w-4 shrink-0" />{r.feedback.revision}</p>}
-          </div>
-          {c.aiWritten && c.aiWritten.percent !== null && (
-            <div className="flex items-center justify-between rounded-2xl border border-black/[0.06] px-4 py-3">
-              <span className="text-gray-600">AI-content detection</span>
-              <span className="font-medium text-gray-900">{c.aiWritten.percent}% estimated</span>
-            </div>
-          )}
-          <div className="rounded-2xl border border-black/[0.06] p-4">
-            <p className="text-[12px] font-semibold uppercase tracking-wide text-gray-500">{reviewed ? "Teacher review" : "AI review"}</p>
-            <p className="mt-1 text-gray-900">Final marks: <b>{fmtMarks(finalMarks)}/{fmtMarks(c.maxMarks)}</b></p>
-            {(c.teacherComment || r.teacherComment) && <p className="mt-2 text-gray-700">{reviewed ? "Teacher's" : "AI Teacher's"} comments: {c.teacherComment || r.teacherComment}</p>}
-          </div>
-          <Button variant="outline" className="w-full" onClick={() => open(marked ? [{ src: imageUrl(marked.id), label: "Evaluated answer sheet" }] : viewerPages(pages))} disabled={!marked && !pages.length} data-testid="student-sheet">View evaluated answer sheet</Button>
-          {viewer}
-          {c.teacherReasons.length > 0 && !reviewed && <p className="text-[12px] text-amber-700">Admin note (not shown to students): this answer is waiting for a teacher, so it would not be published yet.</p>}
-        </div>
-      </div>
     </div>
   );
 }

@@ -2,7 +2,26 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { ChevronLeft, ChevronRight, Minus, Plus, RotateCw, X } from "lucide-react";
 
-export interface ViewerPage { src: string; label: string }
+export interface ViewerPage {
+  src: string;
+  label: string;
+  /** Stretches of the page (0 top – 1 bottom) with a boundary around them; the rest is faded. */
+  bounds?: Array<{ top: number; bottom: number }>;
+}
+
+/** The boundaries over a page's photo (put inside a relative box the size of the photo). */
+export function Boundaries({ bounds }: { bounds?: Array<{ top: number; bottom: number }> }) {
+  if (!bounds?.length) return null;
+  const sorted = [...bounds].sort((a, b) => a.top - b.top);
+  const faded = [...sorted.map((b, i) => ({ top: i ? sorted[i - 1].bottom : 0, bottom: b.top })), { top: sorted[sorted.length - 1].bottom, bottom: 1 }].filter(f => f.bottom > f.top);
+  const place = (r: { top: number; bottom: number }) => ({ top: `${r.top * 100}%`, height: `${(r.bottom - r.top) * 100}%` });
+  return (
+    <span className="pointer-events-none absolute inset-0" data-testid="answer-boundary">
+      {faded.map(f => <span key={`f${f.top}`} className="absolute inset-x-0 bg-white/60" style={place(f)} />)}
+      {sorted.map(b => <span key={`b${b.top}`} className="absolute inset-x-[0.5%] rounded-[3px] border-2 border-blue-600" style={place(b)} />)}
+    </span>
+  );
+}
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
@@ -175,16 +194,21 @@ export function PageViewer({ pages, start, onClose }: { pages: ViewerPage[]; sta
               onDoubleClick={e => { const p = fromCentre(e); if (view.zoom > 1.05) setView({ zoom: 1, x: 0, y: 0 }); else zoomBy(2.5, p.x, p.y); }}
               data-testid="viewer-stage"
             >
-              <img
-                key={page.src}
-                src={page.src}
-                alt={page.label}
-                draggable={false}
-                onLoad={e => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-                className="absolute left-1/2 top-1/2 max-w-none"
+              <div
+                className="absolute left-1/2 top-1/2"
                 style={{ width: size.w || undefined, height: size.h || undefined, visibility: fit ? "visible" : "hidden", transform: `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) scale(${view.zoom}) rotate(${turn}deg)` }}
                 data-testid="viewer-image"
-              />
+              >
+                <img
+                  key={page.src}
+                  src={page.src}
+                  alt={page.label}
+                  draggable={false}
+                  onLoad={e => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+                  className={fit ? "h-full w-full" : "max-w-none"}
+                />
+                <Boundaries bounds={page.bounds} />
+              </div>
             </div>
             {pages.length > 1 && (
               <>

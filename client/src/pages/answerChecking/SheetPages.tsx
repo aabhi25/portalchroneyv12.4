@@ -8,7 +8,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { usePageViewer } from "./PageViewer";
 import { SortableTiles } from "./SortableTiles";
-import { API, imageUrl, paperRunning, type PaperView } from "./answerCheckApi";
+import { API, imageUrl, paperRunning, type CheckView, type PaperView } from "./answerCheckApi";
 
 type Page = PaperView["pages"][number];
 
@@ -18,10 +18,13 @@ export function questionsOnPage(p: PaperView, position: number): string {
   return questionSpan(numbers, p.questions.map(q => q.number));
 }
 
-/** Pages for the viewer, named by page (and by the questions on them, for a whole sheet). */
-export const viewerPages = (pages: Page[], sheet?: PaperView) => pages.map(p => {
+/**
+ * Pages for the viewer, named by page (and by the questions on them, for a whole sheet); with `answer`,
+ * a boundary around that answer on its pages.
+ */
+export const viewerPages = (pages: Page[], sheet?: PaperView, answer?: Pick<CheckView, "reading">) => pages.map(p => {
   const questions = sheet ? questionsOnPage(sheet, p.position) : "";
-  return { src: imageUrl(p.id), label: `Page ${p.position + 1}${questions ? ` · ${questions}` : ""}` };
+  return { src: imageUrl(p.id), label: `Page ${p.position + 1}${questions ? ` · ${questions}` : ""}`, bounds: answer?.reading?.regions?.filter(r => r.page === p.position + 1) };
 });
 
 /** The answer sheet, its pages in question order: open a page here to zoom in, or put the pages in another order. */
@@ -76,7 +79,7 @@ export function SheetPages({ p, off }: { p: PaperView; off: boolean }) {
           {p.checks.map(c => {
             const first = c.reading?.notAttempted ? undefined : c.reading?.pages?.[0];
             return (
-              <button key={c.id} type="button" disabled={!first} title={first ? `Page ${c.reading!.pages!.join(", ")}` : "Not attempted"} onClick={() => open(viewerPages(p.pages, p), first! - 1)} data-testid={`pages-question-${c.questionNumber}`}
+              <button key={c.id} type="button" disabled={!first} title={first ? `Page ${c.reading!.pages!.join(", ")}` : "Not attempted"} onClick={() => open(viewerPages(p.pages, p, c), first! - 1)} data-testid={`pages-question-${c.questionNumber}`}
                 className="rounded-full border border-black/[0.08] bg-white px-2.5 py-0.5 text-[13px] font-medium text-gray-800 hover:border-violet-400 hover:text-violet-700 disabled:border-transparent disabled:bg-gray-50 disabled:text-gray-300">
                 Q{c.questionNumber}
               </button>

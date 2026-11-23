@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { StudentView, TeacherView } from "./CheckDetailPage";
+import { TeacherView } from "./CheckDetailPage";
 import { API, isRunning, fmtMarks, type CheckView, type PaperView } from "./answerCheckApi";
 
 /** The dot on a question's button: full marks, some, none, a teacher should look, still being marked. */
@@ -18,16 +18,14 @@ function dot(c: CheckView): { color: string; label: string } {
  * One question of a checked sheet, beside the list: everything about the answer, with the paper's
  * other questions one click away. The list stays usable while it is open.
  */
-export function AnswerPane({ p, number, onGo, onClose, onDirty, mayLeave }: {
+export function AnswerPane({ p, number, onGo, onClose, onDirty }: {
   p: PaperView;
   number: string;
   onGo: (number: string) => void;
   onClose: () => void;
-  /** Teacher's marks typed but not saved; `mayLeave` asks before they are lost. */
+  /** Teacher's marks typed but not saved (the paper asks before they are lost). */
   onDirty: (dirty: boolean) => void;
-  mayLeave: () => boolean;
 }) {
-  const [view, setView] = useState<"teacher" | "student">("teacher");
   const index = p.checks.findIndex(c => c.questionNumber === number);
   const summary = p.checks[index];
   const { data } = useQuery<{ check: CheckView }>({
@@ -91,14 +89,6 @@ export function AnswerPane({ p, number, onGo, onClose, onDirty, mayLeave }: {
               <DialogPrimitive.Title className="min-w-0 flex-1 truncate pl-1 text-[17px] font-semibold text-gray-900" data-testid="pane-title">
                 <span className="sm:hidden">Q</span><span className="hidden sm:inline">Question </span>{number}<span className="ml-2 hidden text-[13px] font-normal text-gray-500 sm:inline">{index + 1} of {p.checks.length} · {fmtMarks(summary.teacherMarks ?? summary.aiMarks)}/{fmtMarks(summary.maxMarks)}</span>
               </DialogPrimitive.Title>
-              <div className="inline-flex shrink-0 rounded-full bg-gray-100 p-0.5" role="tablist">
-                {(["teacher", "student"] as const).map(v => (
-                  <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => { if (v !== view && mayLeave()) setView(v); }} data-testid={`pane-view-${v}`}
-                    className={`rounded-full px-2.5 py-1 text-[12px] font-medium ${view === v ? "bg-white text-gray-900 shadow-sm" : "text-gray-600"}`}>
-                    {v === "teacher" ? "Teacher" : "Student"}
-                  </button>
-                ))}
-              </div>
               <DialogPrimitive.Close className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-gray-500 hover:bg-gray-100" aria-label="Close" title="Close (Esc)" data-testid="pane-close"><X className="h-5 w-5" /></DialogPrimitive.Close>
             </div>
             <div ref={setChips} className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="pane-questions">
@@ -115,9 +105,7 @@ export function AnswerPane({ p, number, onGo, onClose, onDirty, mayLeave }: {
             </div>
           </div>
           <div key={summary.id} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5" data-testid="pane-body">
-            {c && (view === "student"
-              ? <StudentView c={c} />
-              : <TeacherView c={c} pane onDeleted={onClose} onDirty={onDirty} onSaveNext={index < p.checks.length - 1 ? () => { onDirty(false); step(1); } : undefined} />)}
+            {c && <TeacherView c={c} pane onDeleted={onClose} onDirty={onDirty} onSaveNext={index < p.checks.length - 1 ? () => { onDirty(false); step(1); } : undefined} />}
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

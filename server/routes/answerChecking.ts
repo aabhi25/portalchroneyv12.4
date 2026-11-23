@@ -29,7 +29,7 @@ import {
 } from "../services/answerCheck/engine";
 import { ImageError, imageBytes, MAX_PAGES, MAX_PAPER_PAGES, prepareUpload } from "../services/answerCheck/images";
 import { chaptersFor, customQuestionKey, DraftError, draftQuestionsFromCurriculum, MAX_DRAFT_QUESTIONS, pickRandomQuestion, pickRandomQuestions, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
-import { arrangeOnce, arrangePages, cleanQuestionList, createPaper, createPracticePaper, deletePaper, listPapers, PaperError, paperView, rerunPaper } from "../services/answerCheck/papers";
+import { arrangeOnce, arrangePages, cleanQuestionList, createPaper, createPracticePaper, deletePaper, listPapers, locateOnce, PaperError, paperView, rerunPaper } from "../services/answerCheck/papers";
 import { answerPapers } from "@shared/schema";
 import { AssessmentError, assessmentView, checkSheet, deleteAssessment, getAssessment, importQuestions, listAssessments, sampleSheet, saveAssessment } from "../services/answerCheck/assessments";
 import { readDataUrls } from "../services/answerCheck/files";
@@ -512,7 +512,9 @@ router.get(`${BASE}/papers/:id`, ...superAdmin, async (req, res) => {
   try {
     const [paper] = await db.select().from(answerPapers).where(and(eq(answerPapers.id, req.params.id), eq(answerPapers.businessAccountId, accountId(req))));
     if (!paper) return res.status(404).json({ error: "Paper not found." });
-    res.json({ paper: await paperView(await arrangeOnce(paper)) });
+    const arranged = await arrangeOnce(paper);
+    if (await assessmentEnabled(accountId(req))) locateOnce(arranged);
+    res.json({ paper: await paperView(arranged) });
   } catch (e) { fail(res, "get paper", e); }
 });
 

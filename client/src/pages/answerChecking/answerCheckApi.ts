@@ -1,4 +1,4 @@
-import type { AnswerCheckSettings, MarkingScheme, PracticeLevel, QuestionKind, StepResult, Deduction, ScoreBand, Correctness } from "@shared/answerCheck";
+import type { AnswerCheckSettings, AnswerRegion, MarkingScheme, PracticeLevel, QuestionKind, StepResult, Deduction, ScoreBand, Correctness } from "@shared/answerCheck";
 
 /** Super admin › Answer checking: what the server sends, and small helpers shared by the pages. */
 
@@ -96,7 +96,7 @@ export interface CheckView {
   reading: {
     legibility: number; unclear: Array<{ where: string; guess: string }>; blank: boolean; notes: string;
     // answers found in a whole answer sheet
-    pages?: number[]; matchConfidence?: number; matchNote?: string; notAttempted?: boolean; unplacedOnSheet?: boolean;
+    pages?: number[]; regions?: AnswerRegion[]; matchConfidence?: number; matchNote?: string; notAttempted?: boolean; unplacedOnSheet?: boolean;
   } | null;
   result: CheckResult | null;
   aiMarks: number | null;
@@ -155,6 +155,8 @@ export interface PaperView {
   status: PaperStatus;
   questions: Array<{ number: string; questionKey: string }>;
   pages: Array<{ id: string; position: number }>;
+  /** Where the answers are on the pages is being found now. */
+  locating: boolean;
   reading: { parts: Array<{ label: string; pages: number[]; text: string }>; blank: boolean; notes: string; pages: number; /** Who put the pages in order. */ arranged?: "auto" | "manual" } | null;
   matching: { answers: Array<{ number: string; parts: number[]; confidence: number; note: string; notAttempted: boolean }>; unassigned: Array<{ part: number; reason: string; text: string }> } | null;
   practice: { writtenOrder: string[]; sheet: string; answers: Array<{ number: string; level: string; expectedMarks: number; why: string }> } | null;

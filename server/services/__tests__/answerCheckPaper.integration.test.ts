@@ -22,7 +22,7 @@ function expect(cond: boolean, label: string, detail?: unknown) {
   else { failed++; console.error(`  FAIL ${label}`, detail === undefined ? "" : JSON.stringify(detail)?.slice(0, 600)); }
 }
 
-type Kind = "paperRead" | "match" | "scheme" | "mark" | "aiWritten" | "practice";
+type Kind = "paperRead" | "match" | "locate" | "pieces" | "scheme" | "mark" | "aiWritten" | "practice";
 
 async function main() {
   const { db } = await import("../../db");
@@ -32,11 +32,13 @@ async function main() {
   const prompts = await import("../answerCheck/prompts");
   const sharp = (await import("sharp")).default;
 
-  const queues: Record<Kind, Array<Record<string, any> | null>> = { paperRead: [], match: [], scheme: [], mark: [], aiWritten: [], practice: [] };
+  const queues: Record<Kind, Array<Record<string, any> | null>> = { paperRead: [], match: [], locate: [], pieces: [], scheme: [], mark: [], aiWritten: [], practice: [] };
   const calls: Array<{ kind: Kind; model: string; images: number; user: string }> = [];
   const kindOf = (system: string): Kind =>
     system === prompts.READ_PAPER_SYSTEM ? "paperRead"
     : system === prompts.MATCH_SYSTEM ? "match"
+    : system === prompts.LOCATE_SYSTEM ? "locate"
+    : system === prompts.PIECES_SYSTEM ? "pieces"
     : system === prompts.AI_WRITTEN_SYSTEM ? "aiWritten"
     : system.startsWith("You are a senior board examiner") ? "scheme"
     : system.startsWith("You are an experienced, fair board examiner") ? "mark"
@@ -56,6 +58,8 @@ async function main() {
           const wrong = /"""[\s\S]*WRONG[\s\S]*"""/.test(call.user);
           return { steps: ids.map(s => ({ stepId: s.id, awarded: wrong ? 0 : s.marks, comment: "" })), confidence: 0.9, feedback: { summary: "ok" } };
         }
+        if (kind === "locate") return { places: Object.entries(rowOfPart).filter(([part]) => call.user.includes(`Part ${part}`)).map(([part, row]) => ({ part: Number(part), row })) };
+        if (kind === "pieces") return queues.pieces.shift() ?? null;
         if (kind === "practice") {
           // Strong: every step; average: the first step only; weak: nothing.
           const level = /- (strong|average|weak):/.exec(call.user)?.[1] || "strong";
@@ -69,6 +73,8 @@ async function main() {
       },
     };
   });
+  // Where the stand-in AI finds each part of a sheet: part number → row (pages are asked about at the same time).
+  let rowOfPart: Record<number, number> = {};
   const callsOf = (k: Kind) => calls.filter(c => c.kind === k).length;
 
   const stamp = Date.now();
@@ -124,7 +130,7 @@ async function main() {
     const readsBefore = callsOf("paperRead");
     await engine.recheck(B, q("1").id, { reread: true });
     await engine.waitForIdle();
-    expect(callsOf("paperRead") === readsBefore && calls.filter(c => c.kind === "paperRead" || c.images > 0).length === readsBefore, "re-checking one answer of a paper never reads it on its own");
+    expect(callsOf("paperRead") === readsBefore && calls.filter(c => c.kind === "paperRead" || (c.images > 0 && c.kind !== "locate")).length === readsBefore, "re-checking one answer of a paper never reads it on its own");
     let err = "";
     try { await engine.deleteCheck(B, q("2").id); } catch (e: any) { err = e.message; }
     expect(/delete the paper/.test(err), "one answer of a paper can't be deleted on its own", err);
@@ -157,8 +163,16 @@ async function main() {
       { label: "Q1", pages: [3], text: "Current is proportional", legibility: 0.9 },
     ] });
     const match = () => ({ answers: [{ number: "1", parts: [2], confidence: 0.9 }, { number: "2", parts: [1, 0], confidence: 0.9 }], notAttempted: ["3"] });
-    queues.paperRead.push(reply());
-    queues.match.push(match());
+    // The jumble (Q2 carries on to a page before its start) is put in order and read once more; the
+    // matcher gives Q2's pieces as uploaded, and the question about their order corrects it.
+    queues.paperRead.push(reply(), { parts: [
+      { label: "Q1", pages: [1], text: "Current is proportional", legibility: 0.9 },
+      { label: "Q2", pages: [2], text: "R = V/I", legibility: 0.9 },
+      { label: "", pages: [3], text: "so R = 440 ohm", legibility: 0.9 },
+    ] });
+    queues.match.push({ answers: [{ number: "1", parts: [2], confidence: 0.9 }, { number: "2", parts: [0, 1], confidence: 0.9 }], notAttempted: ["3"] }, { answers: [{ number: "1", parts: [0], confidence: 0.9 }, { number: "2", parts: [1, 2], confidence: 0.9 }], notAttempted: ["3"] });
+    queues.pieces.push({ order: ["B", "A"] }, { order: ["A", "B"] });
+    const readsBefore = callsOf("paperRead");
     const p = await papers.createPaper({ businessAccountId: B, title: "Mock test 3", studentLabel: "Meera", questions: qs, photos: await Promise.all(shades.map(photo)), userId: null });
     const shadesOf = async (pages: Array<{ id: string }>) => Promise.all(pages.map(async pg => {
       const [row] = await db.select().from(schema.answerCheckImages).where(eq(schema.answerCheckImages.id, pg.id));
@@ -170,7 +184,7 @@ async function main() {
     const pagesOf = (n: string) => (v.checks.find(c => c.questionNumber === n)!.reading as any).pages.join();
     expect((await shadesOf(v.pages)).join() === "first,middle,last", "pages uploaded last first are put in question order", await shadesOf(v.pages));
     expect(pagesOf("1") === "1" && pagesOf("2") === "2,3" && v.checks.find(c => c.questionNumber === "2")!.readText === "R = V/I\nso R = 440 ohm", "each answer's page numbers follow its pages; its text is unchanged", v.checks.map(c => (c.reading as any).pages));
-    expect((v.reading as any).parts.map((x: any) => x.pages.join()).join("|") === "3|2|1" && (v.reading as any).arranged === "auto", "the reading's page numbers follow too");
+    expect((v.reading as any).parts.map((x: any) => x.pages.join()).join("|") === "1|2|3" && (v.reading as any).arranged === "auto" && callsOf("paperRead") === readsBefore + 2 && queues.pieces.length === 0, "a jumbled sheet is read once more, in order", { parts: (v.reading as any).parts, reads: callsOf("paperRead") - readsBefore });
     const markedOf = async (checkId: string) => (await db.select().from(schema.answerCheckImages).where(eq(schema.answerCheckImages.checkId, checkId))).filter(i => i.kind === "marked");
     const topShade = async (checkId: string) => {
       const [m] = await markedOf(checkId);
@@ -221,6 +235,72 @@ async function main() {
     v = await viewOf(p.id);
     expect(v.pages.map(x => x.id).join() === [again[2], again[1], again[0]].join() && pagesOf("1") === "1" && pagesOf("2") === "2,3", "an earlier sheet is arranged once, even when opened twice at the same time", v.checks.map(c => (c.reading as any).pages));
     expect(opened.every(o => (o.reading as any).arranged === "auto"), "and is marked as arranged");
+  }
+
+  console.log("Boundaries around each answer");
+  {
+    const { renderPracticeSheet } = await import("../answerCheck/drawing");
+    const { writingRows } = await import("../answerCheck/regions");
+    const [page] = await renderPracticeSheet({ text: "Q2.\nResistance is the opposition to current.\nR = V / I = 440 ohm\n\nAns 1)\nCurrent is proportional to voltage at a constant temperature.", studentLabel: "Name: Dev", questionLabel: "Mock test", seed: "b" });
+    const rows = await writingRows(page);
+    const [second] = await renderPracticeSheet({ text: "It bends when it enters water.", studentLabel: "Name: Dev", questionLabel: "Mock test", seed: "c" });
+    const n = rows.edges.length - 1;
+    const read = () => ({ parts: [
+      { label: "Q2", pages: [1], text: "Resistance is the opposition to current.", legibility: 0.9 },
+      { label: "1", pages: [1], text: "Current is proportional to voltage", legibility: 0.9 },
+      { label: "Q3", pages: [2], text: "It bends when it enters water.", legibility: 0.9 },
+      { label: "", pages: [1], text: "(heading) Name: Dev", legibility: 0.9 },
+    ] });
+    const match = () => ({ answers: [{ number: "2", parts: [0], confidence: 0.9 }, { number: "1", parts: [1], confidence: 0.9 }, { number: "3", parts: [2], confidence: 0.9 }] });
+    const firstOfAns1 = rows.edges.findIndex((e, i) => i > 0 && e > 0.28 && e < 0.4) + 1;
+    queues.paperRead.push(read()); queues.match.push(match());
+    rowOfPart = { 3: 1, 0: 2, 1: firstOfAns1 };
+    const p = await papers.createPaper({ businessAccountId: B, title: "Mock test 4", studentLabel: "Dev", questions: qs, photos: [page, second], userId: null });
+    await engine.waitForIdle();
+    let v = await viewOf(p.id);
+    const regionsOf = (num: string) => (v.checks.find(c => c.questionNumber === num)!.reading as any).regions as Array<{ page: number; top: number; bottom: number }>;
+    const [r2] = regionsOf("2");
+    const [r1] = regionsOf("1");
+    expect(regionsOf("2").length === 1 && r2.page === 1 && r2.top >= rows.edges[1] - 0.001 && r2.bottom <= rows.edges[firstOfAns1 - 1] + 0.001, "an answer's boundary runs from its first row to where the next answer begins", { r2, edges: rows.edges });
+    expect(r1.page === 1 && r1.top >= r2.bottom - 0.001 && r1.bottom < 0.7 && n > 3, "the last answer's boundary ends with its writing, not at the page's end", r1);
+    expect(regionsOf("3").length === 0 && (v.reading as any).located === true && v.locating === false, "an answer that wasn't found on its page has no boundary (the page is shown whole)", regionsOf("3"));
+    const markedSize = async (num: string) => {
+      const c = v.checks.find(x => x.questionNumber === num)!;
+      const [m] = (await db.select().from(schema.answerCheckImages).where(eq(schema.answerCheckImages.checkId, c.id))).filter(i => i.kind === "marked");
+      return (await sharp(m.data as Buffer).metadata()).height!;
+    };
+    expect((await markedSize("1")) < (await markedSize("3")), "the marked sheet shows only the answer's part of the page", [await markedSize("1"), await markedSize("3")]);
+
+    // Rearranged: boundaries follow their pages.
+    await papers.arrangePages(B, p.id, [v.pages[1].id, v.pages[0].id]);
+    await engine.waitForIdle();
+    v = await viewOf(p.id);
+    expect(regionsOf("1")[0].page === 2 && regionsOf("1")[0].top === r1.top, "boundaries follow their pages when they are put in another order", regionsOf("1"));
+
+    // A sheet checked before boundaries: found once, in the background, the marks stay.
+    for (const c of v.checks) { const { regions: _r, ...rest } = c.reading as any; await db.update(schema.answerChecks).set({ reading: rest }).where(eq(schema.answerChecks.id, c.id)); }
+    const { located: _l, ...before } = v.reading as any;
+    await db.update(schema.answerPapers).set({ reading: before }).where(eq(schema.answerPapers.id, p.id));
+    const rowOf = async () => (await db.select().from(schema.answerPapers).where(eq(schema.answerPapers.id, p.id)))[0];
+    const marks = JSON.stringify(v.checks.map(c => [c.id, c.aiMarks]));
+    const costBefore = v.costUsd;
+    const callsBefore = callsOf("locate");
+    rowOfPart = { 2: 1, 3: 1, 0: 2, 1: firstOfAns1 };
+    papers.locateOnce(await rowOf());
+    papers.locateOnce(await rowOf());
+    expect((await viewOf(p.id)).locating, "the paper says its boundaries are being found");
+    await engine.waitForIdle();
+    v = await viewOf(p.id);
+    expect(regionsOf("1")[0]?.page === 2 && regionsOf("3")[0]?.page === 1 && !v.locating && JSON.stringify(v.checks.map(c => [c.id, c.aiMarks])) === marks, "an earlier sheet gets its boundaries; the marks stay", v.checks.map(c => (c.reading as any).regions));
+    expect(callsOf("locate") === callsBefore + 2 && v.costUsd > costBefore, "asked once per page, and counted in the cost", callsOf("locate") - callsBefore);
+    papers.locateOnce(await rowOf());
+    await engine.waitForIdle();
+    expect(callsOf("locate") === callsBefore + 2, "not asked again on the next visit");
+    await db.update(schema.answerPapers).set({ reading: before }).where(eq(schema.answerPapers.id, p.id));
+    rowOfPart = {};
+    papers.locateOnce(await rowOf());
+    await engine.waitForIdle();
+    expect(((await rowOf()).reading as any).located === false, "nothing found: noted, so it isn't tried on every visit");
   }
 
   console.log("Reading again, failures, deleting");

@@ -45,5 +45,24 @@ expect(questionSpan(["1", "2", "3", "5"], ["1", "2", "3", "4", "5"]), "Q1–Q3, 
 expect(questionSpan(["9", "8"], ["1", "8", "9"]), "Q8, Q9", "two questions are listed, in the paper's order");
 expect(questionSpan(["x"], ["1"]), "", "no question on the page");
 
-if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
-console.log("\nAll page order checks passed");
+// Jumbled (an answer carries on to an earlier page) or only answered out of question order?
+async function jumbled() {
+  process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://unused@127.0.0.1:1/unused"; // never queried here
+  const { carriesOnBackwards } = await import("../answerCheck/papers");
+  const { parsePieces, piecesUserText } = await import("../answerCheck/prompts");
+  expect(carriesOnBackwards([on(5), on(1), on(2)], [from(0, 1, 2)]), true, "Q9 on pages 5, 1, 2 is a jumble");
+  expect(carriesOnBackwards([on(5, 1)], [from(0)]), true, "one part over pages 5, 1 too");
+  expect(carriesOnBackwards([on(2), on(1)], [from(1), from(0)]), false, "Q2 answered before Q1 is not");
+  expect(carriesOnBackwards([on(1), on(2), on(1)], [from(0, 1, 2)]), false, "a note back on the first page is not");
+  expect(parsePieces({ order: ["B", "piece a", "C"] }, 3), [1, 0, 2], "the pieces' order");
+  expect(parsePieces({ order: ["A", "A"] }, 2), null, "a piece given twice: no order");
+  expect(parsePieces({ order: ["A"] }, 2), null, "a piece missing: no order");
+  expect(parsePieces(null, 2), null, "no reply: no order");
+  expect(piecesUserText({ number: "9", questionText: "Prove it" }, ["x", "y"]).includes('Piece B:\n"""\ny'), true, "the pieces are lettered");
+}
+
+jumbled().then(() => {
+  if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
+  console.log("\nAll page order checks passed");
+  process.exit(0);
+}).catch(err => { console.error(err); process.exit(1); });
