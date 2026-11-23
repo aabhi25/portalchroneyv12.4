@@ -5,6 +5,9 @@ import {
   SHEET_COLUMNS, SHEET_LEVELS, EMI_FORMAT_HINT, parseEmiSchemes, formatEmiSchemes,
   type EmiScheme, type SheetColumn, type SheetLevel, type StoreSheetRow, type StoreSheetRowInput,
 } from "@shared/storeSheet";
+import { LOS_COLUMNS, LOS_COLUMN_HELP, isLosLayout, pickLosColumns, type LosLastImport } from "@shared/storeSheetLos";
+import { LosImportDialog, type LosImportFile } from "@/components/stores/LosImportDialog";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,7 +30,7 @@ import {
 import { toast } from "@/hooks/use-toast";
 import {
   AlertTriangle, ChevronDown, ChevronUp, Copy, Download, Eye, FileSpreadsheet, KeyRound, Link2, Loader2,
-  Plus, RefreshCw, Search, Sparkles, Store, Trash2, Upload, X,
+  Plus, RefreshCw, Search, Sparkles, Store, Trash2, Undo2, Upload, X,
 } from "lucide-react";
 
 // ─── Types & API ─────────────────────────────────────────────────────────────
@@ -52,6 +55,8 @@ interface SheetResponse {
   canRevealSecrets: boolean;
   /** Stores in the journey's own lists that aren't in the sheet yet. */
   journeyStoresNotInSheet: number;
+  /** Newest upload in the LOS layout that can be undone. */
+  lastLosImport: LosLastImport | null;
 }
 
 interface NamedRow { dealer: string; city: string; store: string }
@@ -167,43 +172,54 @@ function autoMap(headers: string[]): Record<SheetColumn, string> {
   return out;
 }
 
+const LOS_WIDTHS = [34, 16, 10, 12, 34, 18, 11, 16];
+
+function losHelpSheet(XLSX: typeof import("xlsx"), notes: string[]) {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ["Column", "What to put"],
+    ...LOS_COLUMNS.map(c => [c, LOS_COLUMN_HELP[c]]),
+    [],
+    ...notes.map((n, i) => [i === 0 ? "Tips" : "", n]),
+  ]);
+  ws["!cols"] = [{ wch: 16 }, { wch: 110 }];
+  return ws;
+}
+
 async function downloadTemplate() {
   const XLSX = await import("xlsx");
   const wb = XLSX.utils.book_new();
-  const example = ["Acme Mobiles", "Pune", "Acme FC Road", "6/1=32; 12/1=34", "ACME MOBILES PVT LTD", "ACME FC ROAD PUNE", 1234, "SID1234", "", "Yes", "Yes"];
-  const ws = XLSX.utils.aoa_to_sheet([[...SHEET_COLUMNS], example]);
-  ws["!cols"] = SHEET_COLUMNS.map(c => ({ wch: Math.max(14, c.length + 4) }));
+  const store = ["ACME MOBILES PRIVATE LIMITED", "Pune", 1234, "S01234", "Acme - FC Road - Pune", ""];
+  const ws = XLSX.utils.aoa_to_sheet([[...LOS_COLUMNS], [...store, 32, "6/1@4%"], [...store, 34, "12/1@3%"]]);
+  ws["!cols"] = LOS_WIDTHS.map(wch => ({ wch }));
   XLSX.utils.book_append_sheet(wb, ws, "Stores");
-  const help = XLSX.utils.aoa_to_sheet([
-    ["Column", "What to put"],
-    ...SHEET_COLUMNS.map(c => [c, COLUMN_HELP[c]]),
-    [],
-    ["Tip", "One row per store. Replace the example row with your own stores. Blank Secret keeps the current secret."],
-  ]);
-  help["!cols"] = [{ wch: 18 }, { wch: 110 }];
-  XLSX.utils.book_append_sheet(wb, help, "How to fill");
+  XLSX.utils.book_append_sheet(wb, losHelpSheet(XLSX, [
+    "One row for each EMI scheme of a store. Replace the example rows with your own.",
+    "Short names for WhatsApp are suggested when you upload, and you check every change before it is saved.",
+    "Stores that are not in the file stay as they are. Files in the older layout can still be uploaded.",
+  ]), "How to fill");
   XLSX.writeFile(wb, "dealers-stores-template.xlsx");
 }
 
 async function exportRows(rows: StoreSheetRow[]) {
   const XLSX = await import("xlsx");
   const wb = XLSX.utils.book_new();
-  const data = rows.map(r => [
-    r.dealer, r.city, r.store, formatEmiSchemes(r.emiSchemes), r.losDealerName, r.losStoreName,
-    r.losStoreId ?? "", r.sid, "", yesNo(r.isActive), yesNo(r.inJourney),
-  ]);
-  const ws = XLSX.utils.aoa_to_sheet([[...SHEET_COLUMNS], ...data]);
-  ws["!cols"] = SHEET_COLUMNS.map(c => ({ wch: Math.max(14, c.length + 4) }));
+  const data = rows.flatMap(r => {
+    const store = [r.losDealerName, r.city, r.losStoreId ?? "", r.sid, r.losStoreName, ""];
+    return r.emiSchemes.length ? r.emiSchemes.map(e => [...store, e.schemeId, e.label]) : [[...store, "", ""]];
+  });
+  const ws = XLSX.utils.aoa_to_sheet([[...LOS_COLUMNS], ...data]);
+  ws["!cols"] = LOS_WIDTHS.map(wch => ({ wch }));
   XLSX.utils.book_append_sheet(wb, ws, "Stores");
-  const note = XLSX.utils.aoa_to_sheet([
-    ["Note"],
-    ["Secrets are not exported, so the Secret column is blank. If you upload this file again, blank secrets keep the ones already saved."],
-    [],
-    ["Column", "What to put"],
-    ...SHEET_COLUMNS.map(c => [c, COLUMN_HELP[c]]),
+  const names = XLSX.utils.aoa_to_sheet([
+    ["Store_Id", "Dealer on WhatsApp", "City", "Store on WhatsApp", "Active", "In journey"],
+    ...rows.map(r => [r.losStoreId ?? "", r.dealer, r.city, r.store, yesNo(r.isActive), yesNo(r.inJourney)]),
   ]);
-  note["!cols"] = [{ wch: 18 }, { wch: 110 }];
-  XLSX.utils.book_append_sheet(wb, note, "How to fill");
+  names["!cols"] = [10, 28, 18, 32, 8, 10].map(wch => ({ wch }));
+  XLSX.utils.book_append_sheet(wb, names, "WhatsApp names");
+  XLSX.utils.book_append_sheet(wb, losHelpSheet(XLSX, [
+    "Secrets are not exported, so the Secret column is blank. If you upload this file again, blank secrets keep the ones already saved.",
+    "The “WhatsApp names” sheet is for reading only.",
+  ]), "How to fill");
   XLSX.writeFile(wb, `dealers-stores-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
@@ -1007,6 +1023,7 @@ export default function StoreSheet() {
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const revealTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [importFile, setImportFile] = useState<ParsedFile | null>(null);
+  const [losFile, setLosFile] = useState<LosImportFile | null>(null);
   const [parsing, setParsing] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -1075,6 +1092,28 @@ export default function StoreSheet() {
     onError: showError,
   });
 
+  const undoImport = useMutation({
+    mutationFn: (id: string) => api<{ restored: number; removed: number; switchedOff: number; leftEdited: number }>("POST", `/api/store-sheet/los-import/${id}/undo`),
+    onSuccess: r => toast({
+      title: "Upload undone",
+      description: [
+        `${plural(r.restored, "store")} put back`, `${r.removed} removed`,
+        r.switchedOff && `${r.switchedOff} switched off (leads were sent with ${r.switchedOff === 1 ? "it" : "them"})`,
+        r.leftEdited && `${r.leftEdited} left as edited since`,
+      ].filter(Boolean).join(", ") + ".",
+    }),
+    onError: showError,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+  });
+  const askUndo = async (last: LosLastImport) => {
+    const { added, updated } = last.summary;
+    if (await confirmDialog({
+      title: "Undo this upload?",
+      text: `The ${plural(updated, "store")} it changed go back to how they were, and the ${plural(added, "store")} it added ${added === 1 ? "is" : "are"} removed. Stores edited since then keep their edits.`,
+      confirmLabel: "Undo upload", danger: true,
+    })) undoImport.mutate(last.id);
+  };
+
   // ── derived ──
   const dealers = useMemo(() => Array.from(new Set(rows.map(r => r.dealer).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [rows]);
   const cities = useMemo(
@@ -1139,6 +1178,7 @@ export default function StoreSheet() {
       if (json.length === 0) throw new Error("The first sheet has no rows under the header");
       const headers: string[] = [];
       for (const r of json) for (const k of Object.keys(r)) if (!headers.includes(k)) headers.push(k);
+      if (isLosLayout(headers)) { setLosFile({ fileName: f.name, rows: pickLosColumns(json) }); return; }
       setImportFile({ fileName: f.name, headers, rows: json, mapping: autoMap(headers) });
     } catch (err) {
       toast({ title: "Couldn't read the file", description: (err as Error).message, variant: "destructive" });
@@ -1241,6 +1281,18 @@ export default function StoreSheet() {
               </Button>
             </div>
           </div>
+
+          {data.lastLosImport && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-muted/50 px-3 py-2 text-sm">
+              <span className="flex-1 min-w-[14rem] text-muted-foreground">
+                Last upload: “{data.lastLosImport.fileName}”, {new Date(data.lastLosImport.createdAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+                {data.lastLosImport.createdByName && ` by ${data.lastLosImport.createdByName}`} · {data.lastLosImport.summary.added} added, {data.lastLosImport.summary.updated} updated
+              </span>
+              <Button variant="outline" size="sm" disabled={undoImport.isPending} onClick={() => askUndo(data.lastLosImport!)}>
+                {undoImport.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Undo2 className="h-4 w-4 mr-1" />} Undo upload
+              </Button>
+            </div>
+          )}
 
           {/* Toolbar */}
           <div className="flex flex-col lg:flex-row gap-2 lg:items-center">
@@ -1427,6 +1479,7 @@ export default function StoreSheet() {
       {/* Dialogs */}
       <AddStoreDialog open={addOpen} onOpenChange={setAddOpen} rows={rows} />
       <ImportFlow file={importFile} onClose={() => setImportFile(null)} />
+      <LosImportDialog file={losFile} api={api} onClose={() => setLosFile(null)} onSaved={() => queryClient.invalidateQueries({ queryKey: QUERY_KEY })} />
 
       <Dialog open={!!secretRow} onOpenChange={o => !o && setSecretRow(null)}>
         <DialogContent className="max-w-md">

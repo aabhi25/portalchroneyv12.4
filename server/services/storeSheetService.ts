@@ -27,8 +27,8 @@ const displayStore = (c: CrmStoreCredential) => (c.displayStoreName || c.storeNa
 export function toSheetRow(c: CrmStoreCredential): StoreSheetRow {
   const emiSchemes = Array.isArray(c.emiSchemes) ? (c.emiSchemes as EmiScheme[]) : [];
   const issues: string[] = [];
-  if (!c.sid?.trim()) issues.push('No SID');
-  if (!c.secret?.trim()) issues.push('No secret');
+  if (c.isActive && !c.sid?.trim()) issues.push('No SID');
+  if (c.isActive && !c.secret?.trim()) issues.push('No secret');
   if (c.showInJourney && !c.city?.trim()) issues.push('No city');
   if (c.showInJourney && emiSchemes.length === 0) issues.push('No EMI schemes');
   return {

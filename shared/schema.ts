@@ -5219,6 +5219,22 @@ export const insertCrmStoreCredentialSchema = createInsertSchema(crmStoreCredent
 export type InsertCrmStoreCredential = z.infer<typeof insertCrmStoreCredentialSchema>;
 export type CrmStoreCredential = typeof crmStoreCredentials.$inferSelect;
 
+// One row per upload in the LOS layout (server/services/storeSheetLosImport.ts): what it changed and
+// the stores' values before it, for undo. Only the newest few are kept; secrets stay encrypted.
+export const storeSheetImports = pgTable("store_sheet_imports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessAccountId: varchar("business_account_id").notNull().references(() => businessAccounts.id, { onDelete: "cascade" }),
+  fileName: text("file_name").notNull(),
+  summary: jsonb("summary").notNull().default(sql`'{}'::jsonb`), // LosImportSummary
+  snapshot: jsonb("snapshot").notNull().default(sql`'{}'::jsonb`), // { before: rows, addedIds, savedAt }
+  createdByName: text("created_by_name"),
+  undoneAt: timestamp("undone_at"),
+  undoneByName: text("undone_by_name"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  index("store_sheet_imports_account_idx").on(table.businessAccountId, table.createdAt),
+]);
+
 // ==========================================
 // Per-business messaging (SMS/OTP) credentials
 // ==========================================

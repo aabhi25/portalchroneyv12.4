@@ -4,6 +4,7 @@
 import { Router, type Request, type Response } from "express";
 import { requireAuth, requireBusinessAccount } from "../auth";
 import * as sheet from "../services/storeSheetService";
+import * as los from "../services/storeSheetLosImport";
 import { recordAuditEventSafely } from "../services/auditService";
 
 const router = Router();
@@ -31,7 +32,10 @@ function handle(fn: (req: Request, res: Response, businessAccountId: string) => 
   };
 }
 
-router.get("/api/store-sheet", handle((req, _res, id) => sheet.getSheetState(id, canRevealSecrets(req))));
+router.get("/api/store-sheet", handle(async (req, _res, id) => ({
+  ...(await sheet.getSheetState(id, canRevealSecrets(req))),
+  lastLosImport: await los.lastLosImport(id),
+})));
 
 router.post("/api/store-sheet/rows", handle((req, _res, id) => sheet.createRow(id, req.body || {})));
 
@@ -66,7 +70,7 @@ router.put("/api/store-sheet/settings", handle(async (req, _res, id) => {
     enabled: typeof enabled === "boolean" ? enabled : undefined,
     stepLevels: stepLevels && typeof stepLevels === "object" ? stepLevels : undefined,
   });
-  return sheet.getSheetState(id, canRevealSecrets(req));
+  return { ...(await sheet.getSheetState(id, canRevealSecrets(req))), lastLosImport: await los.lastLosImport(id) };
 }));
 
 router.post("/api/store-sheet/import/preview", handle((req, _res, id) =>
@@ -77,6 +81,29 @@ router.post("/api/store-sheet/import/apply", handle(async (req, _res, id) => {
   await recordAuditEventSafely(req, {
     action: "store_sheet.imported", outcome: "success", businessAccountId: id,
     resourceType: "crm_store_credential", metadata: { ...result },
+  });
+  return result;
+}));
+
+// Upload in the LOS layout (shared/storeSheetLos.ts).
+router.post("/api/store-sheet/los-import/preview", handle((req, _res, id) =>
+  los.previewLosImport(id, req.body?.rows, req.body?.choices)));
+
+router.post("/api/store-sheet/los-import/apply", handle(async (req, _res, id) => {
+  const { rows, choices, stamp, fileName } = req.body || {};
+  const result = await los.applyLosImport(id, { rows, choices, stamp, fileName }, (req as any).user?.username ?? null);
+  await recordAuditEventSafely(req, {
+    action: "store_sheet.los_imported", outcome: "success", businessAccountId: id,
+    resourceType: "crm_store_credential", metadata: { ...result },
+  });
+  return result;
+}));
+
+router.post("/api/store-sheet/los-import/:importId/undo", handle(async (req, _res, id) => {
+  const result = await los.undoLosImport(id, req.params.importId, (req as any).user?.username ?? null);
+  await recordAuditEventSafely(req, {
+    action: "store_sheet.los_import_undone", outcome: "success", businessAccountId: id,
+    resourceType: "store_sheet_import", resourceId: req.params.importId, metadata: { ...result },
   });
   return result;
 }));

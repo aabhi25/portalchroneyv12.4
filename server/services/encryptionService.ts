@@ -27,9 +27,11 @@ function getEncryptionKey(): Buffer {
     );
   }
   
-  // Derive a 32-byte key from the environment variable
-  return crypto.scryptSync(key, 'salt', 32);
+  // Derive a 32-byte key from the environment variable (once: deriving it takes ~50 ms)
+  if (derived?.from !== key) derived = { from: key, key: crypto.scryptSync(key, 'salt', 32) };
+  return derived.key;
 }
+let derived: { from: string; key: Buffer } | undefined;
 
 /**
  * Encrypt sensitive data (like API credentials)
