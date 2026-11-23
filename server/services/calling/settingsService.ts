@@ -172,6 +172,7 @@ export function defaultSettingsRow(businessAccountId: string): AiCallingSettings
     assistantName: null,
     speakingSpeed: DEFAULT_SPEAKING_SPEED,
     backgroundSound: "none",
+    quickAcknowledgement: false,
     voiceSelection: null,
     whatsappFollowUp: false,
     whatsappFollowUpTemplateId: null,
@@ -269,6 +270,7 @@ export function toSettingsView(row: AiCallingSettingsRow & { exists?: boolean })
     assistantName: row.assistantName ?? null,
     speakingSpeed: row.speakingSpeed ?? DEFAULT_SPEAKING_SPEED,
     backgroundSound: row.backgroundSound === "call_centre" ? "call_centre" : "none",
+    quickAcknowledgement: row.quickAcknowledgement === true,
     voiceSelection: row.voiceSelection ?? null,
     whatsappFollowUp: row.whatsappFollowUp,
     whatsappFollowUpTemplateId: row.whatsappFollowUpTemplateId,
@@ -384,7 +386,7 @@ const AUDITED = [
   "enabled", "provider", "exotelAccountSid", "exotelSubdomain", "exotelCallerId", "exotelFlowAppId", "plivoAuthId", "plivoNumber",
   "autoCallLeads", "autoCallDelayMinutes", "autoCallSources", "consentMode", "callingHours", "maxAttempts",
   "retryGapMinutes", "maxCallMinutes", "monthlyMinuteLimit", "concurrentCallLimit", "recordCalls", "transferNumber",
-  "callPurpose", "inboundCallPurpose", "openingLine", "inboundGreeting", "assistantName", "speakingSpeed", "backgroundSound", "voiceSelection", "whatsappFollowUp", "whatsappFollowUpTemplateId",
+  "callPurpose", "inboundCallPurpose", "openingLine", "inboundGreeting", "assistantName", "speakingSpeed", "backgroundSound", "quickAcknowledgement", "voiceSelection", "whatsappFollowUp", "whatsappFollowUpTemplateId",
 ] as const;
 
 export interface UpdateResult {
@@ -533,6 +535,7 @@ export async function updateCallingSettings(
     if (!CALL_BACKGROUND_SOUNDS.includes(body.backgroundSound as CallBackgroundSound)) throw new CallingSettingsError("Background sound must be 'none' or 'call_centre'");
     next.backgroundSound = body.backgroundSound as CallBackgroundSound;
   }
+  if (has(body, "quickAcknowledgement")) next.quickAcknowledgement = body.quickAcknowledgement === true;
   if (has(body, "voiceSelection")) {
     const v = body.voiceSelection;
     if (v === null || v === "") next.voiceSelection = null;

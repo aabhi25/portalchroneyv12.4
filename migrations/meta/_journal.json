@@ -505,6 +505,13 @@
       "when": 1795018839234,
       "tag": "0071_design_studio_family_vote",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1795432718947,
+      "tag": "0072_call_quick_acknowledgement",
+      "breakpoints": true
     }
   ]
 }

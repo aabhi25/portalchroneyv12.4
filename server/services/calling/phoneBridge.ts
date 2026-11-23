@@ -60,6 +60,8 @@ export interface PhoneEngineStartInput {
   assistantName?: string | null;
   /** Speaking speed, percent of normal (AI Calling settings). */
   speakingSpeed?: number;
+  /** The AI says a short "Okay…" while it prepares its answer (AI Calling settings). */
+  quickAcknowledgement?: boolean;
   /** The voice on calls (AI Calling settings); unset = the chat widget's voice. */
   voiceSelection?: string | null;
   screenTranscript?: (text: string) => "continue" | "drop";
@@ -216,6 +218,7 @@ export function createVoiceServiceEngine(getService: () => VoiceServiceLike | Pr
           skipLeadTraining: input.skipLeadTraining,
           assistantName: input.assistantName ?? null,
           speakingSpeed: input.speakingSpeed,
+          quickAcknowledgement: input.quickAcknowledgement === true,
           voiceSelection: input.voiceSelection ?? null,
           screenTranscript: input.screenTranscript,
           onSpeech: input.onSpeech,

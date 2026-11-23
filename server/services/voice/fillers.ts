@@ -109,7 +109,8 @@ const PHONE_PHRASES: Record<FillerLanguage, Record<FillerKind, PhraseSet>> = {
     thinking: { neutral: ["Right, so…", "Okay, so…", "Sure, so…"] },
     empathy: { neutral: ["Oh, I'm sorry to hear that…", "Ah, I'm sorry…", "Oh, I see…"] },
     // (not "Okay, got it…": the voice adds a stray "it-" after it)
-    ack: { neutral: ["Okay…", "Right…", "Alright…", "Okay, sure…"] },
+    // One short word: "Okay, sure…" came out as "Okay… sure…" with a pause after each (real call 2026-11-23).
+    ack: { neutral: ["Okay…", "Right…", "Alright…", "Sure…"] },
     repeat: { neutral: ["Sure —", "Of course —", "Sorry —"] },
   },
   // No "Achha" before answering a question (it treats the question as news); "Arre, sorry ji" for
@@ -118,7 +119,7 @@ const PHONE_PHRASES: Record<FillerLanguage, Record<FillerKind, PhraseSet>> = {
     lookup: { neutral: ["Ji, toh…", "Ji, dekhiye…", "Haan, toh…", "Haan ji, dekhiye…", "Toh dekhiye…"] },
     thinking: { neutral: ["Ji, dekhiye…", "Haan, dekhiye…", "Toh dekhiye…"] },
     empathy: { neutral: ["Arre, sorry ji…", "Oh, sorry ji…"], female: ["Ji, main samajh sakti hoon…"], male: ["Ji, main samajh sakta hoon…"] },
-    ack: { neutral: ["Achha…", "Ji, theek hai…", "Haan ji, toh…", "Okay ji…", "Ji, toh…"] },
+    ack: { neutral: ["Achha…", "Theek hai…", "Haan ji…", "Okay ji…", "Ji, toh…"] },
     repeat: { neutral: ["Ji, zaroor —", "Sorry ji —"], female: ["Ji, main phir se bolti hoon —"], male: ["Ji, main phir se bolta hoon —"] },
   },
 };

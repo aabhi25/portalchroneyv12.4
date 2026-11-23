@@ -120,6 +120,7 @@ interface Draft {
   voiceSelection: string | null;
   speakingSpeed: number;
   backgroundSound: CallBackgroundSound;
+  quickAcknowledgement: boolean;
   whatsappFollowUp: boolean;
   whatsappFollowUpTemplateId: string;
 }
@@ -167,6 +168,7 @@ function toDraft(v: AiCallingSettingsView): Draft {
     voiceSelection: v.voiceSelection ?? null,
     speakingSpeed: v.speakingSpeed ?? DEFAULT_SPEAKING_SPEED,
     backgroundSound: v.backgroundSound === "call_centre" ? "call_centre" : "none",
+    quickAcknowledgement: v.quickAcknowledgement === true,
     whatsappFollowUp: v.whatsappFollowUp,
     whatsappFollowUpTemplateId: v.whatsappFollowUpTemplateId || "",
   };
@@ -234,6 +236,7 @@ function buildBody(d: Draft, secrets: { apiKey: string; apiToken: string; plivoA
     voiceSelection: d.voiceSelection,
     speakingSpeed: d.speakingSpeed,
     backgroundSound: d.backgroundSound,
+    quickAcknowledgement: d.quickAcknowledgement,
     whatsappFollowUp: d.whatsappFollowUp,
     whatsappFollowUpTemplateId: d.whatsappFollowUpTemplateId || null,
   };
@@ -861,6 +864,13 @@ export default function CallingSettings() {
                   </SelectContent>
                 </Select>
               </Field>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium">Quick acknowledgement before answers</p>
+                <p className="text-xs text-gray-500">The AI says a short “Okay…” or “जी, देखिए…” while it prepares its answer, so the caller isn't left in silence.</p>
+              </div>
+              <Switch checked={draft.quickAcknowledgement} onCheckedChange={v => set("quickAcknowledgement", v)} data-testid="switch-quick-acknowledgement" />
             </div>
             <CallSection icon={<PhoneOutgoing className="h-4 w-4" />} title="Outgoing calls" description="When the AI calls a lead who enquired.">
             <PurposeField

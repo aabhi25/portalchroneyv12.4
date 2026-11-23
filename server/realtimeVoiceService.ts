@@ -211,6 +211,8 @@ export interface PhoneCallVoiceOptions {
   assistantName?: string | null;
   /** Speaking speed on this call, percent of normal (AI Calling settings; 100 = the voice as is). */
   speakingSpeed?: number;
+  /** A short "Okay…" / "जी, देखिए…" while the answer is prepared (AI Calling settings; off by default). */
+  quickAcknowledgement?: boolean;
   /** The voice on this call (AI Calling settings); unset = the chat widget's voice. */
   voiceSelection?: string | null;
   /** Every final transcript, before turn filtering. 'drop' swallows it (answering-machine screening, waiting for "hello"). */
@@ -228,8 +230,9 @@ export interface VoiceConnectionOptions {
 }
 
 /**
- * Phone calls: no pre-recorded reactions ("अच्छा…", "Okay…") or live openers before the answer
- * (PHONE_FILLERS=1 brings them back). A clip made apart from the sentence after it has its own
+ * Phone calls: no pre-recorded reactions ("अच्छा…", "Okay…") before the answer unless the account
+ * switches on "Quick acknowledgement before answers" (or PHONE_FILLERS=1 for every call); the
+ * live, model-written opener additionally needs PHONE_OPENER_AI=1. A clip made apart from the sentence after it has its own
  * tone, and the caller hears the seam (live call 2026-10-17: "fillers sound very unnatural").
  * The reply's own first words ("जी," / "Right,") are spoken in one breath with the answer, and
  * the short pause before it sits under the call's background sound.
@@ -237,8 +240,9 @@ export interface VoiceConnectionOptions {
 /** A greeting / call-centre line is never a language switch ("Hello, this is", "Hello, can I help you?"). */
 const GREETING_LIKE = /^\s*(hello|hi|hey|hallo|helo)\b|can i help you|may i help you|this is\b/i;
 
-function phoneFillersOn(): boolean {
-  return process.env.PHONE_FILLERS === '1';
+/** The account's "Quick acknowledgement before answers" switch (AI Calling settings), or PHONE_FILLERS=1 for every call. */
+function phoneFillersOn(conversation?: { phone?: { quickAcknowledgement?: boolean } | null } | null): boolean {
+  return process.env.PHONE_FILLERS === '1' || conversation?.phone?.quickAcknowledgement === true;
 }
 
 /**
@@ -1245,7 +1249,7 @@ export class RealtimeVoiceService {
    */
   private async prewarmFillers(conversation: VoiceConversation): Promise<void> {
     if (!(conversation.avatar || conversation.phone) || conversation.fillerAudio) return;
-    if (conversation.phone && !phoneFillersOn()) return;
+    if (conversation.phone && !phoneFillersOn(conversation)) return;
     if (!conversation.phone && conversation.avatar?.thinkingSounds === false) return;
     const cache = new Map<string, Buffer>();
     conversation.fillerAudio = cache;
@@ -4971,7 +4975,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     const closingTurn = isPhone && isClosingTurn(userTranscript, turnStartAssistantText);
     type OpenerState = { text: string | null; status: 'pending' | 'ready' | 'committed' | 'spoken' | 'dropped' };
     const opener: OpenerState | null = isPhone && fillerLang && rawKind && rawKind !== 'repeat' && callerWords > 2
-      && !isBareAcknowledgement(userTranscript) && !closingTurn && process.env.PHONE_OPENER_AI !== '0' && phoneFillersOn()
+      && !isBareAcknowledgement(userTranscript) && !closingTurn && process.env.PHONE_OPENER_AI === '1' && phoneFillersOn(conversation)
       // "पता नहीं, आईडिया नहीं है" → the opener echoed it back ("अरे, options का आईडिया नहीं है…", live call 2026-10-17).
       && !isUnsureCaller(userTranscript)
       ? { text: null, status: 'pending' } : null;
@@ -5024,12 +5028,15 @@ Never infer intent from a single contained word. For example, "What is stop moti
      * end of speech and never later than PHONE_MAX_SILENCE_MS (the silence must not run on).
      */
     const REACTION_MS = 650;
+    // First word of the answer → its first sound. (600 was tried, 2026-11-23: the words only came
+    // later, the pause before the answer stayed 0.3-1 s — and the owner had found 350 natural.)
+    const ANSWER_SPEECH_START_MS = 350;
     const reactionDueAt = (): number => {
       const dues: number[] = [stoppedAt + PHONE_MAX_SILENCE_MS];
       if (opener && opener.status === 'pending') dues.push(openerAskedAt + (conversation.phoneOpenerMs ?? 1000) + 350 - REACTION_MS - 250);
       // A goodbye / refusal / call-back turn usually goes through a call tool first (a second
       // model pass, ~1.1 s more).
-      if (modelRequestAt !== null) dues.push(modelRequestAt + (conversation.phoneTtftMs ?? 1000) + (closingTurn ? 1100 : 0) + 350 - REACTION_MS - 250);
+      if (modelRequestAt !== null) dues.push(modelRequestAt + (conversation.phoneTtftMs ?? 1000) + (closingTurn ? 1100 : 0) + ANSWER_SPEECH_START_MS - REACTION_MS - 250);
       return Math.max(stoppedAt + PHONE_FILLER_AFTER_STOP_MS, Math.min(...dues));
     };
     let fireFiller: (() => void) | null = null;
@@ -5068,7 +5075,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     // you" sounded wrong, 2026-10-24.)
     const videoFiller = !isPhone && !!conversation.avatar && conversation.avatar.thinkingSounds !== false
       && !conversation.lastTurnHadFiller && !isNoReactionTurn(userTranscript, conversation.lastAssistantText);
-    if (fillerLang && (isPhone ? (ruleKind || aiPending) && phoneFillersOn() : videoFiller)) {
+    if (fillerLang && (isPhone ? (ruleKind || aiPending) && phoneFillersOn(conversation) : videoFiller)) {
       // Phone: the AI's pick gets a quarter second more (once), else the rules decide.
       let aiWaitMs = 0;
       const aiWaitLimitMs = 250;

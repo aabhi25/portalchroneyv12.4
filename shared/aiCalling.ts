@@ -153,6 +153,8 @@ export interface AiCallingSettingsView {
   speakingSpeed: number;
   /** A quiet background sound under the call. */
   backgroundSound: CallBackgroundSound;
+  /** The AI says a short "Okay…" / "जी, देखिए…" while it prepares its answer. */
+  quickAcknowledgement: boolean;
   /** The voice on calls ("shimmer", "el:<ElevenLabs voice id>"); null = the website chat widget's voice. */
   voiceSelection: string | null;
   whatsappFollowUp: boolean;
