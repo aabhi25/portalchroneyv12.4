@@ -8,6 +8,7 @@ import { db } from "../db";
 import { trainedUrls, urlContentChunks } from "../../shared/schema";
 import { eq, and } from "drizzle-orm";
 import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
+import { billedModel } from "../lib/modelMove";
 
 export interface ProcessedUrlResult {
   title: string;
@@ -126,7 +127,7 @@ Format:
         response_format: { type: 'json_object' }
       });
 
-      aiUsageLogger.logDocumentAnalysisUsage(businessAccountId, 'gpt-4o-mini', completion).catch(err =>
+      aiUsageLogger.logDocumentAnalysisUsage(businessAccountId, billedModel('gpt-4o-mini', completion?.model), completion).catch(err =>
         console.error('[URL Training] Failed to log AI usage:', err)
       );
 

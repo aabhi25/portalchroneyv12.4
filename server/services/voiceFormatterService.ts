@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { aiUsageLogger } from './aiUsageLogger';
 import { createOpenAI } from "../lib/openaiClient";
+import { billedModel } from "../lib/modelMove";
 import { markdownToSpeech } from "./voice/speechText";
 
 export type StemSubject = 'math' | 'physics' | 'chemistry' | 'biology' | 'cs' | 'other';
@@ -132,7 +133,7 @@ Return only the complete plain-text speech script.`,
       void aiUsageLogger.logUsage({
         businessAccountId,
         category: 'voice_mode',
-        model: 'gpt-4o-mini',
+        model: billedModel('gpt-4o-mini', completion.model),
         tokensInput: completion.usage?.prompt_tokens || 0,
         tokensOutput: completion.usage?.completion_tokens || 0,
         metadata: {
@@ -365,7 +366,7 @@ export async function formatVoiceTranscript(
         await aiUsageLogger.logUsage({
           businessAccountId,
           category: 'voice_mode',
-          model: 'gpt-4o-mini',
+          model: billedModel('gpt-4o-mini', completion.model),
           tokensInput: completion.usage?.prompt_tokens || 0,
           tokensOutput: completion.usage?.completion_tokens || 0,
           metadata: {

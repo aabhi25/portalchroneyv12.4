@@ -9,6 +9,7 @@ import { db } from '../db';
 import { documentChunks, trainingDocuments } from '../../shared/schema';
 import { eq } from 'drizzle-orm';
 import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
+import { billedModel } from "../lib/modelMove";
 
 export interface ProcessedPDFResult {
   extractedText: string;
@@ -130,7 +131,7 @@ export class PDFProcessingService {
       max_tokens: 4000,
     });
 
-    aiUsageLogger.logDocumentAnalysisUsage(businessAccountId, 'gpt-4o', completion).catch(err =>
+    aiUsageLogger.logDocumentAnalysisUsage(businessAccountId, billedModel('gpt-4o', completion?.model), completion).catch(err =>
       console.error('[Usage] Failed to log vision usage:', err)
     );
 
@@ -285,7 +286,7 @@ Provide a JSON response in this format:
       });
 
       // Log AI usage (fire-and-forget)
-      aiUsageLogger.logDocumentAnalysisUsage(businessAccountId, 'gpt-4o-mini', completion).catch(err =>
+      aiUsageLogger.logDocumentAnalysisUsage(businessAccountId, billedModel('gpt-4o-mini', completion?.model), completion).catch(err =>
         console.error('[Usage] Failed to log:', err)
       );
 

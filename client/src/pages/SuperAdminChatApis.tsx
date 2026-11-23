@@ -13,22 +13,17 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Eye, EyeOff, Save, Bot, Zap, AlertCircle, CheckCircle2, ArrowUpDown, ChevronsUpDown, Check, Loader2, Wifi } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ModelMoveCard } from "@/components/superadmin/ModelMoveCard";
 
 const OPENAI_MODELS = [
-  { value: "gpt-5.2", label: "GPT-5.2 (Flagship)", group: "GPT-5 Family" },
-  { value: "gpt-5.1", label: "GPT-5.1", group: "GPT-5 Family" },
-  { value: "gpt-5", label: "GPT-5", group: "GPT-5 Family" },
-  { value: "gpt-5-mini", label: "GPT-5 Mini", group: "GPT-5 Family" },
-  { value: "o4-mini", label: "o4-mini (Reasoning)", group: "Reasoning (o-series)" },
-  { value: "o3", label: "o3 (Reasoning)", group: "Reasoning (o-series)" },
-  { value: "o3-mini", label: "o3-mini (Reasoning)", group: "Reasoning (o-series)" },
-  { value: "o1", label: "o1 (Reasoning)", group: "Reasoning (o-series)" },
-  { value: "gpt-4.5", label: "GPT-4.5", group: "GPT-4 Family" },
-  { value: "gpt-4.1", label: "GPT-4.1", group: "GPT-4 Family" },
-  { value: "gpt-4.1-mini", label: "GPT-4.1 Mini", group: "GPT-4 Family" },
-  { value: "gpt-4o", label: "GPT-4o", group: "GPT-4 Family" },
-  { value: "gpt-4o-mini", label: "GPT-4o Mini (Recommended)", group: "GPT-4 Family" },
-  { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo", group: "Legacy" },
+  { value: "gpt-6-luna", label: "GPT-6 Luna (Recommended)", group: "Current" },
+  { value: "gpt-5.6-luna", label: "GPT-5.6 Luna", group: "Current" },
+  { value: "gpt-5.4-mini", label: "GPT-5.4 Mini", group: "Current" },
+  { value: "gpt-5.2", label: "GPT-5.2", group: "Current" },
+  { value: "gpt-4o-mini", label: "GPT-4o Mini (closes 14 Jan 2027)", group: "Closing" },
+  { value: "gpt-4o", label: "GPT-4o (closes 14 Jan 2027)", group: "Closing" },
+  { value: "gpt-4.1", label: "GPT-4.1 (closes 14 Jan 2027)", group: "Closing" },
+  { value: "gpt-4.1-mini", label: "GPT-4.1 Mini (closes 14 Jan 2027)", group: "Closing" },
 ];
 
 const GEMINI_MODELS = [
@@ -551,7 +546,7 @@ export default function SuperAdminChatApis() {
         hasKey={!!settings?.hasPrimaryKey}
         onProviderChange={(v) => {
           setPrimaryProvider(v);
-          const defaultModel = v === "gemini" ? "gemini-2.5-flash" : "gpt-4o-mini";
+          const defaultModel = v === "gemini" ? "gemini-2.5-flash" : "gpt-6-luna";
           setPrimaryModel(defaultModel);
         }}
         onApiKeyChange={setPrimaryApiKey}
@@ -585,7 +580,7 @@ export default function SuperAdminChatApis() {
         hasKey={!!settings?.hasFallbackKey}
         onProviderChange={(v) => {
           setFallbackProvider(v);
-          const defaultModel = v === "gemini" ? "gemini-2.5-flash" : "gpt-4o-mini";
+          const defaultModel = v === "gemini" ? "gemini-2.5-flash" : "gpt-6-luna";
           setFallbackModel(defaultModel);
         }}
         onApiKeyChange={setFallbackApiKey}
@@ -597,6 +592,8 @@ export default function SuperAdminChatApis() {
         testResult={testResultFallback}
         icon={<Bot className="w-5 h-5 text-purple-500" />}
       />
+
+      <ModelMoveCard />
     </div>
   );
 }

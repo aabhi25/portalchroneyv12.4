@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { promises as dns } from "dns";
 import { aiUsageLogger } from "./services/aiUsageLogger";
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
+import { billedModel } from "./lib/modelMove";
 import { allowLocal } from "./services/wooCommerceStore";
 import { discoverInfoPages, extractSiteFacts, faqText, mainPageText, pageKey, type SiteFacts } from "./services/websitePages";
 
@@ -277,7 +278,7 @@ Extract and organize the key business information as bullet points.`;
       });
 
       // Log AI usage (fire-and-forget)
-      aiUsageLogger.logWebsiteAnalysisUsage(businessAccountId, 'gpt-4o-mini', completion).catch(err =>
+      aiUsageLogger.logWebsiteAnalysisUsage(businessAccountId, billedModel('gpt-4o-mini', completion?.model), completion).catch(err =>
         console.error('[Usage] Failed to log:', err)
       );
 
@@ -931,7 +932,7 @@ CRITICAL: Do NOT remove any existing data. Only add to it and update when necess
     });
 
     // Log AI usage (fire-and-forget)
-    aiUsageLogger.logWebsiteAnalysisUsage(businessAccountId, 'gpt-4o-mini', completion).catch(err =>
+    aiUsageLogger.logWebsiteAnalysisUsage(businessAccountId, billedModel('gpt-4o-mini', completion?.model), completion).catch(err =>
       console.error('[Usage] Failed to log:', err)
     );
 
@@ -1558,7 +1559,7 @@ IMPORTANT RULES:
     });
 
     // Log AI usage (fire-and-forget)
-    aiUsageLogger.logWebsiteAnalysisUsage(businessAccountId, 'gpt-4o-mini', completion).catch(err =>
+    aiUsageLogger.logWebsiteAnalysisUsage(businessAccountId, billedModel('gpt-4o-mini', completion?.model), completion).catch(err =>
       console.error('[Usage] Failed to log:', err)
     );
 

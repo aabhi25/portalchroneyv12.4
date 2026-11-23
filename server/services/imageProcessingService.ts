@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { storage } from '../storage';
 import { aiUsageLogger } from './aiUsageLogger';
 import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
+import { billedModel } from "../lib/modelMove";
 
 const IMAGE_MAX_SIZE = 5 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
@@ -86,7 +87,7 @@ export class ImageProcessingService {
         temperature: 0,
       });
 
-      aiUsageLogger.logDocumentAnalysisUsage(businessAccountId, 'gpt-4o-mini', completion).catch(
+      aiUsageLogger.logDocumentAnalysisUsage(businessAccountId, billedModel('gpt-4o-mini', completion?.model), completion).catch(
         (err: Error) => console.error('[Usage] Failed to log image extraction usage:', err)
       );
 

@@ -286,6 +286,10 @@ console.log(`[Boot] AI Chroney server starting — commit=${BUILD_COMMIT} booted
   // Initialize AI usage pricing
   await aiUsageLogger.initializePricing();
 
+  // Which jobs use the new OpenAI models (Super Admin › AI providers).
+  const { startModelMoveSettings } = await import("./services/modelMoveSettings");
+  await startModelMoveSettings();
+
   // Monthly AI spend limits: load the enforcement cache and refresh it every 60s.
   const { aiBudgetService } = await import("./services/aiBudgetService");
   aiBudgetService.start();

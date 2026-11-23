@@ -4,6 +4,7 @@ import { aiUsageLogger } from './services/aiUsageLogger';
 import { isTopscholarAccount } from './services/topscholar/config';
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
 import { withoutUsageTracking } from "./lib/requestContext";
+import { billedModel, jobMoved } from "./lib/modelMove";
 import { assistantAskedForNameIn, emailInMessage, isDecline, isValidLeadName, nameStatedInHistory } from './services/leadCapture/detectors';
 import { selectInstructionsForMessage } from './services/chatContext/customInstructions';
 import { K12_PHOTO_MAX_TOKENS, K12_PHOTO_TIMEOUT_MS, k12PhotoModels } from './services/k12TurnRules';
@@ -566,14 +567,14 @@ export class LlamaService {
     if (!key) {
       throw new Error('No OpenAI API key available. Please configure your API key in Settings.');
     }
-    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: key });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey: key, job: 'chat' });
   }
 
   private getProviderClient(provider: string, apiKey: string): OpenAI {
     if (provider === 'gemini') {
       return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey, baseURL: GEMINI_BASE_URL });
     }
-    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
+    return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey, job: 'chat' });
   }
 
   /** API keys whose account refused the priority tier (phone calls then use the standard one). */
@@ -969,7 +970,7 @@ SCRIPT RULE (CRITICAL - check this before responding):
 
     // Log AI usage (fire-and-forget)
     if (businessAccountId) {
-      aiUsageLogger.logChatUsage(businessAccountId, primaryModel, response).catch(err =>
+      aiUsageLogger.logChatUsage(businessAccountId, billedModel(primaryModel, response.model), response).catch(err =>
         console.error('[Usage] Failed to log:', err)
       );
     }
@@ -1419,7 +1420,7 @@ ${extraFinalBlock.trim()}` : ''}`;
 
     // Log AI usage (fire-and-forget)
     if (businessAccountId) {
-      aiUsageLogger.logChatUsage(businessAccountId, model, response).catch(err =>
+      aiUsageLogger.logChatUsage(businessAccountId, billedModel(model, response.model), response).catch(err =>
         console.error('[Usage] Failed to log:', err)
       );
     }
@@ -1472,7 +1473,8 @@ ${extraFinalBlock.trim()}` : ''}`;
         stream = await withoutUsageTracking(() => openai.chat.completions.create({
           model: model,
           messages: attempts[i].messages,
-          tools: tools.length > 0 ? tools : undefined,
+          // Only the reply's text is read here, and the photo model takes no tools: none on a photo try.
+          tools: tools.length > 0 && !(photoShown && jobMoved('precise', businessAccountId)) ? tools : undefined,
           ...(this.isThinkingModel(model) ? {} : { temperature: 0.7 }),
           max_tokens: photo ? K12_PHOTO_MAX_TOKENS : 1000,
           stream: true,
@@ -1491,7 +1493,9 @@ ${extraFinalBlock.trim()}` : ''}`;
     if (photo) console.log(`[K12 Photo] Answering with ${model}, ${photoShown ? 'photo attached' : 'read text only'}`);
 
     let usage: any = undefined;
+    let answeredBy: string | undefined;
     for await (const chunk of stream as any) {
+      if (chunk?.model) answeredBy = chunk.model;
       // The final chunk (with include_usage) carries usage and has no choices.
       if (chunk?.usage) {
         usage = chunk.usage;
@@ -1505,7 +1509,7 @@ ${extraFinalBlock.trim()}` : ''}`;
     // Log AI usage (fire-and-forget) — mirrors the non-streaming variant so
     // streamed continuations are not a billing/analytics blind spot.
     if (businessAccountId && usage) {
-      aiUsageLogger.logChatUsage(businessAccountId, model, { usage }).catch(err =>
+      aiUsageLogger.logChatUsage(businessAccountId, billedModel(model, answeredBy), { usage }).catch(err =>
         console.error('[Usage] Failed to log:', err)
       );
     }
@@ -2223,6 +2227,7 @@ SCRIPT RULE (CRITICAL - check this before responding):
           ? '1. CONTACT DETAIL FIRST: the LEAD COLLECTION block at the end names the ONE detail to ask for before answering — ask for it and do not answer the question in this reply.'
           : toolUsageInstruction;
 
+    const isTutor = (systemContext || '').includes('K12 EDUCATION MODE');
     let finalOverride = turnOptions?.phoneCompact ? `🔒 FINAL RULES (HIGHEST PRIORITY) — this is a live PHONE CALL:
 ${starterQAContext ? `
 🎯 GUIDANCE Q&A (ABSOLUTE PRIORITY #0 - OVERRIDE EVERYTHING):
@@ -2275,7 +2280,8 @@ ${appointmentTriggerRules.map((rule, i) => `   ${i + 1}. Keywords: [${rule.keywo
    - PDF/RAG content is ALWAYS business knowledge - use it freely
    - If info exists in context or tools → MUST answer (translate if needed)
    - NO general world knowledge - only answer from provided business context
-   - If tools return nothing AND context has no info → say you don't have that info naturally
+${isTutor ? '' : `   - Work that has nothing to do with this business (writing code, essays or homework, sums, translations, jokes) and that it doesn't offer → decline in ONE short sentence, offer nothing of the kind, call no tool
+`}   - If tools return nothing AND context has no info → say you don't have that info naturally
 
 6. 🚫 ANTI-HALLUCINATION FOR PRICING/FEES (CRITICAL):
    - For questions about FEES, COSTS, PRICING, or any NUMERICAL DATA:
@@ -2576,7 +2582,7 @@ Generate only the greeting message, nothing else.`;
 
     // Log AI usage (fire-and-forget)
     if (businessAccountId) {
-      aiUsageLogger.logChatUsage(businessAccountId, model, response).catch(err =>
+      aiUsageLogger.logChatUsage(businessAccountId, billedModel(model, response.model), response).catch(err =>
         console.error('[Usage] Failed to log:', err)
       );
     }

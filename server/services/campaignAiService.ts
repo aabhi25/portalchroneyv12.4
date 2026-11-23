@@ -604,7 +604,7 @@ export const campaignAiService = {
       }
       messages.push({ role: "user", content: inboundClipped });
 
-      const openai = createOpenAI({ apiKey, timeout: 30000 });
+      const openai = createOpenAI({ apiKey, timeout: 30000, job: "chat" });
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages,

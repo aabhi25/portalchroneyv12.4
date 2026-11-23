@@ -652,7 +652,7 @@ export class WhatsappAutoReplyService {
               .filter(c => c.description)
               .map(c => ({ idx: c.originalIndex, desc: c.description! }));
             if (descriptionsToTranslate.length > 0) {
-              const openai = createOpenAI({ businessAccountId, apiKey, timeout: 20_000, maxRetries: 0 });
+              const openai = createOpenAI({ businessAccountId, apiKey, timeout: 20_000, maxRetries: 0, job: "chat" });
               const transResult = await openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [
@@ -1458,7 +1458,7 @@ export class WhatsappAutoReplyService {
   ): Promise<{ text: string; productImages?: string[]; productCards?: { name: string; description?: string; price?: number; imageUrl?: string; outOfStock?: boolean }[]; isProductSelection?: boolean; hasMoreProducts?: boolean } | null> {
     try {
       // Bounded so a hung request can't leave the customer without any answer.
-      const openai = createOpenAI({ businessAccountId, apiKey, timeout: 45_000, maxRetries: 1 });
+      const openai = createOpenAI({ businessAccountId, apiKey, timeout: 45_000, maxRetries: 1, job: "chat" });
       
       // Build comprehensive system prompt matching chatbot behavior
       // Add current date context (same as chatbot)

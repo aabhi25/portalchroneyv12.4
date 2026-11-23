@@ -623,7 +623,7 @@ function EditorForm({
             AI Scan Model
           </CardTitle>
           <p className="text-sm text-gray-500">
-            Choose which OpenAI vision model is used as the primary scanner for this document type.
+            Choose how carefully the AI reads this document type.
           </p>
         </CardHeader>
         <CardContent>
@@ -641,7 +641,7 @@ function EditorForm({
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2">
                   <Zap className="h-4 w-4 text-amber-500" />
-                  <span className="font-semibold text-sm">GPT-4o Mini</span>
+                  <span className="font-semibold text-sm">Standard</span>
                 </div>
                 {scanModel === "gpt-4o-mini" && (
                   <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded">
@@ -650,7 +650,7 @@ function EditorForm({
                 )}
               </div>
               <p className="text-xs text-gray-500">
-                Faster &amp; cheaper. Auto-escalates to GPT-4o on low confidence.
+                Faster &amp; cheaper. Unclear documents are read again by the more accurate one.
               </p>
             </button>
             <button
@@ -666,7 +666,7 @@ function EditorForm({
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2">
                   <Sparkles className="h-4 w-4 text-purple-500" />
-                  <span className="font-semibold text-sm">GPT-4o</span>
+                  <span className="font-semibold text-sm">More accurate</span>
                 </div>
                 {scanModel === "gpt-4o" && (
                   <span className="text-xs font-medium text-purple-700 bg-purple-100 px-2 py-0.5 rounded">
@@ -675,7 +675,7 @@ function EditorForm({
                 )}
               </div>
               <p className="text-xs text-gray-500">
-                More accurate. Used directly — no escalation needed.
+                Reads every document with the stronger AI.
               </p>
             </button>
           </div>

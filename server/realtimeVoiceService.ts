@@ -22,6 +22,9 @@ import { selectRelevantImages, type CurriculumMediaCandidate } from './services/
 import { aiUsageLogger } from './services/aiUsageLogger';
 import { chatService, type ChatContext } from './chatService';
 import { createOpenAI } from "./lib/openaiClient";
+import { billedModel, jobMoved } from "./lib/modelMove";
+import { modelClosed } from "@shared/aiModelMove";
+import { RealtimeSpeech, REALTIME_TTS_MODEL, createRealtimeTtsProvider } from "./services/voice/realtimeTts";
 import { aiBudgetService } from "./services/aiBudgetService";
 import {
   closeOrphanedTopscholarVoiceSessions,
@@ -254,7 +257,7 @@ function phoneFillersOn(conversation?: { phone?: { quickAcknowledgement?: boolea
  * account whose key cannot use it falls back to the mini model (see the transcription error path).
  */
 const PHONE_TRANSCRIBE_MODEL = 'gpt-transcribe';
-const PHONE_TRANSCRIBE_FALLBACK_MODEL = 'gpt-4o-mini-transcribe';
+const OLD_TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe';
 
 const PHONE_TRANSCRIPTION_PROMPT =
   'A phone call between a customer and a business assistant, in English, Hindi or a mix of both (Hinglish). ' +
@@ -427,6 +430,8 @@ interface VoiceConversation {
   pendingInputBytes?: number;
   /** OpenAI client for TTS (reused across sentences). */
   openaiTtsClient?: OpenAiSpeechClient;
+  /** OpenAI voices on the realtime model: one web socket per voice and speed (services/voice/realtimeTts.ts). */
+  realtimeSpeech?: Map<string, RealtimeSpeech>;
   openaiAudioFallbackBuffer?: Buffer[];
   /** The avatar's spoken intro is being synthesised (filler preparation waits for it). */
   avatarIntroSpeaking?: boolean;
@@ -2205,6 +2210,8 @@ export class RealtimeVoiceService {
           fetch('https://api.elevenlabs.io/v1/models', { headers: { 'xi-api-key': conversation.elevenlabsApiKey! } })
             .then(r => r.arrayBuffer())
             .catch(() => undefined);
+        } else if (conversation.openaiApiKey && this.speaksOnRealtime(conversation)) {
+          this.realtimeSpeech(conversation).warm();
         } else if (conversation.openaiApiKey) {
           // ChatGPT voice: open the HTTPS connection to OpenAI now, so the first sentence
           // doesn't also pay connection setup.
@@ -2224,7 +2231,7 @@ export class RealtimeVoiceService {
             audio: {
               input: {
                 format: { type: 'audio/pcm', rate: 24000 },
-                transcription: this.transcriptionConfig(this.voiceTranscriptionLanguage(conversation), !!conversation.phone, null, this.phoneTranscribeFallback.has(conversation.businessAccountId)),
+                transcription: this.transcriptionConfig(this.voiceTranscriptionLanguage(conversation), !!conversation.phone, null, this.phoneTranscribeFallback.has(conversation.businessAccountId), jobMoved('hear', conversation.businessAccountId)),
                 noise_reduction: {
                   // AI Calling (A): a phone handset is a near-field microphone.
                   type: conversation.phone ? 'near_field' : 'far_field'
@@ -4257,7 +4264,7 @@ export class RealtimeVoiceService {
       type: 'session.update',
       session: {
         type: 'realtime',
-        audio: { input: { transcription: this.transcriptionConfig(language) } },
+        audio: { input: { transcription: this.transcriptionConfig(language, false, null, this.phoneTranscribeFallback.has(conversation.businessAccountId), jobMoved('hear', conversation.businessAccountId)) } },
       },
     }));
   }
@@ -4353,8 +4360,10 @@ export class RealtimeVoiceService {
    * an English one) and a prompt keeps Indian students' Hindi/Hinglish in Devanagari or
    * English letters instead of Urdu script.
    */
-  private transcriptionConfig(language?: string | null, phoneCall = false, phoneContext?: string | null, phoneFallback = false): Record<string, unknown> {
-    const config: Record<string, unknown> = { model: phoneCall && !phoneFallback ? (process.env.PHONE_TRANSCRIBE_MODEL || PHONE_TRANSCRIBE_MODEL) : phoneCall ? PHONE_TRANSCRIBE_FALLBACK_MODEL : 'gpt-4o-mini-transcribe' };
+  private transcriptionConfig(language?: string | null, phoneCall = false, phoneContext?: string | null, oldModel = false, hearMoved = false): Record<string, unknown> {
+    // The mini model closes on 26 February 2027; until then it also stands in for a key without the new one.
+    const old = !modelClosed(OLD_TRANSCRIBE_MODEL) && (oldModel || (!phoneCall && !hearMoved));
+    const config: Record<string, unknown> = { model: old ? OLD_TRANSCRIBE_MODEL : phoneCall ? (process.env.PHONE_TRANSCRIBE_MODEL || PHONE_TRANSCRIBE_MODEL) : PHONE_TRANSCRIBE_MODEL };
     const phonePrompt = phoneCall && phoneContext ? `${PHONE_TRANSCRIPTION_PROMPT} ${phoneContext}` : PHONE_TRANSCRIPTION_PROMPT;
     if (language && language !== 'auto') {
       config.language = this.toTranscriptionLangCode(language);
@@ -4381,17 +4390,17 @@ export class RealtimeVoiceService {
    */
   private fallBackPhoneTranscriber(conversation: VoiceConversation, message: unknown): boolean {
     const text = String(message || '');
-    if (!conversation.phone || this.phoneTranscribeFallback.has(conversation.businessAccountId)) return false;
-    const model = process.env.PHONE_TRANSCRIBE_MODEL || PHONE_TRANSCRIBE_MODEL;
-    if (model === PHONE_TRANSCRIBE_FALLBACK_MODEL) return false;
+    if (!(conversation.phone || jobMoved('hear', conversation.businessAccountId)) || this.phoneTranscribeFallback.has(conversation.businessAccountId)) return false;
+    const model = conversation.phone ? process.env.PHONE_TRANSCRIBE_MODEL || PHONE_TRANSCRIBE_MODEL : PHONE_TRANSCRIBE_MODEL;
+    if (model === OLD_TRANSCRIBE_MODEL || modelClosed(OLD_TRANSCRIBE_MODEL)) return false;
     if (!(text.includes(model) || /transcription/i.test(text)) || !/model|access|not found|does not exist|unsupported|invalid|not available/i.test(text)) return false;
     this.phoneTranscribeFallback.add(conversation.businessAccountId);
-    console.warn(`[RealtimeVoice] Phone speech-to-text "${model}" refused (${text.slice(0, 140)}) — using ${PHONE_TRANSCRIBE_FALLBACK_MODEL} for this account`);
+    console.warn(`[RealtimeVoice] Speech-to-text "${model}" refused (${text.slice(0, 140)}) — using ${OLD_TRANSCRIBE_MODEL} for this account`);
     if (conversation.openaiWs && conversation.openaiWs.readyState === WebSocket.OPEN) {
       try {
         conversation.openaiWs.send(JSON.stringify({
           type: 'session.update',
-          session: { type: 'realtime', audio: { input: { transcription: this.transcriptionConfig(this.voiceTranscriptionLanguage(conversation), true, null, true) } } },
+          session: { type: 'realtime', audio: { input: { transcription: this.transcriptionConfig(this.voiceTranscriptionLanguage(conversation), !!conversation.phone, null, true) } } },
         }));
       } catch { /* the next update carries it */ }
     }
@@ -4512,7 +4521,47 @@ export class RealtimeVoiceService {
         fallback: openaiProvider,
       };
     }
-    return { primary: openaiProvider, fallback: null };
+    // The other OpenAI voice service stands behind the one in use (a key without access, or the day it closes).
+    return { primary: openaiProvider, fallback: this.withPhoneHindiScript(conversation, this.otherOpenAITtsProvider(conversation, teacher?.openaiVoice)) };
+  }
+
+  /** Whether OpenAI voices come from the realtime model (gpt-4o-mini-tts closes on 6 January 2027). */
+  private speaksOnRealtime(conversation: VoiceConversation): boolean {
+    return jobMoved('speak', conversation.businessAccountId) || modelClosed(OPENAI_TTS_MODEL);
+  }
+
+  private createOpenAITtsProvider(conversation: VoiceConversation, voice?: string): TtsProvider {
+    return this.speaksOnRealtime(conversation) ? this.realtimeTtsProvider(conversation, voice) : this.speechApiTtsProvider(conversation, voice);
+  }
+
+  private otherOpenAITtsProvider(conversation: VoiceConversation, voice?: string): TtsProvider {
+    return this.speaksOnRealtime(conversation) && !modelClosed(OPENAI_TTS_MODEL) ? this.speechApiTtsProvider(conversation, voice) : this.realtimeTtsProvider(conversation, voice);
+  }
+
+  private realtimeSpeech(conversation: VoiceConversation, voice?: string): RealtimeSpeech {
+    const name = voice || conversation.selectedVoice;
+    const speedPercent = this.phoneSpeed(conversation);
+    const tutor = conversation.k12EducationEnabled === true || isTopscholarAccount(conversation.businessAccountId);
+    const key = `${name}|${speedPercent}|${tutor}`;
+    const open = (conversation.realtimeSpeech ||= new Map());
+    let speech = open.get(key);
+    if (!speech) {
+      speech = new RealtimeSpeech({
+        apiKey: conversation.openaiApiKey, voice: name, tutor, speedPercent,
+        onUsage: (raw) => {
+          const usage = aiUsageLogger.extractRealtimeUsage(raw);
+          if (!usage) return;
+          const { tokensInput, tokensOutput, ...breakdown } = usage;
+          void aiUsageLogger.logVoiceModeUsage(conversation.businessAccountId, REALTIME_TTS_MODEL, tokensInput, tokensOutput, { feature: 'voice_speech', conversationId: conversation.conversationId }, breakdown).catch(() => {});
+        },
+      });
+      open.set(key, speech);
+    }
+    return speech;
+  }
+
+  private realtimeTtsProvider(conversation: VoiceConversation, voice?: string): TtsProvider {
+    return createRealtimeTtsProvider(this.realtimeSpeech(conversation, voice));
   }
 
   /**
@@ -4520,7 +4569,7 @@ export class RealtimeVoiceService {
    * flight, one retry and speaking instructions — see services/voice/openaiTts.ts. One client
    * per conversation so the HTTPS connection is reused between sentences.
    */
-  private createOpenAITtsProvider(conversation: VoiceConversation, voice?: string): TtsProvider {
+  private speechApiTtsProvider(conversation: VoiceConversation, voice?: string): TtsProvider {
     conversation.openaiTtsClient ||= createOpenAI({ apiKey: conversation.openaiApiKey }) as unknown as OpenAiSpeechClient;
     return createOpenAiTtsProvider({
       client: conversation.openaiTtsClient,
@@ -5574,7 +5623,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
         await aiUsageLogger.logUsage({
           businessAccountId: conversation.businessAccountId,
           category: 'voice_mode',
-          model: 'gpt-4o-mini',
+          model: billedModel('gpt-4o-mini', completion.model),
           tokensInput: completion.usage?.prompt_tokens || 0,
           tokensOutput: completion.usage?.completion_tokens || 0,
           metadata: { feature: 'voice_k12_query_rewrite', conversationId: conversation.conversationId },

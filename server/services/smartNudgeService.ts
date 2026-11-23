@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { storage } from "../storage";
 import { aiUsageLogger } from "./aiUsageLogger";
 import { createOpenAI } from "../lib/openaiClient";
+import { billedModel } from "../lib/modelMove";
 
 interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -101,7 +102,7 @@ Generate a contextual follow-up question to re-engage this visitor. Return ONLY 
       aiUsageLogger.logUsage({
         businessAccountId,
         category: 'chat',
-        model: 'gpt-4o-mini',
+        model: billedModel('gpt-4o-mini', response.model),
         tokensInput: response.usage?.prompt_tokens || 0,
         tokensOutput: response.usage?.completion_tokens || 0,
         metadata: { type: 'smart_nudge' }

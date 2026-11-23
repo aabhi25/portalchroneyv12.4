@@ -1,5 +1,6 @@
 import OpenAI, { type ClientOptions } from "openai";
 import { getRequestContext, currentBusinessAccountId, currentRoute, sanitizeId } from "./requestContext";
+import { billedModel, planChatBody, rescuingFetch, type AiJob } from "./modelMove";
 
 /**
  * Shared OpenAI client factory.
@@ -35,6 +36,11 @@ import { getRequestContext, currentBusinessAccountId, currentRoute, sanitizeId }
  *   - whole client: createOpenAI({ ..., trackUsage: false })
  *   - single call:  withoutUsageTracking(() => client.chat.completions.create(...))
  * See scripts/check-openai-usage.mjs.
+ *
+ * ── Models that are closing ───────────────────────────────────────────────
+ * Chat calls may be answered by a newer model than the one named at the call site, per job
+ * (modelMove.ts); usage is recorded under the model that answered. `job` names the client's job
+ * when it can't be told from the call; `modelMove: false` leaves a client's calls exactly as written.
  */
 export const OPENAI_TIMEOUTS = {
   /** Short classification / translation / small JSON outputs. */
@@ -65,13 +71,17 @@ export interface UsageTrackingOptions {
   businessAccountId?: string | null;
   /** Category override (default: "chat" for completions/responses, "rag_embeddings" for embeddings). */
   category?: TrackedUsageCategory;
+  /** The job its calls belong to (modelMove.ts); told from each call when left out. */
+  job?: AiJob;
+  /** false: calls are sent exactly as written (the caller picks its own models). Default true. */
+  modelMove?: boolean;
 }
 
 export type CreateOpenAIOptions = ClientOptions & UsageTrackingOptions;
 
 /** Resolves the options actually handed to the SDK (exported for tests). */
 export function resolveOpenAIOptions(opts: CreateOpenAIOptions = {}): ClientOptions {
-  const { trackUsage: _t, feature: _f, businessAccountId: _b, category: _c, ...sdkOpts } = opts;
+  const { trackUsage: _t, feature: _f, businessAccountId: _b, category: _c, job: _j, modelMove: _m, ...sdkOpts } = opts;
   return {
     ...sdkOpts,
     timeout: sdkOpts.timeout ?? DEFAULT_OPENAI_TIMEOUT_MS,
@@ -85,7 +95,15 @@ export function resolveOpenAIOptions(opts: CreateOpenAIOptions = {}): ClientOpti
  * OpenAI-compatible endpoints too (e.g. the Gemini `baseURL`).
  */
 export function createOpenAI(opts: CreateOpenAIOptions = {}): OpenAI {
-  const client = new OpenAI(resolveOpenAIOptions(opts));
+  // Only OpenAI itself is known to accept stream_options (a 400 from others, e.g. Gemini), and only
+  // its models are moved.
+  const isOpenAI = !opts.baseURL || /(^|\/\/)(api\.openai\.com|127\.0\.0\.1|localhost)([:/]|$)/.test(opts.baseURL);
+  // Assessment picks its own models (services/answerCheck/ai.ts).
+  const movesModels = isOpenAI && opts.modelMove !== false && opts.feature !== "answer_checking";
+  const sdkOpts = resolveOpenAIOptions(opts);
+  const client: OpenAI = new OpenAI(movesModels
+    ? { ...sdkOpts, fetch: rescuingFetch(sdkOpts.fetch as any, () => client.apiKey) as any }
+    : sdkOpts);
   // Always instrumented: an opted-out client (trackUsage: false) still goes
   // through the monthly budget check; it just doesn't record usage.
   instrumentClient(client, {
@@ -93,10 +111,10 @@ export function createOpenAI(opts: CreateOpenAIOptions = {}): OpenAI {
     businessAccountId: opts.businessAccountId ?? null,
     category: opts.category,
     origin: callerFile(),
-    // Only OpenAI itself is known to accept stream_options; don't risk a 400
-    // from other OpenAI-compatible endpoints (e.g. Gemini).
-    injectStreamUsage: !opts.baseURL || /(^|\/\/)(api\.openai\.com|127\.0\.0\.1|localhost)([:/]|$)/.test(opts.baseURL),
+    injectStreamUsage: isOpenAI,
     trackUsage: opts.trackUsage !== false,
+    movesModels,
+    job: opts.job,
   });
   return client;
 }
@@ -163,6 +181,8 @@ export interface UsageRecord {
   tokensInputCached: number;
   tokensInputAudio: number;
   tokensOutputAudio: number;
+  /** Input tokens OpenAI charged for remembering (GPT-5.6 and later); left out when none. */
+  tokensInputCacheWrite?: number;
   metadata: Record<string, unknown>;
 }
 
@@ -207,6 +227,8 @@ interface InstrumentConfig {
   injectStreamUsage: boolean;
   /** false: budget check only, no usage recording (default true). */
   trackUsage?: boolean;
+  movesModels?: boolean;
+  job?: AiJob;
 }
 
 type Api = "chat.completions" | "responses" | "embeddings";
@@ -228,6 +250,7 @@ interface ExtractedUsage {
   tokensInputCached: number;
   tokensInputAudio: number;
   tokensOutputAudio: number;
+  tokensInputCacheWrite?: number;
 }
 
 const INSTRUMENTED = Symbol.for("chroney.openaiUsageTracked");
@@ -236,16 +259,23 @@ const INSTRUMENTED = Symbol.for("chroney.openaiUsageTracked");
 export function instrumentClient(client: OpenAI, cfg: InstrumentConfig): OpenAI {
   if ((client as any)[INSTRUMENTED]) return client;
   Object.defineProperty(client, INSTRUMENTED, { value: true });
-  patchCreate((client as any).chat?.completions, "chat.completions", cfg);
+  patchCreate((client as any).chat?.completions, "chat.completions", cfg, () => (client as any).apiKey);
   patchCreate((client as any).responses, "responses", cfg);
   patchCreate((client as any).embeddings, "embeddings", cfg);
   return client;
 }
 
-function patchCreate(resource: any, api: Api, cfg: InstrumentConfig) {
+function patchCreate(resource: any, api: Api, cfg: InstrumentConfig, apiKey?: () => unknown) {
   if (!resource || typeof resource.create !== "function") return;
   const original = resource.create;
-  const tracked = trackedCreateFn(resource, original, api, cfg);
+  const send = trackedCreateFn(resource, original, api, cfg);
+  const tracked = cfg.movesModels && api === "chat.completions"
+    ? (body: any, options?: any) => send(planChatBody(body, {
+        job: cfg.job,
+        accountId: sanitizeId(cfg.businessAccountId) ?? currentBusinessAccountId(),
+        apiKey: apiKey?.(),
+      }), options)
+    : send;
   resource.create = function budgetedCreate(this: unknown, body: any, options?: any) {
     const guard = budgetGuard;
     const accountId = guard ? sanitizeId(cfg.businessAccountId) ?? currentBusinessAccountId() : null;
@@ -309,6 +339,7 @@ function trackedCreateFn(resource: any, original: any, api: Api, cfg: Instrument
     const onResult = (result: any) => {
       try {
         if (stream) return instrumentStream(result, info, injected);
+        info.model = billedModel(info.model, result?.model);
         record(info, extractUsage(api, result?.usage));
       } catch {
         usageTrackingStats.errors++;
@@ -336,6 +367,7 @@ async function* trackedIterator(src: AsyncIterator<any>, info: CallInfo, injecte
     // for-await forwards an early break/return to the SDK iterator (aborts the HTTP stream).
     for await (const chunk of { [Symbol.asyncIterator]: () => src }) {
       if (chunk && typeof chunk === "object") {
+        if (chunk.model) info.model = billedModel(info.model, chunk.model);
         if (info.api === "responses") {
           if (chunk.response?.usage && /^response\.(completed|incomplete|failed)$/.test(chunk.type || "")) usage = chunk.response.usage;
         } else if (chunk.usage) {
@@ -381,7 +413,9 @@ export function extractUsage(api: Api, usage: any): ExtractedUsage | null {
       tokensOutputAudio: 0,
     };
   }
+  const written = num(usage.prompt_tokens_details?.cache_write_tokens);
   return {
+    ...(written ? { tokensInputCacheWrite: written } : {}),
     tokensInput: num(usage.prompt_tokens),
     tokensOutput: num(usage.completion_tokens),
     tokensInputCached: num(usage.prompt_tokens_details?.cached_tokens),
@@ -436,6 +470,8 @@ function callerFile(): string {
     if (!m) continue;
     const fn = (m[1] || "").replace(/^new /, "").replace(/^Object\./, "");
     const file = (m[2] || m[3] || "").replace(/^file:\/\//, "");
+    // In the bundle everything is dist/index.js, this file's own functions included.
+    if (/^(callerFile|createOpenAI)$/.test(fn)) continue;
     if (/openaiClient\.[cm]?[jt]s$/.test(file) || file.includes("node_modules") || file.startsWith("node:")) continue;
     const idx = file.lastIndexOf("/server/");
     const rel = idx >= 0 ? file.slice(idx + 1) : "";

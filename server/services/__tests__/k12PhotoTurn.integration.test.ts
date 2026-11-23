@@ -133,6 +133,7 @@ async function main() {
   const fake = await startFake();
   process.env.OPENAI_BASE_URL = fake.baseUrl;
 
+  (await import('../../lib/modelMove')).__useOldModelsForTests();
   const { db } = await import('../../db');
   const schema = await import('@shared/schema');
   const { eq, and, asc } = await import('drizzle-orm');
@@ -271,8 +272,12 @@ async function main() {
     const r = await turn(tutorAccount, visitor(), '[IMAGE_UPLOAD] IMG_3.jpg\nQ73', photoExtra);
     fake.fail = null;
     const tried = r.cont.map(c => `${c.model}:${c.status}:${imagePartsOf(c).length}`);
-    expect(r.cont.length === 2 && tried[0] === 'gpt-4.1:404:1' && tried[1] === 'gpt-4o:200:1', 'stronger model not available on the key → next model, photo still attached', tried);
-    expect(!r.error && r.answer === 'Answer from gpt-4o (saw the photo).', 'stronger model not available: the student still gets the answer', r.answer);
+    expect(r.cont.length === 2 && tried[0] === 'gpt-4.1:404:1' && tried[1] === 'gpt-6.1-terra:200:1', 'stronger model not available on the key → next model, photo still attached', tried);
+    expect(!r.error && r.answer === 'Answer from gpt-6.1-terra (saw the photo).', 'stronger model not available: the student still gets the answer', r.answer);
+    // The refusal is remembered for an hour; the turns below start from a key that has the model.
+    const move = await import('../../lib/modelMove');
+    move.__resetModelMoveForTests();
+    move.__useOldModelsForTests();
   }
   {
     fake.fail = c => imagePartsOf(c).length > 0 ? 400 : null;

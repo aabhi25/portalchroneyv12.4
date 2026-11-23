@@ -487,7 +487,7 @@ export class SocialCommentReplyEngine<S extends CommentSettingsLike> {
     replyLanguage: ChannelReplyLanguage | null = null
   ): Promise<string | null> {
     try {
-      const openai = createOpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey, job: "chat" });
 
       const systemPrompt = `You are a social media assistant for "${businessName}". You reply to public ${this.p.label} comments on behalf of the business.
 
@@ -611,7 +611,7 @@ ${businessContext ? `\nBUSINESS CONTEXT:\n${businessContext}` : ""}${replyLangua
   ): Promise<string | null> {
     const pr = this.p.prompts;
     try {
-      const openai = createOpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey, job: "chat" });
 
       const systemPrompt = `You are a helpful assistant for "${businessName}". A user commented on ${pr.postWithArticle} and you are now sending them a ${pr.privateDmNoun} to continue the conversation.
 

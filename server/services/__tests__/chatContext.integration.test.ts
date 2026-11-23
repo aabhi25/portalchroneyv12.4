@@ -36,6 +36,7 @@ async function main() {
   const fake = await startFakeOpenAIChat();
   process.env.OPENAI_BASE_URL = fake.baseUrl;
 
+  (await import('../../lib/modelMove')).__useOldModelsForTests();
   const { db } = await import('../../db');
   const schema = await import('@shared/schema');
   const { eq, sql } = await import('drizzle-orm');

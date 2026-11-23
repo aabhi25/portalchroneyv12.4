@@ -15,6 +15,8 @@ export interface ModelRates {
   inputCostPer1k: number;
   outputCostPer1k: number;
   cachedInputCostPer1k?: number;
+  /** Input the model is charged for remembering (GPT-5.6 and later). Built in: not a database column. */
+  cacheWriteCostPer1k?: number;
   audioInputCostPer1k?: number;
   audioCachedInputCostPer1k?: number;
   audioOutputCostPer1k?: number;
@@ -43,11 +45,26 @@ const DEFAULT_MODEL_PRICING: Record<string, ModelRates> = {
     inputCostPer1k: 0.0001,         // $0.10 per 1M tokens
     outputCostPer1k: 0.0005,        // $0.50 per 1M tokens
     cachedInputCostPer1k: 0.00001,  // $0.01 per 1M tokens
+    cacheWriteCostPer1k: 0.000125,  // $0.125 per 1M tokens
   },
   'gpt-6.1-terra': {
     inputCostPer1k: 0.001,          // $1.00 per 1M tokens
     outputCostPer1k: 0.005,         // $5.00 per 1M tokens
     cachedInputCostPer1k: 0.00005,  // $0.05 per 1M tokens
+    cacheWriteCostPer1k: 0.00125,   // $1.25 per 1M tokens
+  },
+  // Phone answers, and the spare models (lib/modelMove.ts)
+  'gpt-5.6-luna': {
+    inputCostPer1k: 0.0002,         // $0.20 per 1M tokens
+    outputCostPer1k: 0.0012,        // $1.20 per 1M tokens
+    cachedInputCostPer1k: 0.00002,  // $0.02 per 1M tokens
+    cacheWriteCostPer1k: 0.00025,   // $0.25 per 1M tokens
+  },
+  'gpt-5.6-terra': {
+    inputCostPer1k: 0.002,          // $2.00 per 1M tokens
+    outputCostPer1k: 0.012,         // $12.00 per 1M tokens
+    cachedInputCostPer1k: 0.0002,   // $0.20 per 1M tokens
+    cacheWriteCostPer1k: 0.0025,    // $2.50 per 1M tokens
   },
   'gpt-4.1-mini': {
     inputCostPer1k: 0.0004,         // $0.40 per 1M tokens
@@ -97,6 +114,7 @@ export interface TokenBreakdown {
   tokensOutputAudio?: number;      // audio portion of tokensOutput
   tokensInputCached?: number;      // cached portion of tokensInput (text + audio)
   tokensInputCachedAudio?: number; // audio portion of tokensInputCached
+  tokensInputCacheWrite?: number;  // fresh text input charged at the cache-write rate (cost only, not stored)
 }
 
 interface LogUsageParams extends TokenBreakdown {
@@ -319,6 +337,13 @@ class AIUsageLogger {
     return cost / 1000;
   }
 
+  /** What remembering part of the input cost on top of the plain input rate. */
+  private cacheWriteExtra(params: LogUsageParams, usage: NormalizedUsage): number {
+    const r = DEFAULT_MODEL_PRICING[params.model];
+    const written = Math.min(Number(params.tokensInputCacheWrite) || 0, usage.tokensInput - usage.tokensInputCached);
+    return r?.cacheWriteCostPer1k && written > 0 ? (written * (r.cacheWriteCostPer1k - r.inputCostPer1k)) / 1000 : 0;
+  }
+
   /**
    * Log AI usage event
    */
@@ -329,7 +354,7 @@ class AIUsageLogger {
       // so the persisted breakdown always matches what was actually billed and
       // stays a true subset of the totals.
       const usage = normalizeUsage(params.tokensInput, params.tokensOutput, params);
-      const costUsd = this.calculateCost(usage, pricing);
+      const costUsd = this.calculateCost(usage, pricing) + this.cacheWriteExtra(params, usage);
 
       await db.insert(aiUsageEvents).values({
         businessAccountId: params.businessAccountId,

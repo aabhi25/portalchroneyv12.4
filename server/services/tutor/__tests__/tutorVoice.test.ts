@@ -490,7 +490,7 @@ async function main() {
     const svc: any = new RealtimeVoiceService();
     const conv: any = { openaiApiKey: "sk-x", selectedVoice: "shimmer", elevenlabsApiKey: "el-widget", elevenlabsVoiceId: "WidgetVoice", tutor: { active: true }, tutorVoice: { openaiVoice: "nova" } };
     let pv = svc.createTtsProviders(conv);
-    expect(pv.primary?.name !== "elevenlabs" && pv.fallback === null, "teacher voice = an OpenAI voice → OpenAI speaks (not the widget's ElevenLabs voice)", pv.primary?.name);
+    expect(pv.primary?.name !== "elevenlabs" && pv.fallback?.name !== "elevenlabs", "teacher voice = an OpenAI voice → OpenAI speaks (not the widget's ElevenLabs voice)", pv.primary?.name);
     conv.tutorVoice = { elevenlabsApiKey: "el-teacher", elevenlabsVoiceId: "TeacherVoice123" };
     conv.elevenlabsApiKey = undefined; conv.elevenlabsVoiceId = undefined;
     pv = svc.createTtsProviders(conv);

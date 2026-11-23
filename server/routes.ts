@@ -121,6 +121,7 @@ import invoiceRoutes from "./routes/invoices";
 import answerCheckingRoutes from "./routes/answerChecking";
 import avatarRoutes from "./routes/avatar";
 import photoSearchRoutes from "./routes/photoSearch";
+import modelMoveRoutes from "./routes/modelMove";
 import designStudioRoutes from "./routes/designStudio";
 import { wantsCustomDesign } from "@shared/designStudio";
 
@@ -152,6 +153,8 @@ import { createMetaWebhookSignatureGuard, describeMetaWebhookSignature, timingSa
 import { validatePhoneNumber } from "@shared/validation/phone";
 import { MAX_IMPORT_ROWS, normalizeColumnKeys } from "@shared/contactImport";
 import { createOpenAI, OPENAI_TIMEOUTS } from "./lib/openaiClient";
+import { billedModel, jobMoved } from "./lib/modelMove";
+import { modelClosed } from "@shared/aiModelMove";
 import { friendlyTryOnError, generateOpenAiTryOn, tryOnPromptFor } from "./services/tryOn";
 import { runWithContext } from "./lib/requestContext";
 import { trackTimer, onShutdown } from "./lib/lifecycle";
@@ -681,6 +684,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // a previous process left open (billed to their last heartbeat).
   app.use(avatarRoutes);
   app.use(photoSearchRoutes);
+  app.use(modelMoveRoutes);
   app.use(designStudioRoutes);
   app.use(tutorRoutes);
   app.use(aiLanguageRoutes);
@@ -5402,7 +5406,7 @@ If you cannot determine the category or the image doesn't match any category, re
           console.log('[Visual Match] GPT category response:', rawResponse);
           
           // Log AI usage
-          aiUsageLogger.logImageSearchUsage(businessAccountId, 'gpt-4o-mini', categoryDetectionResponse).catch(err =>
+          aiUsageLogger.logImageSearchUsage(businessAccountId, billedModel('gpt-4o-mini', categoryDetectionResponse?.model), categoryDetectionResponse).catch(err =>
             console.error('[Usage] Failed to log:', err)
           );
           
@@ -24502,7 +24506,7 @@ Be constructive and helpful. Return ONLY valid JSON.`;
       aiUsageLogger.logUsage({
         businessAccountId,
         category: "faq_quality_analysis",
-        model: "gpt-4o-mini",
+        model: billedModel("gpt-4o-mini", response.model),
         tokensInput: response.usage?.prompt_tokens || 0,
         tokensOutput: response.usage?.completion_tokens || 0,
         metadata: { questionLength: question?.length || 0 }
@@ -28172,10 +28176,17 @@ Be constructive and helpful. Return ONLY valid JSON.`;
         return res.status(400).json({ error: "OpenAI API key not configured" });
       }
 
-      const openai = createOpenAI({ businessAccountId, apiKey });
-
       // Generate voice sample
       const sampleText = "Hello! I'm your AI assistant. How can I help you today?";
+      if (jobMoved("speak", businessAccountId) || modelClosed("gpt-4o-mini-tts")) {
+        const { realtimeSpeechWav } = await import("./services/voice/realtimeTts");
+        const wav = await realtimeSpeechWav(apiKey, voice, sampleText);
+        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Content-Length', wav.length);
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return res.send(wav);
+      }
+      const openai = createOpenAI({ businessAccountId, apiKey });
       const mp3Response = await openai.audio.speech.create({
         model: "gpt-4o-mini-tts",
         voice: voice as any,

@@ -29,7 +29,7 @@ export const TUTOR_MODEL = () => process.env.TUTOR_MODEL || "gpt-4.1-mini";
 export type Complete = (system: string, user: string) => Promise<string>;
 
 export function openAiComplete(apiKey: string, businessAccountId: string): Complete {
-  const openai = createOpenAI({ apiKey, businessAccountId, feature: "tutor_planner", category: "chat" });
+  const openai = createOpenAI({ apiKey, businessAccountId, feature: "tutor_planner", category: "chat", job: "tutor" });
   return async (system, user) => {
     const res = await openai.chat.completions.create({
       model: TUTOR_MODEL(),

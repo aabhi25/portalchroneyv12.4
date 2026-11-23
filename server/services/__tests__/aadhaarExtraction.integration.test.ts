@@ -25,6 +25,7 @@ async function main() {
   const fake = await startFakeOpenAI();
   process.env.OPENAI_BASE_URL = fake.baseUrl;
 
+  (await import("../../lib/modelMove")).__useOldModelsForTests();
   const { db } = await import("../../db");
   const schema = await import("@shared/schema");
   const { documentIdentificationService, DOC_AI_TIMEOUTS } = await import("../documentIdentificationService");

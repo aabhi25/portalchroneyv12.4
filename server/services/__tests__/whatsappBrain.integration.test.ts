@@ -143,6 +143,7 @@ async function main() {
   const fake = await startFakeOpenAI();
   process.env.OPENAI_BASE_URL = fake.baseUrl;
 
+  (await import("../../lib/modelMove")).__useOldModelsForTests();
   const { db } = await import("../../db");
   const schema = await import("@shared/schema");
   const { eq, and, sql } = await import("drizzle-orm");
@@ -302,7 +303,7 @@ async function main() {
     failModel = "gpt-4.1-mini";
     r = await reply(NW.accountId, newPhone(), "do you have lockers?");
     failModel = null;
-    expect(r.main?.model === "gpt-4o-mini" && r.res.success, "model not available for the key → retried with gpt-4o-mini", { model: r.main?.model, res: r.res });
+    expect(r.main?.model === "gpt-6-luna" && r.res.success, "model not available for the key → answered by its replacement", { model: r.main?.model, res: r.res });
     await db.update(schema.masterAiSettings).set({ primaryProvider: "gemini", primaryModel: "gemini-2.5-flash" } as any).where(eq(schema.masterAiSettings.id, 1));
     clearWhatsappModelCache();
     r = await reply(NW.accountId, newPhone(), "do you have showers?");

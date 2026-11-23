@@ -753,7 +753,7 @@ async function main() {
     const fakeRealtime = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((r) => fakeRealtime.once("listening", () => r()));
     fakeRealtime.on("connection", (sock) => {
-      realtimeSocket = sock;
+      realtimeSocket ??= sock; // the call's own connection; the OpenAI voice opens another after it
       sock.on("message", (d) => { try { realtimeMessages.push(JSON.parse(String(d))); } catch { /* binary */ } });
       sock.send(JSON.stringify({ type: "session.created", session: { id: "sess_test" } }));
     });

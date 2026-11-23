@@ -105,6 +105,9 @@ async function main() {
   const clear = async (id: string) => { await db.delete(schema.aiUsageEvents).where(eq(schema.aiUsageEvents.businessAccountId, id)); };
   const collect = async (stream: any) => { const out: any[] = []; for await (const c of stream) out.push(c); return out; };
 
+  // These checks are about usage, whichever model answers: calls go out as written (modelMove.test.ts has the rest).
+  (await import("../modelMove")).__useOldModelsForTests();
+
   const tracked = createOpenAI({ apiKey: "sk-test", baseURL: fake.baseURL, maxRetries: 0 });
   const untracked = createOpenAI({ apiKey: "sk-test", baseURL: fake.baseURL, maxRetries: 0, trackUsage: false });
   const messages = [{ role: "user" as const, content: "hello" }];

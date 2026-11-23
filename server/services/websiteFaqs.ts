@@ -1,4 +1,5 @@
 import { createOpenAI, OPENAI_TIMEOUTS } from "../lib/openaiClient";
+import { billedModel } from "../lib/modelMove";
 import { aiUsageLogger } from "./aiUsageLogger";
 import { extractSiteFacts, fetchScanHtml, kindOfPage, mainPageText, pageKey, type FoundPage, type PageDiscovery, type PageKind } from "./websitePages";
 
@@ -106,7 +107,7 @@ Return JSON: {"faqs":[{"question":"...","answer":"...","category":"..."}]}`,
       { role: "user", content: `Page: ${pageUrl} (looks like: ${kind})\n\nPage text:\n${text.slice(0, PAGE_TEXT_CHARS)}` },
     ],
   });
-  aiUsageLogger.logWebsiteAnalysisUsage(businessAccountId, "gpt-4o-mini", completion, { feature: "faqs_from_website" }).catch(() => {});
+  aiUsageLogger.logWebsiteAnalysisUsage(businessAccountId, billedModel("gpt-4o-mini", completion?.model), completion, { feature: "faqs_from_website" }).catch(() => {});
   let parsed: any;
   try {
     parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
