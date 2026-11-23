@@ -15,6 +15,18 @@ export interface TimelineEvent {
   tone: "good" | "bad" | null;
   /** Where clicking the event goes in the portal. */
   link: { type: "conversation" | "call" | "whatsapp"; id: string } | null;
+  /** Short heading shown next to the tag ("AI call"); a sub-line's whole text. Default: title. */
+  label?: string | null;
+  /** The result as a small coloured tag ("Interested", "No answer", "Call back planned"). */
+  tag?: { label: string; tone: "good" | "bad" | "wait" | "muted" } | null;
+  /** A short fact next to the time ("1m 48s"), or for an upcoming call why it's planned. */
+  meta?: string | null;
+  /** Shown as a line under this event instead of a row of its own (a call's follow-up, the CRM sync). */
+  parentId?: string | null;
+  /** Hasn't happened yet (a call waiting for its time): shown under "Coming up". */
+  upcoming?: boolean;
+  /** Didn't connect: one quiet line, no text under it. */
+  quiet?: boolean;
 }
 
 export interface LeadStory {

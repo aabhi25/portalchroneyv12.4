@@ -67,7 +67,11 @@ async function websiteEvents(p: Person, out: TimelineEvent[]): Promise<void> {
   const ids = p.websiteLeads.map((l) => l.id);
   for (const l of p.websiteLeads) {
     const gave = [l.name && "name", l.phone && "phone number", l.email && "email"].filter(Boolean).join(", ");
-    out.push({ id: `lead:${l.id}`, at: iso(l.createdAt)!, channel: "website", title: "Shared their details", detail: gave ? `Gave their ${gave} in the website chat.` : null, tone: "good", link: l.conversationId ? { type: "conversation", id: l.conversationId } : null });
+    out.push({
+      id: `lead:${l.id}`, at: iso(l.createdAt)!, channel: "website", title: "Shared their details", detail: gave ? `Gave their ${gave} in the website chat.` : null, tone: "good",
+      link: l.conversationId ? { type: "conversation", id: l.conversationId } : null, label: gave ? `Shared their ${gave}` : "Shared their details",
+      parentId: l.conversationId ? `conv:${l.conversationId}` : null,
+    });
     if (l.enquiryCount > 1 && l.lastEnquiryAt) {
       out.push({ id: `reenquiry:${l.id}`, at: iso(l.lastEnquiryAt)!, channel: "website", title: "Came back", detail: `Enquiry ${l.enquiryCount} from this person.`, tone: "good", link: l.conversationId ? { type: "conversation", id: l.conversationId } : null });
     }
@@ -110,14 +114,21 @@ export function readableCallTime(at: Date | string, timezone: string, now: Date 
   return `${p.day} ${p.month}${year}, ${p.hour}:${p.minute} ${String(p.dayPeriod || "").toUpperCase()}`.trim();
 }
 
-type CallRow = Pick<typeof aiCalls.$inferSelect, "direction" | "status" | "trigger" | "outcome" | "answeredAt" | "summary" | "callbackAt" | "scheduledAt">;
+type CallRow = Pick<typeof aiCalls.$inferSelect, "direction" | "status" | "trigger" | "outcome" | "answeredAt" | "summary" | "callbackAt" | "scheduledAt"> & { durationSec?: number | null };
+type CallText = Pick<TimelineEvent, "title" | "detail" | "label" | "tag" | "meta" | "upcoming" | "quiet">;
+
+const OUTCOME_TONE: Partial<Record<CallOutcome, NonNullable<TimelineEvent["tag"]>["tone"]>> = {
+  interested: "good", transferred: "good", callback_requested: "wait", not_interested: "bad", do_not_call: "bad", wrong_number: "bad",
+};
+/** "1m 48s" / "31s". */
+const talkTime = (sec: number | null | undefined) => (sec && sec > 0 ? (sec >= 60 ? `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s` : `${sec}s`) : null);
 
 /**
  * A call's timeline title and line. Only a finished call that never connected says "Not answered";
  * one still waiting for its time (a callback the person asked for, the next try, a new lead's call)
  * says when the AI will call, and a call that is ringing or under way just says so.
  */
-export function describeCall(c: CallRow, timezone: string, now: Date = new Date()): { title: string; detail: string | null } {
+export function describeCall(c: CallRow, timezone: string, now: Date = new Date()): CallText {
   const outcome = c.outcome ? CALL_OUTCOME_LABEL[c.outcome as CallOutcome] : null;
   const answered = !!c.answeredAt;
   const when = (d: Date | string) => readableCallTime(d, timezone, now);
@@ -127,15 +138,26 @@ export function describeCall(c: CallRow, timezone: string, now: Date = new Date(
     const detail = c.trigger === "callback" ? `They asked to be called back${at ? `. The AI will call on ${at}` : ""}.`
       : c.trigger === "retry" ? `The last call wasn't answered${at ? `. The AI will try again on ${at}` : ""}.`
       : at ? `The AI will call on ${at}.` : null;
-    return { title, detail };
+    const why = c.trigger === "callback" ? "They asked to be called back" : c.trigger === "retry" ? "The last call wasn't answered" : c.trigger === "manual" ? "Requested by your team" : "New lead";
+    const label = c.trigger === "callback" ? "AI calls back" : c.trigger === "retry" ? "AI tries again" : "AI calls";
+    return { title, detail, label, tag: { label: title.replace(/^AI call · /, ""), tone: "wait" }, meta: why, upcoming: true };
   }
   if (LIVE_CALL_STATUSES.includes(c.status as CallStatus)) {
-    return { title: `AI call · ${CALL_STATUS_LABEL[c.status as CallStatus]}`, detail: null };
+    const status = CALL_STATUS_LABEL[c.status as CallStatus];
+    return { title: `AI call · ${status}`, detail: null, label: c.direction === "inbound" ? "Called you" : "AI call", tag: { label: status, tone: "wait" } };
   }
   const status = CALL_STATUS_LABEL[c.status as CallStatus] || c.status;
   const title = c.direction === "inbound" ? "Called you" : answered ? "AI call" : `AI call · ${status}`;
   const bits = [c.summary ? clip(c.summary, 240) : null, c.callbackAt ? `Asked to be called back on ${when(c.callbackAt)}.` : null].filter(Boolean);
-  return { title: outcome ? `${title} · ${outcome}` : title, detail: bits.join(" ") || (answered ? null : "Not answered.") };
+  const label = c.direction === "inbound" ? "Called you" : "AI call";
+  if (!answered) {
+    // Busy / no answer / voicemail: the status says it (an outcome like "No answer" would repeat it).
+    return { title: outcome ? `${title} · ${outcome}` : title, detail: bits.join(" ") || "Not answered.", label, tag: { label: status, tone: "muted" }, quiet: !bits.length };
+  }
+  return {
+    title: outcome ? `${title} · ${outcome}` : title, detail: bits.join(" ") || null, label,
+    tag: outcome ? { label: outcome, tone: OUTCOME_TONE[c.outcome as CallOutcome] ?? "muted" } : null, meta: talkTime(c.durationSec),
+  };
 }
 
 async function callEvents(p: Person, out: TimelineEvent[]): Promise<void> {
@@ -151,15 +173,16 @@ async function callEvents(p: Person, out: TimelineEvent[]): Promise<void> {
   const timezone = rows.length ? effectiveHours(await getSettingsRowCached(p.accountId)).timezone : "";
   for (const { call: c, requester } of rows) {
     if (c.status === "cancelled" || c.status === "skipped") continue;
-    const { title, detail } = describeCall(c, timezone);
+    const text = describeCall(c, timezone);
     const tone = c.outcome === "interested" || c.outcome === "callback_requested" ? "good"
       : c.outcome === "not_interested" || c.outcome === "do_not_call" || c.outcome === "wrong_number" ? "bad" : null;
     out.push({
       id: `call:${c.id}`, at: iso(c.startedAt || c.scheduledAt || c.createdAt)!, channel: "call",
-      title, detail, tone, link: { type: "call", id: c.id },
+      ...text, tone, link: { type: "call", id: c.id },
     });
+    const parentId = `call:${c.id}`;
     if (c.trigger === "manual") {
-      out.push({ id: `callreq:${c.id}`, at: iso(c.createdAt)!, channel: "team", title: "Call requested", detail: requester ? `By ${requester}.` : null, tone: null, link: { type: "call", id: c.id } });
+      out.push({ id: `callreq:${c.id}`, at: iso(c.createdAt)!, channel: "team", title: "Call requested", detail: requester ? `By ${requester}.` : null, tone: null, link: { type: "call", id: c.id }, label: requester ? `Requested by ${requester}` : "Requested by your team", parentId });
     }
     if (c.followUpStatus && c.followUpSentAt) {
       const steps = [c.followUpDeliveredAt || c.followUpStatus === "delivered" || c.followUpStatus === "read" ? "delivered" : null, c.followUpReadAt || c.followUpStatus === "read" ? "read" : null].filter(Boolean);
@@ -167,10 +190,11 @@ async function callEvents(p: Person, out: TimelineEvent[]): Promise<void> {
         id: `followup:${c.id}`, at: iso(c.followUpSentAt)!, channel: "whatsapp",
         title: c.followUpStatus === "failed" ? "WhatsApp follow-up failed" : "WhatsApp follow-up sent",
         detail: c.followUpStatus === "failed" ? clip(c.followUpError, 160) || null : `${c.followUpTemplate ? `“${c.followUpTemplate}”` : "After the AI call"}${steps.length ? ` · ${steps.join(", ")}` : ""}.`,
-        tone: c.followUpStatus === "failed" ? "bad" : null, link: { type: "call", id: c.id },
+        tone: c.followUpStatus === "failed" ? "bad" : null, link: { type: "call", id: c.id }, parentId,
+        label: c.followUpStatus === "failed" ? "WhatsApp follow-up failed" : `WhatsApp follow-up${c.followUpTemplate ? ` “${c.followUpTemplate}”` : ""} sent${steps.length ? ` · ${steps.join(", ")}` : ""}`,
       });
     } else if (c.followUpStatus === "failed") {
-      out.push({ id: `followup:${c.id}`, at: iso(c.endedAt || c.createdAt)!, channel: "whatsapp", title: "WhatsApp follow-up failed", detail: clip(c.followUpError, 160) || null, tone: "bad", link: { type: "call", id: c.id } });
+      out.push({ id: `followup:${c.id}`, at: iso(c.endedAt || c.createdAt)!, channel: "whatsapp", title: "WhatsApp follow-up failed", detail: clip(c.followUpError, 160) || null, tone: "bad", link: { type: "call", id: c.id }, parentId, label: "WhatsApp follow-up failed" });
     }
   }
 }
@@ -237,7 +261,7 @@ function crmEvents(p: Person, out: TimelineEvent[]): void {
     for (const [label, k] of crms) {
       const status = (l as any)[`${k}SyncStatus`] as string | null;
       const at = (l as any)[`${k}SyncedAt`] as Date | null;
-      if (status === "synced" && at) out.push({ id: `crm:${k}:${l.id}`, at: iso(at)!, channel: "team", title: `Sent to ${label}`, detail: null, tone: "good", link: null });
+      if (status === "synced" && at) out.push({ id: `crm:${k}:${l.id}`, at: iso(at)!, channel: "team", title: `Sent to ${label}`, detail: null, tone: "good", link: null, parentId: l.conversationId ? `conv:${l.conversationId}` : `lead:${l.id}` });
       else if (status === "failed" || status === "permanently_failed" || status === "needs_attention") {
         out.push({ id: `crm:${k}:${l.id}`, at: iso(l.updatedAt)!, channel: "team", title: `${label} sync needs attention`, detail: clip((l as any)[`${k}SyncError`], 160) || null, tone: "bad", link: null });
       }
@@ -262,7 +286,14 @@ export async function buildLeadTimeline(accountId: string, anchor: TimelineAncho
     .filter((e) => e.at && !seen.has(e.id) && seen.add(e.id))
     .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
     .slice(-MAX_EVENTS)
-    .map((e) => (masked ? { ...e, title: maskPhonesInText(e.title) || e.title, detail: maskPhonesInText(e.detail) } : e));
+    .map((e) => (masked ? { ...e, title: maskPhonesInText(e.title) || e.title, detail: maskPhonesInText(e.detail), label: e.label ? maskPhonesInText(e.label) : e.label } : e));
+  // A sub-line whose event isn't on the timeline (cut off, or a chat that wasn't found) stands on its own.
+  const ids = new Set(sorted.map((e) => e.id));
+  for (const e of sorted) {
+    if (!e.parentId || ids.has(e.parentId)) continue;
+    const lead = e.id.startsWith("crm:") ? `lead:${e.id.split(":")[2]}` : null;
+    e.parentId = lead && ids.has(lead) ? lead : null;
+  }
   return { person, events: sorted };
 }
 
@@ -332,7 +363,11 @@ async function cachedStory(accountId: string, leadKey: string) {
   return row ?? null;
 }
 
-const latestAt = (events: TimelineEvent[]) => (events.length ? new Date(events[events.length - 1].at) : null);
+/** Newest thing that happened (a call booked for later doesn't count: it would hide newer activity). */
+const latestAt = (events: TimelineEvent[]) => {
+  const done = events.filter((e) => !e.upcoming);
+  return done.length ? new Date(done[done.length - 1].at) : null;
+};
 
 export async function getLeadTimeline(accountId: string, anchor: TimelineAnchor): Promise<LeadTimelineResponse | null> {
   const built = await buildLeadTimeline(accountId, anchor);

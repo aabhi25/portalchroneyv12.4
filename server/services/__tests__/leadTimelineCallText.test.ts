@@ -44,6 +44,15 @@ async function main() {
   expect(busy.title === "AI call · Busy · No answer" && busy.detail === "Not answered.", "a busy call still says Not answered", busy);
   expect(noAnswer.title === "AI call · No answer" && noAnswer.detail === "Not answered.", "an unanswered call still says Not answered", noAnswer);
 
+  // What the panel shows: the result as a tag, talk time, waiting calls under "Coming up", missed calls as one quiet line.
+  expect(answered.label === "AI call" && answered.tag?.label === "Call back later" && answered.tag.tone === "wait" && !answered.upcoming && !answered.quiet, "answered call: 'AI call' with a 'Call back later' tag", answered);
+  const timed = describeCall({ ...base, answeredAt: new Date(), outcome: "interested", durationSec: 108 }, tz, now);
+  expect(timed.tag?.tone === "good" && timed.meta === "1m 48s" && describeCall({ ...base, answeredAt: new Date(), durationSec: 31 }, tz, now).meta === "31s", "talk time shows next to the time", timed);
+  expect(callback.upcoming && callback.label === "AI calls back" && callback.meta === "They asked to be called back" && callback.tag?.tone === "wait", "a waiting callback goes under Coming up with why", callback);
+  expect(retry.upcoming && retry.label === "AI tries again" && fresh.upcoming && fresh.label === "AI calls", "retries and new calls are coming up too", { retry, fresh });
+  expect(!ringing.upcoming && ringing.tag?.label === "Ringing" && ringing.tag.tone === "wait", "a ringing call is a row with a Ringing tag", ringing);
+  expect(busy.quiet && busy.tag?.label === "Busy" && busy.tag.tone === "muted" && noAnswer.quiet && noAnswer.tag?.label === "No answer", "missed calls are one quiet line tagged Busy / No answer", { busy, noAnswer });
+
   const inbound = describeCall({ ...base, direction: "inbound", trigger: "inbound", answeredAt: new Date(), outcome: "interested", summary: "Asked about fees." }, tz, now);
   expect(inbound.title === "Called you · Interested" && inbound.detail === "Asked about fees.", "an incoming call is unchanged", inbound);
 

@@ -1,25 +1,33 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { Copy, Eye, FileText, GitBranch, Loader2, MessageCircle, RefreshCw, Trash2, ExternalLink } from "lucide-react";
+import { ChevronDown, Copy, Eye, FileText, GitBranch, Loader2, MessageCircle, RefreshCw, Trash2, ExternalLink } from "lucide-react";
 import type { Lead } from "@shared/schema";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { formatCrmSyncError } from "@/lib/crmSyncError";
-import { LeadCallsPanel } from "@/components/calling/LeadCallsPanel";
-import { LeadStoryTimeline } from "./LeadStoryTimeline";
+import { CallWithAiButton, LeadCallsPanel } from "@/components/calling/LeadCallsPanel";
+import { LeadScorePill, LeadStoryTimeline, refreshLeadTimelines } from "./LeadStoryTimeline";
 import { CHANNEL_META, ChannelBadge, ChannelTrail, type SocialCrm, type UnifiedLeadRow } from "./UnifiedLeadParts";
 import { crmStatusLook, syncButtonLabel, type CrmTarget } from "./LeadCrm";
 
 /** Held back on purpose (journey step not reached, junk-looking number): not an error. */
 const HELD = ["waiting", "waiting_journey", "invalid_phone"];
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/** A details section that opens on tap; `summary` shows on the closed row ("LeadSquared · Synced"). */
+function Fold({ title, summary, defaultOpen = false, children, testId }: { title: string; summary?: ReactNode; defaultOpen?: boolean; children: ReactNode; testId?: string }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="mt-6">
-      <h3 className="mb-2 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-gray-400">{title}</h3>
-      {children}
+    <section className="border-t border-gray-100" data-testid={testId}>
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} className="flex w-full items-center justify-between gap-3 py-3 text-left">
+        <span className="text-[14px] font-medium text-gray-900">{title}</span>
+        <span className="flex min-w-0 items-center gap-2 text-[12.5px] text-gray-500">
+          {!open && summary && <span className="truncate">{summary}</span>}
+          <ChevronDown className={`h-4 w-4 shrink-0 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+      {open && <div className="pb-4">{children}</div>}
     </section>
   );
 }
@@ -56,8 +64,9 @@ export function websiteRowFromLead(lead: Lead): UnifiedLeadRow {
 }
 
 /**
- * Everything about one lead, from any channel, in a panel on the right: contact details, where
- * they came from, each CRM's status with Sync / Retry, what was captured, and phone calls.
+ * Everything about one lead, from any channel, in a panel on the right: who they are and the
+ * main actions on top, the AI summary and activity across channels, then contact details, where
+ * they came from, each CRM's status with Sync / Retry and what was captured, each folded away.
  */
 export function LeadDetailsSheet({
   row, onClose, targets, isSyncing, onSync, onSelectRow, onViewChat, onViewForm, onViewJourney, onOpenChannelPage, onDelete, showInternalIds,
@@ -130,191 +139,200 @@ export function LeadDetailsSheet({
     );
   };
 
+  const storyShown = showStory && (row?.channel === "website" || row?.channel === "whatsapp");
+  const crmProblem = targets.some(t => ["failed", "permanently_failed", "needs_attention"].includes(t.state?.status ?? ""));
+  const crmSummary = targets.length === 0 ? "None connected" : targets.map(t => `${t.label} · ${crmStatusLook(t.state?.status).text}`).join(", ");
+  const told = topics.length > 0 || journeyAnswers.length > 0 || !!website?.message || extractedEntries.length > 0;
+
   return (
     <Sheet open={!!row} onOpenChange={open => { if (!open) onClose(); }}>
       <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-[520px]" data-testid="lead-details-sheet">
         {row && (
-          <div className="px-6 pb-10 pt-6">
-            <SheetHeader className="space-y-1 text-left">
-              <p className="text-[12px] text-gray-500">Lead</p>
-              <SheetTitle className="text-[24px] font-semibold tracking-tight">{row.name || "Anonymous"}</SheetTitle>
-              <SheetDescription className="flex flex-wrap items-center gap-2 text-[13px]">
-                <ChannelTrail row={row} />
-                <span>· {format(new Date(row.capturedAt), "d MMM yyyy, h:mm a")}</span>
+          <div key={row.key} className="px-6 pb-10 pt-6">
+            <SheetHeader className="space-y-1.5 text-left">
+              <div className="flex items-start justify-between gap-3 pr-6">
+                <SheetTitle className="text-[24px] font-semibold tracking-tight">{row.name || "Anonymous"}</SheetTitle>
+                {storyShown && <div className="pt-1"><LeadScorePill channel={row.channel as "website" | "whatsapp"} id={row.id} /></div>}
+              </div>
+              <SheetDescription asChild>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-gray-500">
+                  <ChannelTrail row={row} />
+                  {row.phone && <span>· {row.phone}</span>}
+                  {city && <span>· {city}</span>}
+                </div>
               </SheetDescription>
             </SheetHeader>
 
-            {showStory && (row.channel === "website" || row.channel === "whatsapp") && (
-              <LeadStoryTimeline channel={row.channel} id={row.id} onOpenConversation={onOpenConversation} onOpenWhatsapp={onViewWhatsappChat} />
+            <div className="mt-4 flex flex-wrap gap-2">
+              {website && showCalls && <CallWithAiButton leadId={website.id} leadName={website.name} phone={website.phone} onCalled={refreshLeadTimelines} />}
+              {onViewChat && <Button variant="outline" size="sm" onClick={onViewChat}><Eye className="mr-1.5 h-4 w-4" />View chat</Button>}
+              {onViewForm && <Button variant="outline" size="sm" onClick={onViewForm}><FileText className="mr-1.5 h-4 w-4" />View form</Button>}
+              {onViewJourney && <Button variant="outline" size="sm" onClick={onViewJourney}><GitBranch className="mr-1.5 h-4 w-4" />Journey answers</Button>}
+              {onViewWhatsappChat && row.channel === "whatsapp" && (
+                <Button variant="outline" size="sm" onClick={() => onViewWhatsappChat(row.id)} data-testid="button-view-whatsapp-chat"><MessageCircle className="mr-1.5 h-4 w-4" />View WhatsApp chat</Button>
+              )}
+              {onOpenChannelPage && CHANNEL_META[row.channel].page && !(onViewWhatsappChat && row.channel === "whatsapp") && (
+                <Button variant="outline" size="sm" onClick={onOpenChannelPage}><ExternalLink className="mr-1.5 h-4 w-4" />Open in {CHANNEL_META[row.channel].label}</Button>
+              )}
+            </div>
+
+            {storyShown && (
+              <LeadStoryTimeline channel={row.channel as "website" | "whatsapp"} id={row.id} onOpenConversation={onOpenConversation} onOpenWhatsapp={onViewWhatsappChat} />
             )}
 
-            <Section title="Contact">
-              <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[14px]">
-                <Field label="Phone"><span className="font-mono">{row.phone}</span></Field>
-                <Field label="Email">{row.email}</Field>
-                <Field label="City">{city}</Field>
-                {sender && <Field label="From">{sender}</Field>}
-              </dl>
-            </Section>
-
-            <Section title="Where they came from">
-              <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[14px]">
-                {accountName && <Field label="Account">{accountName}</Field>}
-                <Field label="Channel"><ChannelBadge channel={row.channel} /></Field>
-                {website?.sourceUrl && (
-                  <Field label="Page">
-                    <a href={website.sourceUrl} target="_blank" rel="noopener noreferrer" className="break-all text-purple-700 hover:underline">{website.sourceUrl}</a>
-                  </Field>
-                )}
-                {(row.enquiryCount ?? 1) > 1 && row.firstCapturedAt ? (
-                  <>
-                    <Field label="Latest enquiry">{format(new Date(row.capturedAt), "PPpp")} <span className="text-gray-500">· {row.enquiryCount} enquiries</span></Field>
-                    <Field label="First enquiry">{format(new Date(row.firstCapturedAt), "PPpp")}</Field>
-                  </>
-                ) : (
-                  <Field label="Captured">{format(new Date(row.capturedAt), "PPpp")}</Field>
-                )}
-              </dl>
-              {row.linked && row.linked.length > 0 && (
-                <div className="mt-3 rounded-xl border border-black/[0.07] bg-gray-50 p-3">
-                  <p className="text-[12.5px] text-gray-600">The same person also reached you on:</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {row.linked.map(l => (
-                      <button key={l.key} type="button" onClick={() => onSelectRow(l)} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2 py-1 text-[12.5px] shadow-sm hover:bg-purple-50" data-testid={`lead-linked-${l.channel}`}>
-                        <ChannelBadge channel={l.channel} />
-                        <span className="text-gray-500">{format(new Date(l.capturedAt), "d MMM")}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div className="mt-3 flex flex-wrap gap-2">
-                {onViewChat && <Button variant="outline" size="sm" onClick={onViewChat}><Eye className="mr-1.5 h-4 w-4" />View chat</Button>}
-                {onViewForm && <Button variant="outline" size="sm" onClick={onViewForm}><FileText className="mr-1.5 h-4 w-4" />View form</Button>}
-                {onViewJourney && <Button variant="outline" size="sm" onClick={onViewJourney}><GitBranch className="mr-1.5 h-4 w-4" />View journey answers</Button>}
-                {onViewWhatsappChat && row.channel === "whatsapp" && (
-                  <Button variant="outline" size="sm" onClick={() => onViewWhatsappChat(row.id)} data-testid="button-view-whatsapp-chat"><MessageCircle className="mr-1.5 h-4 w-4" />View WhatsApp chat</Button>
-                )}
-                {onOpenChannelPage && CHANNEL_META[row.channel].page && !(onViewWhatsappChat && row.channel === "whatsapp") && (
-                  <Button variant="outline" size="sm" onClick={onOpenChannelPage}><ExternalLink className="mr-1.5 h-4 w-4" />Open in {CHANNEL_META[row.channel].label}</Button>
-                )}
-              </div>
-            </Section>
-
-            <Section title="CRM sync">
-              {targets.length === 0 ? (
-                <p className="text-[13.5px] text-gray-500">{noCrmText}</p>
-              ) : (
-                <ul className="overflow-hidden rounded-xl border border-black/[0.07] bg-white">
-                  {targets.map(t => {
-                    const look = crmStatusLook(t.state?.status);
-                    const syncing = isSyncing(t.crm);
-                    const showError = t.state?.error && t.state.status !== "synced";
-                    return (
-                      <li key={t.crm} className="border-t border-black/[0.06] px-4 py-3 first:border-t-0" data-testid={`lead-crm-${t.crm}`}>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[14px] font-medium text-gray-900">{t.label}</span>
-                          <span className={`rounded-md px-1.5 py-0.5 text-[11.5px] font-semibold ${look.className}`}>{syncing ? "Sending…" : look.text}</span>
-                          {t.state?.syncedAt && t.state.status === "synced" && (
-                            <span className="text-[12px] text-gray-500">{format(new Date(t.state.syncedAt), "d MMM, h:mm a")}</span>
-                          )}
-                          {t.canSync && (
-                            <Button size="sm" className="ml-auto h-7 px-2.5 text-[12.5px]" variant={t.state?.status ? "outline" : "default"} onClick={() => onSync(t.crm)} disabled={syncing} data-testid={`button-sheet-sync-${t.crm}`}>
-                              {syncing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
-                              {syncButtonLabel(t)}
-                            </Button>
-                          )}
-                        </div>
-                        {t.state?.crmLeadId && (
-                          <div className="mt-1.5 flex items-center gap-1.5 text-[12px] text-gray-500">
-                            {t.label} ID <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono">{t.state.crmLeadId}</code>
-                            <button type="button" aria-label={`Copy ${t.label} ID`} onClick={() => copy(t.state!.crmLeadId!, `${t.label} ID`)} className="text-gray-400 hover:text-gray-700"><Copy className="h-3.5 w-3.5" /></button>
-                          </div>
-                        )}
-                        {t.state?.status === "disqualified" && (
-                          <p className="mt-1.5 text-[12.5px] text-amber-700">Not sent because {t.state.error || "the answer did not match the qualifying values"}.</p>
-                        )}
-                        {showError && HELD.includes(t.state?.status ?? "") && (
-                          <p className="mt-1.5 text-[12.5px] text-gray-600">{t.state!.error!.replace(/\.?$/, ".")} Sync now sends it anyway.</p>
-                        )}
-                        {showError && t.state?.status !== "disqualified" && !HELD.includes(t.state?.status ?? "") && (
-                          <p className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[12.5px] text-red-700">{formatCrmSyncError(t.state!.error)}</p>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-              {syncedFieldLists.map(list => (
-                <details key={list.crm} className="mt-2 text-[12.5px]" data-testid={`lead-sent-fields-${list.crm}`}>
-                  <summary className="cursor-pointer text-gray-500">Fields sent to {list.label}{list.crm === "meritto" ? " (last send)" : ""}</summary>
-                  <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-lg bg-gray-50 p-3">
-                    {list.fields.map(([k, v]) => (
-                      <div key={k} className="flex gap-2"><span className="min-w-[130px] font-mono text-gray-500">{k}</span><span className="break-all text-gray-800">{v == null ? "—" : String(v)}</span></div>
-                    ))}
-                  </div>
-                </details>
-              ))}
-            </Section>
-
-            {(topics.length > 0 || journeyAnswers.length > 0 || website?.message || extractedEntries.length > 0) && (
-              <Section title="What they told us">
-                {journeyAnswers.length > 0 && (
-                  <div className="mb-3">
-                    {journey?.journeyName && (
-                      <p className="mb-1.5 flex items-center gap-1 text-[12px] text-gray-500">
-                        <GitBranch className="h-3.5 w-3.5" />
-                        {journey.journeyName}
-                      </p>
-                    )}
-                    <dl className="divide-y divide-gray-100 rounded-lg border border-gray-100">
-                      {journeyAnswers.map((r, i) => (
-                        <div key={i} className="px-3 py-2">
-                          <dt className="text-[12px] text-gray-500">{r.question}</dt>
-                          <dd className="text-[14px] font-medium text-gray-900">{r.answer}</dd>
-                        </div>
+            <div className="mt-6 border-b border-gray-100">
+              <Fold title="Contact and source" summary={format(new Date(row.capturedAt), "d MMM yyyy")} defaultOpen={!storyShown} testId="lead-fold-contact">
+                <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[14px]">
+                  <Field label="Phone"><span className="font-mono">{row.phone}</span></Field>
+                  <Field label="Email">{row.email}</Field>
+                  <Field label="City">{city}</Field>
+                  {sender && <Field label="From">{sender}</Field>}
+                  {accountName && <Field label="Account">{accountName}</Field>}
+                  <Field label="Channel"><ChannelBadge channel={row.channel} /></Field>
+                  {website?.sourceUrl && (
+                    <Field label="Page">
+                      <a href={website.sourceUrl} target="_blank" rel="noopener noreferrer" className="break-all text-purple-700 hover:underline">{website.sourceUrl}</a>
+                    </Field>
+                  )}
+                  {(row.enquiryCount ?? 1) > 1 && row.firstCapturedAt ? (
+                    <>
+                      <Field label="Latest enquiry">{format(new Date(row.capturedAt), "PPpp")} <span className="text-gray-500">· {row.enquiryCount} enquiries</span></Field>
+                      <Field label="First enquiry">{format(new Date(row.firstCapturedAt), "PPpp")}</Field>
+                    </>
+                  ) : (
+                    <Field label="Captured">{format(new Date(row.capturedAt), "PPpp")}</Field>
+                  )}
+                </dl>
+                {row.linked && row.linked.length > 0 && (
+                  <div className="mt-3 rounded-xl border border-black/[0.07] bg-gray-50 p-3">
+                    <p className="text-[12.5px] text-gray-600">The same person also reached you on:</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {row.linked.map(l => (
+                        <button key={l.key} type="button" onClick={() => onSelectRow(l)} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2 py-1 text-[12.5px] shadow-sm hover:bg-purple-50" data-testid={`lead-linked-${l.channel}`}>
+                          <ChannelBadge channel={l.channel} />
+                          <span className="text-gray-500">{format(new Date(l.capturedAt), "d MMM")}</span>
+                        </button>
                       ))}
-                    </dl>
-                  </div>
-                )}
-                {topics.length > 0 && (
-                  <div>
-                    {journeyAnswers.length > 0 && <p className="mb-1.5 text-[12px] text-gray-500">Interests</p>}
-                    <div className="flex flex-wrap gap-1.5">
-                      {topics.map((t, i) => <span key={i} className="rounded-full bg-purple-50 px-2.5 py-0.5 text-[12.5px] text-purple-700">{t}</span>)}
                     </div>
                   </div>
                 )}
-                {website?.message && <p className="mt-2 text-[14px] text-gray-700">{website.message}</p>}
-                {extractedEntries.length > 0 && (
-                  <dl className="grid grid-cols-[130px_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13.5px]">
-                    {extractedEntries.map(([k, v]) => <Field key={k} label={k.replace(/_/g, " ")}>{String(v)}</Field>)}
-                  </dl>
-                )}
-              </Section>
-            )}
+              </Fold>
 
-            {website && showCalls && (
-              <div className="mt-6">
-                <LeadCallsPanel leadId={website.id} leadName={website.name} phone={website.phone} />
-              </div>
-            )}
+              <Fold title="CRM sync" summary={<span className={crmProblem ? "text-red-600" : undefined}>{crmSummary}</span>} defaultOpen={crmProblem} testId="lead-fold-crm">
+                {targets.length === 0 ? (
+                  <p className="text-[13.5px] text-gray-500">{noCrmText}</p>
+                ) : (
+                  <ul className="overflow-hidden rounded-xl border border-black/[0.07] bg-white">
+                    {targets.map(t => {
+                      const look = crmStatusLook(t.state?.status);
+                      const syncing = isSyncing(t.crm);
+                      const showError = t.state?.error && t.state.status !== "synced";
+                      return (
+                        <li key={t.crm} className="border-t border-black/[0.06] px-4 py-3 first:border-t-0" data-testid={`lead-crm-${t.crm}`}>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[14px] font-medium text-gray-900">{t.label}</span>
+                            <span className={`rounded-md px-1.5 py-0.5 text-[11.5px] font-semibold ${look.className}`}>{syncing ? "Sending…" : look.text}</span>
+                            {t.state?.syncedAt && t.state.status === "synced" && (
+                              <span className="text-[12px] text-gray-500">{format(new Date(t.state.syncedAt), "d MMM, h:mm a")}</span>
+                            )}
+                            {t.canSync && (
+                              <Button size="sm" className="ml-auto h-7 px-2.5 text-[12.5px]" variant={t.state?.status ? "outline" : "default"} onClick={() => onSync(t.crm)} disabled={syncing} data-testid={`button-sheet-sync-${t.crm}`}>
+                                {syncing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
+                                {syncButtonLabel(t)}
+                              </Button>
+                            )}
+                          </div>
+                          {t.state?.crmLeadId && (
+                            <div className="mt-1.5 flex items-center gap-1.5 text-[12px] text-gray-500">
+                              {t.label} ID <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono">{t.state.crmLeadId}</code>
+                              <button type="button" aria-label={`Copy ${t.label} ID`} onClick={() => copy(t.state!.crmLeadId!, `${t.label} ID`)} className="text-gray-400 hover:text-gray-700"><Copy className="h-3.5 w-3.5" /></button>
+                            </div>
+                          )}
+                          {t.state?.status === "disqualified" && (
+                            <p className="mt-1.5 text-[12.5px] text-amber-700">Not sent because {t.state.error || "the answer did not match the qualifying values"}.</p>
+                          )}
+                          {showError && HELD.includes(t.state?.status ?? "") && (
+                            <p className="mt-1.5 text-[12.5px] text-gray-600">{t.state!.error!.replace(/\.?$/, ".")} Sync now sends it anyway.</p>
+                          )}
+                          {showError && t.state?.status !== "disqualified" && !HELD.includes(t.state?.status ?? "") && (
+                            <p className="mt-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-[12.5px] text-red-700">{formatCrmSyncError(t.state!.error)}</p>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                {syncedFieldLists.map(list => (
+                  <details key={list.crm} className="mt-2 text-[12.5px]" data-testid={`lead-sent-fields-${list.crm}`}>
+                    <summary className="cursor-pointer text-gray-500">Fields sent to {list.label}{list.crm === "meritto" ? " (last send)" : ""}</summary>
+                    <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-lg bg-gray-50 p-3">
+                      {list.fields.map(([k, v]) => (
+                        <div key={k} className="flex gap-2"><span className="min-w-[130px] font-mono text-gray-500">{k}</span><span className="break-all text-gray-800">{v == null ? "—" : String(v)}</span></div>
+                      ))}
+                    </div>
+                  </details>
+                ))}
+              </Fold>
 
-            {(onDelete || showInternalIds) && (
-              <Section title="More">
-                {showInternalIds && (
-                  <p className="text-[12px] text-gray-500">
-                    Lead ID <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono">{row.id}</code>
-                    {website?.conversationId && <> · Conversation <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono">{website.conversationId}</code></>}
-                  </p>
-                )}
-                {onDelete && (
-                  <Button variant="outline" size="sm" className="mt-3 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700" onClick={onDelete}>
-                    <Trash2 className="mr-1.5 h-4 w-4" />Delete lead
-                  </Button>
-                )}
-              </Section>
-            )}
+              {told && (
+                <Fold title="What they told us" defaultOpen={!storyShown} testId="lead-fold-told">
+                  {journeyAnswers.length > 0 && (
+                    <div className="mb-3">
+                      {journey?.journeyName && (
+                        <p className="mb-1.5 flex items-center gap-1 text-[12px] text-gray-500">
+                          <GitBranch className="h-3.5 w-3.5" />
+                          {journey.journeyName}
+                        </p>
+                      )}
+                      <dl className="divide-y divide-gray-100 rounded-lg border border-gray-100">
+                        {journeyAnswers.map((r, i) => (
+                          <div key={i} className="px-3 py-2">
+                            <dt className="text-[12px] text-gray-500">{r.question}</dt>
+                            <dd className="text-[14px] font-medium text-gray-900">{r.answer}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  )}
+                  {topics.length > 0 && (
+                    <div>
+                      {journeyAnswers.length > 0 && <p className="mb-1.5 text-[12px] text-gray-500">Interests</p>}
+                      <div className="flex flex-wrap gap-1.5">
+                        {topics.map((t, i) => <span key={i} className="rounded-full bg-purple-50 px-2.5 py-0.5 text-[12.5px] text-purple-700">{t}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  {website?.message && <p className="mt-2 text-[14px] text-gray-700">{website.message}</p>}
+                  {extractedEntries.length > 0 && (
+                    <dl className="grid grid-cols-[130px_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13.5px]">
+                      {extractedEntries.map(([k, v]) => <Field key={k} label={k.replace(/_/g, " ")}>{String(v)}</Field>)}
+                    </dl>
+                  )}
+                </Fold>
+              )}
+
+              {website && showCalls && !storyShown && (
+                <Fold title="Phone calls" defaultOpen testId="lead-fold-calls">
+                  <LeadCallsPanel leadId={website.id} leadName={website.name} phone={website.phone} />
+                </Fold>
+              )}
+
+              {(onDelete || showInternalIds) && (
+                <Fold title="More">
+                  {showInternalIds && (
+                    <p className="text-[12px] text-gray-500">
+                      Lead ID <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono">{row.id}</code>
+                      {website?.conversationId && <> · Conversation <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono">{website.conversationId}</code></>}
+                    </p>
+                  )}
+                  {onDelete && (
+                    <Button variant="outline" size="sm" className="mt-3 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700" onClick={onDelete}>
+                      <Trash2 className="mr-1.5 h-4 w-4" />Delete lead
+                    </Button>
+                  )}
+                </Fold>
+              )}
+            </div>
           </div>
         )}
       </SheetContent>

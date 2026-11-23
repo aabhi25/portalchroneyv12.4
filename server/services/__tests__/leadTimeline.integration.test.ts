@@ -134,6 +134,13 @@ async function main() {
   expect(askedRow && askedRow.detail?.endsWith(`Asked to be called back on ${readable}.`), "the answered call shows its outcome and a readable callback time", askedRow);
   expect(planned && planned.detail === `They asked to be called back. The AI will call on ${readable}.` && planned.at === callbackAt.toISOString(), "the waiting callback says when the AI will call, at that time", planned);
   expect(!callRows.some((e) => /Not answered/.test(e.detail || "") || /Waiting to call/.test(e.title)), "no call on her timeline says Not answered or Waiting to call", callRows.map((e) => `${e.title} | ${e.detail}`));
+  expect(planned?.upcoming === true && planned.label === "AI calls back", "the waiting callback is marked as coming up", planned);
+  const followUp = tl!.events.find((e) => e.id === `followup:${call.id}`);
+  const shared = tl!.events.find((e) => e.id === `lead:${lead.id}`);
+  const lsq = tl!.events.find((e) => e.id === `crm:leadsquared:${lead.id}`);
+  expect(followUp?.parentId === `call:${call.id}` && /^WhatsApp follow-up “online_mba” sent · delivered, read$/.test(followUp.label || ""), "the follow-up is a line under its call", followUp);
+  expect(shared?.parentId === `conv:${conv.id}` && shared.label === "Shared their name, phone number" && lsq?.parentId === `conv:${conv.id}`, "details shared and the CRM sync are lines under the website chat", { shared, lsq });
+  expect(tl!.events.find((e) => e.id === `call:${call.id}`)?.tag?.label === "Interested" && tl!.events.find((e) => e.id === `call:${call.id}`)?.meta === "3m 00s", "the call's result is a tag with its talk time");
   const ctxCallback = await svc.recentCallContext(B, `91${phone}`);
   expect(ctxCallback.includes(`called back on ${readable} (Asia/Kolkata time)`) && !/T\d\d:\d\d:\d\d/.test(ctxCallback), "WhatsApp's call context gives the callback time in the business's time zone", ctxCallback);
 
