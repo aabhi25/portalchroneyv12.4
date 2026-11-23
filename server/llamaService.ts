@@ -576,13 +576,16 @@ export class LlamaService {
     return createOpenAI({ timeout: OPENAI_TIMEOUTS.chat, apiKey });
   }
 
-  // Gemini 2.5+ are "thinking" models — they reject temperature != 1 with a 400 error.
-  // Omitting temperature entirely lets the API use its default (1), which is safe for all models.
+  /** API keys whose account refused the priority tier (phone calls then use the standard one). */
+  private readonly noPriorityTier = new Set<string>();
+
   private phoneCallModel(resolved: { model: string; provider: string }): string {
     if (resolved.provider !== 'openai' || resolved.model !== DEFAULT_MODEL) return resolved.model;
     return process.env.PHONE_CALL_MODEL || PHONE_CALL_MODEL;
   }
 
+  // Gemini 2.5+ are "thinking" models — they reject temperature != 1 with a 400 error.
+  // Omitting temperature entirely lets the API use its default (1), which is safe for all models.
   private isThinkingModel(model: string): boolean {
     return /gemini-2\.[5-9]|gemini-[3-9]\./i.test(model);
   }
@@ -2373,7 +2376,11 @@ This LEAD COLLECTION block takes precedence over any business instruction about 
     const historyChars = messages.slice(1, -2).reduce((n, m) => n + String((m as any).content || '').length, 0);
     console.log(`[LLM Prompt] ${model} | system ${firstSystemContent.length} chars | history ${messages.length - 3} msgs/${historyChars} chars | final ${finalOverride.length} chars | tools ${tools.length} (${JSON.stringify(tools).length} chars)`);
 
-    const stream = await openai.chat.completions.create({
+    // Phone calls ask for OpenAI's priority tier: the first word came ~0.17 s sooner on the same
+    // call turns (median 0.64 s against 0.81 s, 2026-11-23). An account whose key can't use it is
+    // remembered and served on the standard tier.
+    const priority = !!turnOptions?.phoneCompact && resolved.provider === 'openai' && process.env.PHONE_PRIORITY_TIER !== '0' && !this.noPriorityTier.has(apiKey || '');
+    const request = (tier: boolean) => openai.chat.completions.create({
       model: model,
       messages: messages,
       tools: tools.length > 0 ? tools : undefined,
@@ -2381,9 +2388,19 @@ This LEAD COLLECTION block takes precedence over any business instruction about 
       ...(this.isThinkingModel(model) ? {} : { temperature: 0.7 }),
       max_tokens: 1000,
       stream: true,
+      ...(tier ? { service_tier: 'priority' as const } : {}),
     }, {
       timeout: 120000, // 2-minute timeout for streaming responses (can be longer than 30s)
     });
+    let stream: Awaited<ReturnType<typeof request>>;
+    try {
+      stream = await request(priority);
+    } catch (error: any) {
+      if (!priority || !(Number(error?.status) >= 400 && Number(error?.status) < 500) || !/service_tier|priority/i.test(String(error?.message || ''))) throw error;
+      this.noPriorityTier.add(apiKey || '');
+      console.warn(`[LlamaService] Priority tier refused (${String(error?.message || '').slice(0, 120)}) — standard tier for this key`);
+      stream = await request(false);
+    }
 
     for await (const chunk of stream) {
       yield chunk;

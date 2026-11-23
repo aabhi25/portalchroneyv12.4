@@ -267,9 +267,9 @@ function isShortPhoneAnswer(msg: string): boolean {
 /** Phone calls: longest wait for the knowledge-search query embedding before keyword-only search. */
 const PHONE_EMBED_WAIT_MS = 800;
 // The caller told us something rather than asked ("I'm in sales, three years now"): the business
-// profile is already in the prompt and the keyword search still runs, so the meaning search gets
-// only this long before the reply starts without it.
-const PHONE_EMBED_WAIT_STATEMENT_MS = 250;
+// profile is already in the prompt and the keyword search still runs, so the reply doesn't wait
+// for the meaning search at all (it still finishes into the cache for the next turn).
+const PHONE_EMBED_WAIT_STATEMENT_MS = 0;
 // A question with no English words at all: the keyword search can't match English content, so
 // the meaning search is worth a little more waiting (live call 2026-10-24: 801 ms, cut off).
 const PHONE_EMBED_WAIT_NON_LATIN_MS = 1500;
