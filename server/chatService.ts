@@ -286,7 +286,7 @@ function withSpokenOpener(instructions: string, opener: string | null, callLangu
   // One language for the whole call, from what the caller speaks (seen: Hindi replies to an
   // English caller after a one-word "Sure." / a misheard "मोटर").
   if (callLanguage === 'en') out += `\n\nLANGUAGE OF THIS CALL: English. Reply in ENGLISH words only — not Hindi, and not Hindi written in English letters (no "aap", "ji", "achha", "koi baat nahi") — even when their message is very short, written in Hindi script, or your own earlier replies slipped into Hindi. Switch only if they speak a full sentence in Hindi or ask you to.`;
-  if (callLanguage === 'hi') out += `\n\nLANGUAGE OF THIS CALL: Hindi. Reply in everyday spoken Hindi written in DEVANAGARI — never Hindi in English letters ("Koi baat nahi ji" ✗ → "कोई बात नहीं जी" ✓), even when their message was in English letters or English words ("No, leave it. Thank you.") — keeping business words (insurance, plan, cover, premium, claim) in English letters. Switch to English only if they speak full English sentences or ask you to.`;
+  if (callLanguage === 'hi') out += `\n\nLANGUAGE OF THIS CALL: Hindi. Reply in everyday spoken Hindi written in DEVANAGARI — never Hindi in English letters ("Koi baat nahi ji" ✗ → "कोई बात नहीं जी" ✓), even when their message was in English letters or English words ("No, leave it. Thank you.") — keeping the words people say in English (course, fees, admission, job, plan, online, EMI) in English letters. Short everyday sentences, not written Hindi: no "रुचि रखते हैं", "क्षेत्र", "लक्ष्यों", "संभावनाओं", "प्रक्रिया". Switch to English only if they speak full English sentences or ask you to.`;
   if (opener) out += `\n\nYOU HAVE ALREADY SAID ALOUD, as the start of this reply: "${opener}"\nYour reply is spoken right after those words, as the same breath — so it must begin with what comes AFTER them. Never write those words again, not even as the subject of your sentence — write only what follows them. No reaction, greeting or thanks either.`;
   return out;
 }
@@ -5088,7 +5088,7 @@ Do NOT mention tracking, delivery status, estimated arrival, or shipment updates
           [identityBlock, continuationBlock, this.languageBlockFor(context), context.phoneCall ? withSpokenOpener(context.phoneCall.instructions, null, context.phoneCall.callLanguage?.() ?? null) : (context.voiceResponseStyle ? VOICE_RESPONSE_STYLE_BLOCK : ''), photoTurnSeesPhoto ? k12Turn.photoRuleWithPhoto : k12Turn.rule].filter(Boolean).join('\n\n'),
           context.replyLanguage?.promptSource,
           // K12 photo question: the answering model gets the photo itself (this turn only).
-          photoTurnSeesPhoto ? { imageDataUrl: context.imageDataUrl, textOnlyRule: { from: k12Turn.photoRuleWithPhoto, to: k12Turn.rule } } : undefined
+          photoTurnSeesPhoto ? { imageDataUrl: context.imageDataUrl, textOnlyRule: { from: k12Turn.photoRuleWithPhoto, to: k12Turn.rule } } : context.phoneCall ? { phoneCall: true } : undefined
         )) {
           finalContent += token;
           streamedTokens = true;

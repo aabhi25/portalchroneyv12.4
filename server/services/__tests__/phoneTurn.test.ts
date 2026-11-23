@@ -125,6 +125,16 @@ async function main() {
   const withHistory = buildPhoneInstructions({ direction: 'outbound', businessName: 'ArhamSecure', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: false, priorHistory: 'Asked about EMI on WhatsApp.' });
   expect(/what they already did with us .*Asked about EMI on WhatsApp\..*don't ask again what they already told us/.test(withHistory), "an AI call is told what the lead already did on other channels");
   expect(/Never say the business does NOT have or offer something/.test(withPurpose), 'the AI may not say "we don\'t offer X" without the knowledge saying so');
+  // Real calls 2026-11-23 (an education account): brochure answers, "I'll need your name and mobile number",
+  // "the team will reach out" for a call the AI itself makes, insurance examples in every account's rules.
+  const { PHONE_CORE_PROMPT } = await import('../calling/phonePrompt');
+  const lead = buildPhoneInstructions({ direction: 'outbound', businessName: 'Symbiosis Online', transferAvailable: false, maxCallMinutes: 5, timezone: 'Asia/Kolkata', leadCaptureOn: false, customerName: 'Abhi', customerPhone: '+919000000003' });
+  expect(/name: Abhi \(you already have it — never ask their name/.test(lead) && /NEVER ask for their phone/.test(lead), 'the AI is told it has the name and the number, and never to ask for them');
+  expect(/A call back at a later time is made by YOU/.test(lead) && /agree a day and a rough time first/.test(lead), 'a call back is promised as "I\'ll call you", at an agreed time');
+  expect(/how you got their number/.test(lead) && /they enquired with the business/.test(lead), '"how did you get my number" has a plain answer');
+  expect(/No brochure sentences/.test(lead) && /written for its website chat/.test(lead) && /about 25 words/.test(lead), 'no brochure talk, website-chat instructions about contact details are ignored, ~25 words');
+  expect(!/insurance|premium|claim|quotes|gaadi|parents|Third-party/i.test(lead), 'the phone rules carry no insurance examples', (lead.match(/[^.\n]*(insurance|premium|claim|quotes|gaadi|parents|Third-party)[^.\n]*/i) || [])[0]);
+  expect(/one or two short sentences/.test(PHONE_CORE_PROMPT) && /No brochure language/.test(PHONE_CORE_PROMPT) && PHONE_CORE_PROMPT.length < 2500 && !/product cards|journey|get_products/i.test(PHONE_CORE_PROMPT), 'calls get a short phone core, not the website chat rules', PHONE_CORE_PROMPT.length);
   const { isWrappingUp } = await import('../calling/phonePrompt');
   expect(['Okay, thank you.', 'Thanks a lot', "Theek hai, main soch ke batata hoon", 'ठीक है, थैंक यू', "That's all for now", 'धन्यवाद जी'].every((t) => isWrappingUp(t)), 'winding down is recognised');
   expect(!['Not interested, thanks.', 'Call me tomorrow, thank you', "Please don't call me again, thanks", 'Can I talk to a person? Thanks', 'Okay.', 'Tell me about the fees', 'नहीं चाहिए, धन्यवाद'].some((t) => isWrappingUp(t)), 'a no / busy / do-not-call / wants a person / a question is not a wrap-up');

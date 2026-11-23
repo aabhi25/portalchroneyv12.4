@@ -7,6 +7,7 @@ import { withoutUsageTracking } from "./lib/requestContext";
 import { assistantAskedForNameIn, emailInMessage, isDecline, isValidLeadName, nameStatedInHistory } from './services/leadCapture/detectors';
 import { selectInstructionsForMessage } from './services/chatContext/customInstructions';
 import { K12_PHOTO_MAX_TOKENS, K12_PHOTO_TIMEOUT_MS, k12PhotoModels } from './services/k12TurnRules';
+import { PHONE_CORE_PROMPT } from './services/calling/phonePrompt';
 
 // Using GPT-4o-mini for customer-facing chat to ensure reliable:
 // - Language matching (English/Hindi/Hinglish)
@@ -14,6 +15,14 @@ import { K12_PHOTO_MAX_TOKENS, K12_PHOTO_TIMEOUT_MS, k12PhotoModels } from './se
 // - Proper conversation flow
 // GPT-4.1 nano was too limited and caused user frustration
 const DEFAULT_MODEL = 'gpt-4o-mini';
+/**
+ * Phone calls answer with this model when the account is on the default one: on real calls
+ * (2026-11-23) gpt-4o-mini wrote 15-second brochure answers, asked for a number it was already
+ * calling and repeated questions despite the phone rules; this one keeps to them at about the
+ * same time to first word. PHONE_CALL_MODEL overrides it; Master AI settings with their own
+ * model or provider are left alone.
+ */
+const PHONE_CALL_MODEL = 'gpt-4.1-mini';
 
 interface ConversationMessage {
   role: 'system' | 'user' | 'assistant';
@@ -529,6 +538,8 @@ export interface StreamTurnOptions {
 
 /** This turn only, for the reply that follows a tool call (continueToolConversationStream). */
 export interface ContinuationTurnOptions {
+  /** A live phone call: the reply after a call tool uses the phone model (see PHONE_CALL_MODEL). */
+  phoneCall?: boolean;
   /**
    * K12 photo question: the student's photo as a data URL. It is attached to the student's latest
    * message so the answering model sees the photo itself, and the reply gets the photo model,
@@ -567,6 +578,11 @@ export class LlamaService {
 
   // Gemini 2.5+ are "thinking" models — they reject temperature != 1 with a 400 error.
   // Omitting temperature entirely lets the API use its default (1), which is safe for all models.
+  private phoneCallModel(resolved: { model: string; provider: string }): string {
+    if (resolved.provider !== 'openai' || resolved.model !== DEFAULT_MODEL) return resolved.model;
+    return process.env.PHONE_CALL_MODEL || PHONE_CALL_MODEL;
+  }
+
   private isThinkingModel(model: string): boolean {
     return /gemini-2\.[5-9]|gemini-[3-9]\./i.test(model);
   }
@@ -1425,9 +1441,11 @@ ${extraFinalBlock.trim()}` : ''}`;
     languageSource?: PreferredLanguageSource,
     turn?: ContinuationTurnOptions
   ): AsyncGenerator<string> {
-    const { openai, model: baseModel, provider, messages: preparedMessages } = await this._prepareContinuationContext(
+    const prepared = await this._prepareContinuationContext(
       messages, tools, personality, apiKey, businessAccountId, preferredLanguage, responseLength, extraFinalBlock, languageSource
     );
+    const { openai, provider, messages: preparedMessages } = prepared;
+    const baseModel = turn?.phoneCall ? this.phoneCallModel(prepared) : prepared.model;
 
     // K12 photo question: the answering model looks at the photo itself (the read text stays in
     // the message as an aid), on a stronger model with more room — for this turn only.
@@ -1538,7 +1556,9 @@ ${extraFinalBlock.trim()}` : ''}`;
     promptOptions?: StreamPromptOptions,
     turnOptions?: StreamTurnOptions
   ) {
-    const { openai, model } = await this.resolveMasterConfig(apiKey);
+    const resolved = await this.resolveMasterConfig(apiKey);
+    const openai = resolved.openai;
+    const model = turnOptions?.phoneCompact ? this.phoneCallModel(resolved) : resolved.model;
     void leadTrainingConfig; void existingLead; // lead rules arrive pre-computed in turnOptions.leadBlock
 
     // OPTIMIZATION: Fast-path for simple English-only greetings (reduces response time from 7s to ~1s)
@@ -1699,7 +1719,7 @@ ${extraFinalBlock.trim()}` : ''}`;
       : '';
 
 
-    const systemPrompt = `═══════════════════════════════════════════════════════════════════════════
+    const chatSystemPrompt = `═══════════════════════════════════════════════════════════════════════════
 1. IDENTITY
 ═══════════════════════════════════════════════════════════════════════════
 
@@ -2010,6 +2030,8 @@ OTHER RULES:
 8. AUTONOMOUS AGENT: You are a sales agent, not a passive bot. Always move conversations forward strategically.
 
 ${this.getJourneyGuidance()}`;
+    // Phone calls get their own short core instead of the chat rules (calling/phonePrompt.ts).
+    const systemPrompt = turnOptions?.phoneCompact ? PHONE_CORE_PROMPT : chatSystemPrompt;
 
     // Add FINAL override to ensure language matching and product display rules
     console.log(`[Language Matching] User message: "${userMessage}"`);
@@ -2204,7 +2226,7 @@ ${starterQAContext ? `
 ${starterQAContext}
 ` : ''}
 ${ragContextForOverride ? ragContextForOverride + '\n' : ''}${!leadBlocksAnswer && !otpBlock && preFetchedFaqSection ? preFetchedFaqSection + '\n' : ''}
-${firstRule}
+${firstRule.startsWith('1. TOOL USAGE') && !tools.some((t: any) => t?.function?.name === 'get_faqs') ? '1. Answer from the BUSINESS KNOWLEDGE above and what was said on this call.' : firstRule}
 
 ${turnOptions?.voiceStyleBlock?.includes('LANGUAGE OF THIS CALL') ? '' : languageSection}
 
@@ -2215,7 +2237,7 @@ ${turnOptions?.voiceStyleBlock?.includes('LANGUAGE OF THIS CALL') ? '' : languag
 ${turnOptions?.identityBlock ? `
 ${turnOptions.identityBlock}
 ` : ''}${extractedCustomInstructions ? `
-⚡ BUSINESS CUSTOM INSTRUCTIONS (they override the rules above for tone and content — EXCEPT when to ask for contact details, which only the LEAD COLLECTION block below decides, and the phone-call rules at the end):
+⚡ BUSINESS INSTRUCTIONS (written for the business's website chat; use them for facts and tone — the phone-call rules at the end decide how you speak, how long, and what you ask for. Ignore anything here about collecting a name, mobile number or contact details, forms, links or a guided journey):
 ${extractedCustomInstructions}` : ''}${leadSection ? `
 
 ${leadSection}${extractedCustomInstructions ? `

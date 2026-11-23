@@ -35,7 +35,7 @@ import { aiFillerChoice, type FillerChoice } from './services/voice/fillerPicker
 import { colloquialHindi, englishFromDevanagari } from './services/voice/colloquialHindi';
 import { aiPhoneOpener, dropEchoedClause, firstWord } from './services/voice/phoneOpener';
 import { isBareAcknowledgement } from './services/chatContext/smallTalk';
-import { PhoneAnswerShaper } from './services/voice/phoneAnswerShaper';
+import { PhoneAnswerShaper, callerAsked, wantsDetail } from './services/voice/phoneAnswerShaper';
 import { soundsUnfinished, declinedToTalk, isClosingTurn, isPromiseOnly, isUnsureCaller, isWrappingUp, phoneTurnHints, questionsIn, repeatsAskedQuestion, stripContinuationStart } from './services/calling/phonePrompt';
 import { createOpenAiTtsProvider, OPENAI_TTS_MODEL, type OpenAiSpeechClient } from './services/voice/openaiTts';
 import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
@@ -4759,14 +4759,23 @@ Never infer intent from a single contained word. For example, "What is stop moti
     let stripReaction = false;
     // Video calls and phone calls (AI Calling): silence feels like a dropped line there.
     let fillerLang = (conversation.avatar || conversation.phone) ? fillerLanguage(userTranscript, this.voiceFillerHint(conversation)) : null;
+    // Phone: Hindi that speech-to-text wrote in Urdu script is still Hindi (the same spoken language).
+    if (conversation.phone && !fillerLang && /[؀-ۿ]/.test(userTranscript) && ['', 'auto'].includes(String(this.voiceFillerHint(conversation) || '').toLowerCase())) fillerLang = 'hi';
 
     // Until the caller has shown their language, their first clear reply sets it ("हाँ, बताइए।" →
     // Hindi, "Sure." → English); the greeting alone only gives the starting guess.
     if (conversation.phone && fillerLang && !conversation.callLangFromCaller) {
-      const deva = (userTranscript.match(/[ऀ-ॿ]/g) || []).length;
+      // Hindi is sometimes written in Urdu script by speech-to-text (real call 2026-11-23: "آ یہ ضروری ہے بتانا؟"
+      // for "क्या यह ज़रूरी है बताना?", answered in English): on a call it is the same spoken language.
+      const deva = (userTranscript.match(/[ऀ-ॿ؀-ۿ]/g) || []).length;
       const latin = (userTranscript.match(/[A-Za-z]/g) || []).length;
       if ((deva > 0 && latin === 0) || (latin > 0 && deva === 0)) {
         conversation.lastFillerLang = fillerLang;
+        conversation.callLangFromCaller = true;
+      }
+      // Hindi with an English word or two in it ("हाँ, MBA के लिए देख रहा था।") is Hindi.
+      else if (deva > latin * 2) {
+        conversation.lastFillerLang = 'hi';
         conversation.callLangFromCaller = true;
       }
     }
@@ -4776,13 +4785,18 @@ Never infer intent from a single contained word. For example, "What is stop moti
     // 2026-10-17) turned a Hindi call English for three replies.
     else if (conversation.phone && fillerLang) {
       const words = userTranscript.trim().split(/\s+/).filter(Boolean).length;
-      const deva = (userTranscript.match(/[ऀ-ॿ]/g) || []).length;
+      // Hindi is sometimes written in Urdu script by speech-to-text (real call 2026-11-23: "آ یہ ضروری ہے بتانا؟"
+      // for "क्या यह ज़रूरी है बताना?", answered in English): on a call it is the same spoken language.
+      const deva = (userTranscript.match(/[ऀ-ॿ؀-ۿ]/g) || []).length;
       const latin = (userTranscript.match(/[A-Za-z]/g) || []).length;
       const mostly = fillerLang === 'hi' ? deva > latin : deva === 0 && latin > 0;
       if (words >= 4 && mostly && fillerLang !== conversation.lastFillerLang && !GREETING_LIKE.test(userTranscript)) {
         conversation.phoneLangSwitchVotes = (conversation.phoneLangSwitchVotes ?? 0) + 1;
-        if (conversation.phoneLangSwitchVotes >= 2) {
-          console.log(`[VoiceTurn] Call language → ${fillerLang} (two sentences in a row)`);
+        // A full Hindi sentence on an English call is answered in Hindi at once (real calls,
+        // 2026-10-24: a question asked in Hindi got its first answer in English); English still
+        // needs two, because a misheard Hindi line usually comes out as an English sentence.
+        if (conversation.phoneLangSwitchVotes >= (fillerLang === 'hi' ? 1 : 2)) {
+          console.log(`[VoiceTurn] Call language → ${fillerLang} (${fillerLang === 'hi' ? 'a full Hindi sentence' : 'two sentences in a row'})`);
           conversation.lastFillerLang = fillerLang;
           conversation.phoneLangSwitchVotes = 0;
         }
@@ -5062,7 +5076,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     // A refusal / goodbye / do-not-call reply asks nothing (seen: "आपको किस तरह की insurance की
     // तलाश है?" after "interest nahi hai"); a call-back request may still ask for the time.
     // A "not now" to "is this a good time?" may ask when to call back.
-    const shaper = isPhone ? new PhoneAnswerShaper({ noQuestions: closingTurn && !declinedToTalk(userTranscript, turnStartAssistantText) && !/call|kal|baad|later|tomorrow|कॉल|कल|बाद/i.test(userTranscript) }) : null;
+    const shaper = isPhone ? new PhoneAnswerShaper({ noQuestions: closingTurn && !declinedToTalk(userTranscript, turnStartAssistantText) && !/call|kal|baad|later|tomorrow|कॉल|कल|बाद/i.test(userTranscript), relaxed: wantsDetail(userTranscript), callerAsked: callerAsked(userTranscript) }) : null;
     const emitShaped = (segment: string) => {
       if (!shaper) { emitSegment(segment); return; }
       for (const s of shaper.push(segment)) emitSegment(s);

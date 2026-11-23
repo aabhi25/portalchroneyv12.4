@@ -16,6 +16,13 @@ const d = colloquialHindi("Motor insurance में आमतौर पर आ�
 expect(d === "Motor insurance में usually आपको ये कवरेज मिलते हैं। हम आपकी ज़रूरतों के हिसाब से अलग-अलग plans देते हैं। क्या आप कुछ खास जानकारी चाहते हैं?", "live call 2026-10-16: निम्नलिखित / आमतौर पर / के अनुसार / पेश करते / विशेष", d);
 const e = colloquialHindi("हमारे विशेषज्ञ लाभार्थी के बारे में बताएंगे।");
 expect(e === "हमारे विशेषज्ञ लाभार्थी के बारे में बताएंगे।", "whole words only (विशेषज्ञ, लाभार्थी untouched)", e);
+// Real calls 2026-11-12 / 2026-11-23 (an education account): textbook Hindi on the phone.
+const f = colloquialHindi("अच्छा, तो आप MBA प्रोग्राम में रुचि रखते हैं। आप किस क्षेत्र में विशेष रुचि रखते हैं?");
+expect(f === "अच्छा, तो आप MBA प्रोग्राम देख रहे हैं। आप किस field में खास interest रखते हैं?", "रुचि / क्षेत्र → everyday words", f);
+const g = colloquialHindi("मुझे खेद है, लेकिन अभी फीस की सही जानकारी नहीं है। यह कामकाजी पेशेवरों के लिए लचीला है और दाखिले की प्रक्रिया आसान है।");
+expect(g === "Sorry, अभी फीस की सही जानकारी नहीं है। यह working professionals के लिए flexible है और admission process आसान है।", "खेद / कामकाजी पेशेवरों / लचीला / दाखिले की प्रक्रिया", g);
+const h = colloquialHindi("करियर के लक्ष्यों और करियर संभावनाओं के बारे में, हमारे प्रोग्राम में करियर सपोर्ट सेवाएँ उपलब्ध हैं।");
+expect(h === "career goals और करियर मौकों के बारे में, हमारे प्रोग्राम में करियर सपोर्ट services available हैं।", "लक्ष्यों / संभावनाओं / सेवाएँ उपलब्ध", h);
 const en = "We have health and motor insurance plans - which one interests you?";
 expect(colloquialHindi(en) === en, "English answers untouched");
 expect(colloquialHindi("") === "", "empty stays empty");
