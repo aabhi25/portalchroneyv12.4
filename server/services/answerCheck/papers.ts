@@ -1,7 +1,7 @@
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../../db";
 import { answerCheckImages, answerChecks, answerMarkingSchemes, answerPapers, type AnswerMarkingSchemeRow, type AnswerPaperRow } from "@shared/schema";
-import { applyJudgement, type PracticeLevel } from "@shared/answerCheck";
+import { applyJudgement, pageOrderByQuestion, renumberPages, type PracticeLevel } from "@shared/answerCheck";
 import { ANSWER_CHECK_MODEL, AnswerCheckAiError, type AnswerCheckAi } from "./ai";
 import {
   assembleAnswers,
@@ -16,7 +16,7 @@ import {
   readPaperUserText,
   type PaperQuestion,
 } from "./prompts";
-import { checkView, contextOf, currentScheme, enqueue, answerCheckAi, runCheck, schemeOf, STALE_AFTER_MS } from "./engine";
+import { checkView, contextOf, currentScheme, effectiveStatus, enqueue, answerCheckAi, redrawMarkedSheet, runCheck, schemeOf, STALE_AFTER_MS } from "./engine";
 import { deletePaperFiles, imageBytes, listPaperImages, readerPhotos, saveImage, toDataUrl } from "./images";
 import { renderPracticeSheet } from "./drawing";
 import { listQuestionPictures } from "./pictures";
@@ -241,6 +241,17 @@ export async function runPaper(paperId: string): Promise<void> {
     // Answer-like parts no question claimed: a "not attempted" may really be one of them.
     const unplaced = unplacedAnswerParts(matching).length > 0;
 
+    // The pages go in question order (Q1's page first), unless someone arranged them by hand.
+    const arranged = (paper.reading as any)?.arranged === "manual" ? "manual" : "auto";
+    const order = arranged === "auto" && pageBytes.length === pageRows.length ? pageOrderByQuestion(pageRows.length, read.parts, matching.answers) : [];
+    if (!inOrder(order)) {
+      await db.transaction(async tx => {
+        for (let i = 0; i < order.length; i++) await tx.update(answerCheckImages).set({ position: i }).where(eq(answerCheckImages.id, pageRows[order[i] - 1].id));
+      });
+      read.parts = movedParts(read.parts, order);
+      matching.answers = movedAnswers(matching.answers, order);
+    }
+
     // 3. One check per question (a re-read replaces the earlier ones).
     await db.delete(answerChecks).where(eq(answerChecks.paperId, paperId));
     const practice = (paper.practice as any)?.answers as Array<{ number: string; level: string; text: string; expectedMarks: number; why: string }> | undefined;
@@ -282,7 +293,7 @@ export async function runPaper(paperId: string): Promise<void> {
     }
     await db.update(answerPapers).set({
       status: "checked",
-      reading: { parts: read.parts, blank: read.blank, notes: read.notes, pages: pageBytes.length } as any,
+      reading: { parts: read.parts, blank: read.blank, notes: read.notes, pages: pageBytes.length, arranged } as any,
       matching: matching as any,
       costUsd: String(priorCost + ai.costUsd()),
       durationMs: Date.now() - started,
@@ -313,6 +324,90 @@ export async function rerunPaper(businessAccountId: string, paperId: string): Pr
   const [row] = await db.update(answerPapers).set({ status: "reading", error: null, updatedAt: new Date() }).where(eq(answerPapers.id, paperId)).returning();
   enqueue(() => runPaper(paperId));
   return row;
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** An answer's pages are listed first to last; a part of the sheet keeps its pages as it reads. */
+const answerPages = (pages: unknown, order: number[]) => renumberPages(pages, order).sort((a, b) => a - b);
+const movedParts = (xs: any, order: number[]) => (Array.isArray(xs) ? xs.map((x: any) => ({ ...x, pages: renumberPages(x?.pages, order) })) : xs);
+const movedAnswers = (xs: any, order: number[]) => (Array.isArray(xs) ? xs.map((x: any) => ({ ...x, pages: answerPages(x?.pages, order) })) : xs);
+
+async function pageIds(tx: Tx | typeof db, paperId: string): Promise<string[]> {
+  const rows = await tx.select({ id: answerCheckImages.id }).from(answerCheckImages)
+    .where(and(eq(answerCheckImages.paperId, paperId), eq(answerCheckImages.kind, "paper_page")))
+    .orderBy(asc(answerCheckImages.position));
+  return rows.map(r => r.id);
+}
+
+const inOrder = (order: number[]) => order.every((p, i) => p === i + 1);
+
+/**
+ * Puts a checked sheet's pages in `order` (their page numbers, in the new order). The marks stay;
+ * the page numbers kept with the reading and with each answer follow their pages.
+ */
+async function movePages(tx: Tx, paper: AnswerPaperRow, ids: string[], order: number[], arranged: "auto" | "manual"): Promise<AnswerPaperRow> {
+  const reading = (paper.reading as any) ?? { parts: [], blank: false, notes: "", pages: ids.length };
+  const matching = paper.matching as any;
+  if (!inOrder(order)) {
+    for (let i = 0; i < order.length; i++) await tx.update(answerCheckImages).set({ position: i }).where(eq(answerCheckImages.id, ids[order[i] - 1]));
+    const checks = await tx.select({ id: answerChecks.id, reading: answerChecks.reading }).from(answerChecks).where(eq(answerChecks.paperId, paper.id));
+    for (const c of checks) {
+      const r = c.reading as any;
+      if (Array.isArray(r?.pages)) await tx.update(answerChecks).set({ reading: { ...r, pages: answerPages(r.pages, order) } }).where(eq(answerChecks.id, c.id));
+    }
+  }
+  const [row] = await tx.update(answerPapers).set({
+    reading: { ...reading, parts: movedParts(reading.parts, order), arranged },
+    ...(matching ? { matching: { ...matching, answers: movedAnswers(matching.answers, order) } } : {}),
+  }).where(eq(answerPapers.id, paper.id)).returning();
+  return row;
+}
+
+/** Draws a sheet's marked answers again after its pages moved. */
+function redrawMarked(paperId: string) {
+  enqueue(async () => {
+    const checks = await db.select({ id: answerChecks.id }).from(answerChecks).where(eq(answerChecks.paperId, paperId));
+    for (const c of checks) await redrawMarkedSheet(c.id).catch(err => console.warn("[Answer Check] marked sheet not redrawn:", err?.message || err));
+  });
+}
+
+/** Arranges a sheet checked before pages were put in question order, the first time it is opened. */
+export async function arrangeOnce(paper: AnswerPaperRow): Promise<AnswerPaperRow> {
+  if (paper.status !== "checked" || !paper.reading || !paper.matching || (paper.reading as any).arranged) return paper;
+  const { row, moved } = await db.transaction(async tx => {
+    const [row] = await tx.select().from(answerPapers).where(eq(answerPapers.id, paper.id)).for("update");
+    if (!row || row.status !== "checked" || !row.reading || (row.reading as any).arranged) return { row, moved: false };
+    const running = await tx.select({ id: answerChecks.id }).from(answerChecks).where(and(eq(answerChecks.paperId, paper.id), eq(answerChecks.status, "checking")));
+    if (running.length) return { row, moved: false };
+    const ids = await pageIds(tx, paper.id);
+    const order = pageOrderByQuestion(ids.length, (row.reading as any).parts ?? [], (row.matching as any)?.answers ?? []);
+    return { row: await movePages(tx, row, ids, order, "auto"), moved: !inOrder(order) };
+  });
+  if (moved) redrawMarked(paper.id);
+  return row ?? paper;
+}
+
+/**
+ * Puts a sheet's pages in the order someone chose (their image ids); it is kept when the sheet is
+ * read again. With `checkAgain` the sheet is then read and marked from scratch.
+ */
+export async function arrangePages(businessAccountId: string, paperId: string, imageIds: string[], opts: { checkAgain?: boolean } = {}): Promise<AnswerPaperRow | null> {
+  const done = await db.transaction(async tx => {
+    const [paper] = await tx.select().from(answerPapers).where(and(eq(answerPapers.id, paperId), eq(answerPapers.businessAccountId, businessAccountId))).for("update");
+    if (!paper) return null;
+    const checks = await tx.select({ status: answerChecks.status, updatedAt: answerChecks.updatedAt }).from(answerChecks).where(eq(answerChecks.paperId, paperId));
+    const status = paperStatus(paper, checks.map(c => ({ status: effectiveStatus(c) })));
+    if (status === "writing" || status === "reading" || status === "checking") throw new PaperError("The sheet is being checked. Arrange its pages when that is done.");
+    const ids = await pageIds(tx, paperId);
+    if (imageIds.length !== ids.length || new Set(imageIds).size !== ids.length || !imageIds.every(id => ids.includes(id))) throw new PaperError("The pages have changed. Reload the page and arrange them again.");
+    const order = imageIds.map(id => ids.indexOf(id) + 1);
+    return { row: await movePages(tx, paper, ids, order, "manual"), moved: !inOrder(order) };
+  });
+  if (!done) return null;
+  if (opts.checkAgain) return rerunPaper(businessAccountId, paperId);
+  if (done.moved) redrawMarked(paperId);
+  return done.row;
 }
 
 export async function deletePaper(businessAccountId: string, paperId: string): Promise<boolean> {

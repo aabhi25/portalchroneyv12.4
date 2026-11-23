@@ -114,6 +114,8 @@ export interface CheckView {
   updatedAt: string;
   scheme: SchemeView | null;
   images: Array<{ id: string; kind: "answer" | "marked"; position: number }>;
+  /** An answer from a whole answer sheet: the sheet's pages it was found on (one check's view only). */
+  sheetPages?: Array<{ id: string; position: number }>;
 }
 
 export interface AccuracySummary { compared: number; withinHalf: number; exact: number; averageGap: number; aiHigher: number; aiLower: number }
@@ -153,7 +155,7 @@ export interface PaperView {
   status: PaperStatus;
   questions: Array<{ number: string; questionKey: string }>;
   pages: Array<{ id: string; position: number }>;
-  reading: { parts: Array<{ label: string; pages: number[]; text: string }>; blank: boolean; notes: string; pages: number } | null;
+  reading: { parts: Array<{ label: string; pages: number[]; text: string }>; blank: boolean; notes: string; pages: number; /** Who put the pages in order. */ arranged?: "auto" | "manual" } | null;
   matching: { answers: Array<{ number: string; parts: number[]; confidence: number; note: string; notAttempted: boolean }>; unassigned: Array<{ part: number; reason: string; text: string }> } | null;
   practice: { writtenOrder: string[]; sheet: string; answers: Array<{ number: string; level: string; expectedMarks: number; why: string }> } | null;
   totals: PaperTotals;

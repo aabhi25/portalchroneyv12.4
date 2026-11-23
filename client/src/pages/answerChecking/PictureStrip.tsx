@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ImagePlus, X } from "lucide-react";
+import { usePageViewer } from "./PageViewer";
 import { MAX_QUESTION_PICTURES, photoToDataUrl, pictureSrc, type PictureRef } from "./answerCheckApi";
 
 /**
@@ -8,6 +9,7 @@ import { MAX_QUESTION_PICTURES, photoToDataUrl, pictureSrc, type PictureRef } fr
  */
 export function PictureStrip({ pictures, onChange, addLabel = "Add a picture", testId }: { pictures: PictureRef[]; onChange?: (next: PictureRef[]) => void; addLabel?: string; testId?: string }) {
   const [error, setError] = useState("");
+  const { open, viewer } = usePageViewer();
   if (!pictures.length && !onChange) return null;
 
   async function add(list: FileList | null) {
@@ -26,9 +28,9 @@ export function PictureStrip({ pictures, onChange, addLabel = "Add a picture", t
     <div className="mt-2 flex flex-wrap items-center gap-2" data-testid={testId}>
       {pictures.map((p, i) => (
         <div key={p.id || i} className="relative">
-          <a href={pictureSrc(p)} target="_blank" rel="noreferrer">
+          <button type="button" className="block cursor-zoom-in" onClick={() => open(pictures.map((x, j) => ({ src: pictureSrc(x), label: `Picture ${j + 1}` })), i)}>
             <img src={pictureSrc(p)} alt={`Picture ${i + 1}`} className="h-20 max-w-[160px] rounded-lg border bg-white object-contain" />
-          </a>
+          </button>
           <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[11px] text-white">{i + 1}</span>
           {onChange && (
             <button type="button" onClick={() => onChange(pictures.filter((_, j) => j !== i))} className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-gray-900 text-white" aria-label={`Remove picture ${i + 1}`}>
@@ -44,6 +46,7 @@ export function PictureStrip({ pictures, onChange, addLabel = "Add a picture", t
         </label>
       )}
       {error && <span className="text-[12px] text-red-600">{error}</span>}
+      {viewer}
     </div>
   );
 }

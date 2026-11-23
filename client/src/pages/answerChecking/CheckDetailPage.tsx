@@ -10,7 +10,9 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
+import { usePageViewer } from "./PageViewer";
 import { PictureStrip } from "./PictureStrip";
+import { viewerPages } from "./SheetPages";
 import { ASSESS_PATH,
   AI_WRITTEN_LABEL, API, DRAWING_LABEL, KIND_LABEL, LEVEL_LABEL, STATUS_LABEL, STATUS_STYLE, fmtCost, fmtMarks, imageUrl, isRunning, scopeLabel,
   type CheckView,
@@ -66,7 +68,8 @@ function Pill({ className, children }: { className: string; children: ReactNode 
 
 function Photos({ c }: { c: CheckView }) {
   const marked = c.images.find(i => i.kind === "marked");
-  const pages = c.images.filter(i => i.kind === "answer");
+  const pages = c.paperId ? c.sheetPages ?? [] : c.images.filter(i => i.kind === "answer");
+  const { open, viewer } = usePageViewer();
   const [show, setShow] = useState<"marked" | "pages">(marked ? "marked" : "pages");
   useEffect(() => { if (marked) setShow("marked"); }, [marked?.id]);
   return (
@@ -76,9 +79,10 @@ function Photos({ c }: { c: CheckView }) {
         <Button size="sm" variant={show === "pages" ? "default" : "outline"} onClick={() => setShow("pages")} data-testid="show-pages">Original photos ({pages.length})</Button>
       </div>
       {show === "marked" && marked
-        ? <a href={imageUrl(marked.id)} target="_blank" rel="noreferrer"><img src={imageUrl(marked.id)} alt="Marked answer sheet" className="w-full rounded-xl border" data-testid="marked-image" /></a>
-        : pages.map(p => <a key={p.id} href={imageUrl(p.id)} target="_blank" rel="noreferrer"><img src={imageUrl(p.id)} alt={`Page ${p.position + 1}`} className="w-full rounded-xl border" /></a>)}
+        ? <button type="button" className="block w-full cursor-zoom-in" onClick={() => open([{ src: imageUrl(marked.id), label: "Marked sheet" }])}><img src={imageUrl(marked.id)} alt="Marked answer sheet" className="w-full rounded-xl border" data-testid="marked-image" /></button>
+        : pages.map((p, i) => <button key={p.id} type="button" className="block w-full cursor-zoom-in" onClick={() => open(viewerPages(pages), i)}><img src={imageUrl(p.id)} alt={`Page ${p.position + 1}`} className="w-full rounded-xl border" /></button>)}
       {!pages.length && <p className="text-[13px] text-gray-500">{c.status === "writing" ? "The practice answer is being written…" : "No photos."}</p>}
+      {viewer}
     </div>
   );
 }
@@ -298,8 +302,8 @@ function ListBlock({ title, items }: { title: string; items: string[] }) {
 function StudentView({ c }: { c: CheckView }) {
   const r = c.result;
   const marked = c.images.find(i => i.kind === "marked");
-  const pages = c.images.filter(i => i.kind === "answer");
-  const [sheet, setSheet] = useState(false);
+  const pages = c.paperId ? c.sheetPages ?? [] : c.images.filter(i => i.kind === "answer");
+  const { open, viewer } = usePageViewer();
   if (!r) return <p className="text-[14px] text-gray-500">The student view appears once the answer is checked.</p>;
   const finalMarks = c.teacherMarks ?? c.aiMarks;
   const reviewed = c.teacherAt && c.teacherMarks !== null;
@@ -335,8 +339,8 @@ function StudentView({ c }: { c: CheckView }) {
             <p className="mt-1 text-gray-900">Final marks: <b>{fmtMarks(finalMarks)}/{fmtMarks(c.maxMarks)}</b></p>
             {(c.teacherComment || r.teacherComment) && <p className="mt-2 text-gray-700">{reviewed ? "Teacher's" : "AI Teacher's"} comments: {c.teacherComment || r.teacherComment}</p>}
           </div>
-          <Button variant="outline" className="w-full" onClick={() => setSheet(!sheet)} disabled={!marked && !pages.length} data-testid="student-sheet">{sheet ? "Hide answer sheet" : "View evaluated answer sheet"}</Button>
-          {sheet && (marked ? <img src={imageUrl(marked.id)} alt="Evaluated answer sheet" className="w-full rounded-xl border" /> : pages.map(p => <img key={p.id} src={imageUrl(p.id)} alt="" className="w-full rounded-xl border" />))}
+          <Button variant="outline" className="w-full" onClick={() => open(marked ? [{ src: imageUrl(marked.id), label: "Evaluated answer sheet" }] : viewerPages(pages))} disabled={!marked && !pages.length} data-testid="student-sheet">View evaluated answer sheet</Button>
+          {viewer}
           {c.teacherReasons.length > 0 && !reviewed && <p className="text-[12px] text-amber-700">Admin note (not shown to students): this answer is waiting for a teacher, so it would not be published yet.</p>}
         </div>
       </div>

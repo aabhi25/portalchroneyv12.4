@@ -431,3 +431,62 @@ export function suggestMaxMarks(kind: QuestionKind | null, modelAnswer: string, 
   if (kind === "numerical" && words > 80) marks = 4;
   return clamp(marks, range.minMarks, range.maxMarks);
 }
+
+// ---- The order of an answer sheet's pages -----------------------------------------------------
+
+/**
+ * A sheet's pages arranged by question — the page with question 1 first — from where each answer
+ * was found. Page numbers are 1-based; the result lists the current page numbers in their new order.
+ * An answer's own pages always follow each other as the answer reads (its parts are matched in
+ * reading order), so a continuation never comes before its start. A page without answers stays
+ * after the page it follows now.
+ */
+export function pageOrderByQuestion(pageCount: number, parts: Array<{ pages: number[] }>, answers: Array<{ parts: number[] }>): number[] {
+  const all = Array.from({ length: pageCount }, (_, i) => i + 1);
+  const firstQuestion = new Map<number, number>();
+  const before = new Map<number, Set<number>>(all.map(p => [p, new Set<number>()]));
+  answers.forEach((a, q) => {
+    const pages: number[] = [];
+    for (const i of a.parts ?? []) {
+      for (const p of parts[i]?.pages ?? []) if (p >= 1 && p <= pageCount && !pages.includes(p)) pages.push(p);
+    }
+    pages.forEach((p, i) => {
+      if (!firstQuestion.has(p)) firstQuestion.set(p, q);
+      if (i > 0) before.get(p)!.add(pages[i - 1]);
+    });
+  });
+  let last = -1;
+  for (const p of all) {
+    if (firstQuestion.has(p)) last = firstQuestion.get(p)!;
+    else firstQuestion.set(p, last + 0.5);
+  }
+  const order: number[] = [];
+  const left = new Set(all);
+  while (left.size) {
+    const free = Array.from(left).filter(p => Array.from(before.get(p)!).every(b => !left.has(b)));
+    // Answers that contradict each other can leave no free page: take the earliest question's.
+    const next = (free.length ? free : Array.from(left)).sort((a, b) => firstQuestion.get(a)! - firstQuestion.get(b)! || a - b)[0];
+    order.push(next);
+    left.delete(next);
+  }
+  return order;
+}
+
+/** Page numbers after the pages are put in `order` (the old page numbers, in their new order), listed as they were. */
+export function renumberPages(pages: unknown, order: number[]): number[] {
+  return (Array.isArray(pages) ? pages : [])
+    .map(p => order.indexOf(Number(p)) + 1)
+    .filter(p => p >= 1);
+}
+
+/** "Q1–Q3, Q5": a page's questions, given the paper's question numbers in order. */
+export function questionSpan(numbers: string[], paperOrder: string[]): string {
+  const idx = Array.from(new Set(numbers.map(x => paperOrder.indexOf(x)).filter(i => i >= 0))).sort((a, b) => a - b);
+  const runs: number[][] = [];
+  for (const i of idx) {
+    const run = runs[runs.length - 1];
+    if (run && run[run.length - 1] === i - 1) run.push(i);
+    else runs.push([i]);
+  }
+  return runs.flatMap(r => r.length > 2 ? [`Q${paperOrder[r[0]]}–Q${paperOrder[r[r.length - 1]]}`] : r.map(i => `Q${paperOrder[i]}`)).join(", ");
+}

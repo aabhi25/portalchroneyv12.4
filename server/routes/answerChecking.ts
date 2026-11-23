@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import crypto from "crypto";
 import { z } from "zod";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { answerCheckImages, answerChecks, answerMarkingSchemes, businessAccounts } from "@shared/schema";
 import { PRACTICE_LEVELS, QUESTION_KINDS, accuracySummary, type PracticeLevel } from "@shared/answerCheck";
@@ -29,7 +29,7 @@ import {
 } from "../services/answerCheck/engine";
 import { ImageError, imageBytes, MAX_PAGES, MAX_PAPER_PAGES, prepareUpload } from "../services/answerCheck/images";
 import { chaptersFor, customQuestionKey, DraftError, draftQuestionsFromCurriculum, MAX_DRAFT_QUESTIONS, pickRandomQuestion, pickRandomQuestions, scopeOptions, searchQuestions, type QuestionInput } from "../services/answerCheck/questions";
-import { cleanQuestionList, createPaper, createPracticePaper, deletePaper, listPapers, PaperError, paperView, rerunPaper } from "../services/answerCheck/papers";
+import { arrangeOnce, arrangePages, cleanQuestionList, createPaper, createPracticePaper, deletePaper, listPapers, PaperError, paperView, rerunPaper } from "../services/answerCheck/papers";
 import { answerPapers } from "@shared/schema";
 import { AssessmentError, assessmentView, checkSheet, deleteAssessment, getAssessment, importQuestions, listAssessments, sampleSheet, saveAssessment } from "../services/answerCheck/assessments";
 import { readDataUrls } from "../services/answerCheck/files";
@@ -77,6 +77,7 @@ import { listQuestionPictures } from "../services/answerCheck/pictures";
  *   GET  /api/answer-checking/papers                     list
  *   GET  /api/answer-checking/papers/:id
  *   POST /api/answer-checking/papers/:id/rerun           read the sheet again (replaces its results)
+ *   PUT  /api/answer-checking/papers/:id/pages           the order of the sheet's pages (and, if asked, check it again)
  *   DELETE /api/answer-checking/papers/:id
  */
 const router = Router();
@@ -353,7 +354,13 @@ router.get(`${BASE}/checks/:id`, ...superAdmin, async (req, res) => {
     const [row] = await db.select().from(answerChecks).where(and(eq(answerChecks.id, req.params.id), eq(answerChecks.businessAccountId, accountId(req))));
     if (!row) return res.status(404).json({ error: "Check not found." });
     const [view] = await viewsFor([row]);
-    res.json({ check: view });
+    // An answer from a whole answer sheet: the sheet's pages it was found on.
+    const all = row.paperId
+      ? await db.select({ id: answerCheckImages.id, position: answerCheckImages.position }).from(answerCheckImages)
+        .where(and(eq(answerCheckImages.paperId, row.paperId), eq(answerCheckImages.kind, "paper_page"))).orderBy(asc(answerCheckImages.position))
+      : [];
+    const found = all.filter(p => ((row.reading as any)?.pages ?? []).includes(p.position + 1));
+    res.json({ check: { ...view, sheetPages: found.length ? found : all } });
   } catch (e) { fail(res, "get check", e); }
 });
 
@@ -505,7 +512,7 @@ router.get(`${BASE}/papers/:id`, ...superAdmin, async (req, res) => {
   try {
     const [paper] = await db.select().from(answerPapers).where(and(eq(answerPapers.id, req.params.id), eq(answerPapers.businessAccountId, accountId(req))));
     if (!paper) return res.status(404).json({ error: "Paper not found." });
-    res.json({ paper: await paperView(paper) });
+    res.json({ paper: await paperView(await arrangeOnce(paper)) });
   } catch (e) { fail(res, "get paper", e); }
 });
 
@@ -515,6 +522,16 @@ router.post(`${BASE}/papers/:id/rerun`, ...superAdmin, async (req, res) => {
     if (!(await rerunPaper(accountId(req), req.params.id))) return res.status(404).json({ error: "Paper not found." });
     res.json({ ok: true });
   } catch (e) { fail(res, "rerun paper", e); }
+});
+
+router.put(`${BASE}/papers/:id/pages`, ...superAdmin, async (req, res) => {
+  try {
+    const checkAgain = req.body?.checkAgain === true;
+    if (checkAgain && !(await requireOn(req, res))) return;
+    const order = (Array.isArray(req.body?.order) ? req.body.order : []).filter((x: unknown): x is string => typeof x === "string");
+    if (!(await arrangePages(accountId(req), req.params.id, order, { checkAgain }))) return res.status(404).json({ error: "Paper not found." });
+    res.json({ ok: true });
+  } catch (e) { fail(res, "arrange pages", e); }
 });
 
 router.delete(`${BASE}/papers/:id`, ...superAdmin, async (req, res) => {

@@ -8,6 +8,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel, Stat } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
+import { usePageViewer } from "./PageViewer";
+import { SheetPages, questionsOnPage, viewerPages } from "./SheetPages";
 import { ASSESS_PATH,
   API, LEVEL_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, STATUS_LABEL, STATUS_STYLE, fmtCost, fmtMarks, imageUrl, isRunning, paperRunning,
   type CheckView, type PaperView,
@@ -80,13 +82,14 @@ export default function PaperDetailPage({ paperId }: { paperId: string }) {
         {off && <AssessmentOffBanner accountName={overview?.account?.name} />}
         {isLoading && <p className="text-[14px] text-gray-500">Loading…</p>}
         {isError && <p className="text-[14px] text-red-600">This paper could not be loaded. It may have been deleted.</p>}
-        {p && (view === "student" ? <StudentReport p={p} /> : <TeacherPaper p={p} />)}
+        {p && (view === "student" ? <StudentReport p={p} /> : <TeacherPaper p={p} off={off} />)}
       </SaBody>
     </>
   );
 }
 
-function TeacherPaper({ p }: { p: PaperView }) {
+function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
+  const { open, viewer } = usePageViewer();
   const [, setLocation] = useLocation();
   const t = p.totals;
   const lost = (p.matching?.unassigned ?? []).filter(u => !/^\((heading|rough work)\)/i.test(u.text.trim()));
@@ -135,35 +138,26 @@ function TeacherPaper({ p }: { p: PaperView }) {
                 </tr>
               </thead>
               <tbody>
-                {p.checks.map(c => <AnswerRow key={c.id} c={c} practice={p.source === "practice"} onOpen={() => setLocation(`${ASSESS_PATH}/checks/${c.id}`)} />)}
+                {p.checks.map(c => <AnswerRow key={c.id} c={c} practice={p.source === "practice"} onOpen={() => setLocation(`${ASSESS_PATH}/checks/${c.id}`)} onPage={n => open(viewerPages(p.pages, p), n - 1)} />)}
               </tbody>
             </table>
           </div>
         </Panel>
       )}
 
-      <Panel title="The answer sheet" subtitle="As uploaded; click a page to open it full size.">
-        <div className="flex flex-wrap gap-3" data-testid="paper-pages">
-          {p.pages.map(pg => (
-            <a key={pg.id} href={imageUrl(pg.id)} target="_blank" rel="noreferrer" className="block">
-              <img src={imageUrl(pg.id)} alt={`Page ${pg.position + 1}`} className="h-56 rounded-lg border object-cover" />
-              <p className="mt-1 text-center text-[12px] text-gray-500">Page {pg.position + 1}</p>
-            </a>
-          ))}
-          {!p.pages.length && <p className="text-[14px] text-gray-500">{p.status === "writing" ? "The practice sheet is being drawn…" : "No pages."}</p>}
-        </div>
-      </Panel>
+      <SheetPages p={p} off={off} />
 
       {p.practice && (
         <Panel title="What the practice student wrote" subtitle={`Written order: ${p.practice.writtenOrder.map(n => `Q${n}`).join(", ")}`}>
           <pre className="whitespace-pre-wrap rounded-xl bg-violet-50/50 p-3 font-sans text-[13px] text-gray-700">{p.practice.sheet}</pre>
         </Panel>
       )}
+      {viewer}
     </div>
   );
 }
 
-function AnswerRow({ c, practice, onOpen }: { c: CheckView; practice: boolean; onOpen: () => void }) {
+function AnswerRow({ c, practice, onOpen, onPage }: { c: CheckView; practice: boolean; onOpen: () => void; onPage: (page: number) => void }) {
   const r = c.reading;
   const compare = practice ? c.expectedMarks : c.teacherMarks;
   const gap = c.aiMarks !== null && compare !== null ? c.aiMarks - compare : null;
@@ -175,7 +169,7 @@ function AnswerRow({ c, practice, onOpen }: { c: CheckView; practice: boolean; o
         {c.practiceLevel && <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700">{LEVEL_LABEL[c.practiceLevel]}</span>}
       </td>
       <td className="py-2.5 pr-3 text-[13px] text-gray-600">
-        {r?.notAttempted ? <span className="text-gray-500">Not attempted</span> : <>Page {(r?.pages ?? []).join(", ") || "?"}{typeof r?.matchConfidence === "number" && r.matchConfidence < 0.6 && <span className="ml-1 text-amber-700">(unsure)</span>}</>}
+        {r?.notAttempted ? <span className="text-gray-500">Not attempted</span> : <>Page {r?.pages?.length ? r.pages.map((n, i) => <span key={n}>{i > 0 && ", "}<button type="button" onClick={e => { e.stopPropagation(); onPage(n); }} className="font-medium text-violet-700 hover:underline" aria-label={`Open page ${n}`} data-testid={`paper-answer-${c.questionNumber}-page-${n}`}>{n}</button></span>) : "?"}{typeof r?.matchConfidence === "number" && r.matchConfidence < 0.6 && <span className="ml-1 text-amber-700">(unsure)</span>}</>}
         {r?.matchNote && <p className="text-[12px] text-gray-400">{r.matchNote}</p>}
       </td>
       <td className="py-2.5 pr-3">
@@ -194,6 +188,7 @@ function AnswerRow({ c, practice, onOpen }: { c: CheckView; practice: boolean; o
 
 /** What a student would see for the whole paper: total, then each question's marks and feedback. */
 function StudentReport({ p }: { p: PaperView }) {
+  const { open, viewer } = usePageViewer();
   const t = p.totals;
   const finalTotal = t.teacherMarks ?? t.aiMarks;
   if (t.aiMarks === null) return <p className="text-[14px] text-gray-500">The student view appears once every answer is marked.</p>;
@@ -226,13 +221,26 @@ function StudentReport({ p }: { p: PaperView }) {
                     {(c.teacherComment || c.result.teacherComment) && <p className="text-[13px] italic text-gray-600">Comment: {c.teacherComment || c.result.teacherComment}</p>}
                   </>
                 )}
-                {marked && <a href={imageUrl(marked.id)} target="_blank" rel="noreferrer" className="text-[13px] font-medium text-teal-700 hover:underline">View evaluated answer sheet</a>}
+                {marked && <button type="button" onClick={() => open([{ src: imageUrl(marked.id), label: `Question ${c.questionNumber} · evaluated answer sheet` }])} className="text-[13px] font-medium text-teal-700 hover:underline">View evaluated answer sheet</button>}
               </div>
             );
           })}
         </div>
+        {p.pages.length > 0 && (
+          <div className="border-t border-black/[0.06] p-4" data-testid="paper-student-pages">
+            <p className="text-[14px] font-medium text-gray-900">Your answer sheet</p>
+            <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+              {p.pages.map((pg, i) => (
+                <button key={pg.id} type="button" onClick={() => open(viewerPages(p.pages, p), i)} className="w-[78px] shrink-0 text-[11px] text-gray-600" aria-label={`Open page ${pg.position + 1}`}>
+                  <img src={imageUrl(pg.id)} alt="" className="h-24 w-full rounded-lg border bg-gray-50 object-cover" />{questionsOnPage(p, pg.position) || `Page ${pg.position + 1}`}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {t.needsTeacher > 0 && t.teacherMarks === null && <p className="px-4 pb-4 text-[12px] text-amber-700">Admin note (not shown to students): {t.needsTeacher} answer{t.needsTeacher === 1 ? " is" : "s are"} waiting for a teacher, so this result would not be published yet.</p>}
       </div>
+      {viewer}
     </div>
   );
 }

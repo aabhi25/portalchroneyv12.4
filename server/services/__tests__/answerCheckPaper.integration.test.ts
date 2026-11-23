@@ -147,6 +147,82 @@ async function main() {
     expect((v.matching as any).unassigned.length === 1, "the left-over part is listed on the paper");
   }
 
+  console.log("Pages arranged by question");
+  {
+    // Uploaded last page first: page 3 holds Q1, page 1 the end of Q2, page 2 its start and Q3.
+    const shades = ["#101010", "#808080", "#f0f0f0"];
+    const reply = () => ({ parts: [
+      { label: "", pages: [1], text: "so R = 440 ohm", legibility: 0.9 },
+      { label: "Q2", pages: [2], text: "R = V/I", legibility: 0.9 },
+      { label: "Q1", pages: [3], text: "Current is proportional", legibility: 0.9 },
+    ] });
+    const match = () => ({ answers: [{ number: "1", parts: [2], confidence: 0.9 }, { number: "2", parts: [1, 0], confidence: 0.9 }], notAttempted: ["3"] });
+    queues.paperRead.push(reply());
+    queues.match.push(match());
+    const p = await papers.createPaper({ businessAccountId: B, title: "Mock test 3", studentLabel: "Meera", questions: qs, photos: await Promise.all(shades.map(photo)), userId: null });
+    const shadesOf = async (pages: Array<{ id: string }>) => Promise.all(pages.map(async pg => {
+      const [row] = await db.select().from(schema.answerCheckImages).where(eq(schema.answerCheckImages.id, pg.id));
+      const [c] = (await sharp(row.data as Buffer).stats()).channels;
+      return c.mean < 60 ? "last" : c.mean < 180 ? "middle" : "first";
+    }));
+    await engine.waitForIdle();
+    let v = await viewOf(p.id);
+    const pagesOf = (n: string) => (v.checks.find(c => c.questionNumber === n)!.reading as any).pages.join();
+    expect((await shadesOf(v.pages)).join() === "first,middle,last", "pages uploaded last first are put in question order", await shadesOf(v.pages));
+    expect(pagesOf("1") === "1" && pagesOf("2") === "2,3" && v.checks.find(c => c.questionNumber === "2")!.readText === "R = V/I\nso R = 440 ohm", "each answer's page numbers follow its pages; its text is unchanged", v.checks.map(c => (c.reading as any).pages));
+    expect((v.reading as any).parts.map((x: any) => x.pages.join()).join("|") === "3|2|1" && (v.reading as any).arranged === "auto", "the reading's page numbers follow too");
+    const markedOf = async (checkId: string) => (await db.select().from(schema.answerCheckImages).where(eq(schema.answerCheckImages.checkId, checkId))).filter(i => i.kind === "marked");
+    const topShade = async (checkId: string) => {
+      const [m] = await markedOf(checkId);
+      const [c] = (await sharp(await sharp(m.data as Buffer).extract({ left: 300, top: 300, width: 100, height: 100 }).toBuffer()).stats()).channels;
+      return c.mean < 60 ? "last" : c.mean < 180 ? "middle" : "first";
+    };
+    const q2 = v.checks.find(c => c.questionNumber === "2")!;
+    expect((await topShade(q2.id)) === "middle", "question 2's marked sheet starts with its first page", await topShade(q2.id));
+
+    // Someone puts them in another order by hand.
+    const marksBefore = JSON.stringify(v.checks.map(c => [c.id, c.aiMarks]));
+    const callsBefore = calls.length;
+    const byHand = [v.pages[2].id, v.pages[0].id, v.pages[1].id];
+    let err = "";
+    try { await papers.arrangePages(B, p.id, byHand.slice(1)); } catch (e: any) { err = e.message; }
+    expect(/pages have changed/.test(err), "a page missing from the order is refused", err);
+    err = "";
+    try { await papers.arrangePages(B, p.id, [byHand[0], byHand[0], byHand[1]]); } catch (e: any) { err = e.message; }
+    expect(/pages have changed/.test(err), "a page given twice is refused", err);
+    expect((await papers.arrangePages("someone-else", p.id, byHand)) === null, "another account can't arrange them");
+    await papers.arrangePages(B, p.id, byHand);
+    await engine.waitForIdle();
+    v = await viewOf(p.id);
+    expect(v.pages.map(x => x.id).join() === byHand.join() && pagesOf("1") === "2" && pagesOf("2") === "1,3", "the order chosen by hand is saved, page numbers follow", v.checks.map(c => (c.reading as any).pages));
+    expect(JSON.stringify(v.checks.map(c => [c.id, c.aiMarks])) === marksBefore && calls.length === callsBefore, "the marks stay and the AI isn't called");
+    expect((await topShade(q2.id)) === "last" && (await markedOf(q2.id)).length === 1, "marked sheets are drawn again in the new order", await topShade(q2.id));
+    expect((await papers.arrangeOnce((await db.select().from(schema.answerPapers).where(eq(schema.answerPapers.id, p.id)))[0])).id === p.id && (await viewOf(p.id)).pages.map(x => x.id).join() === byHand.join(), "opening the sheet doesn't undo an order chosen by hand");
+
+    // "Save and check again" reads the sheet in the chosen order, and keeps that order.
+    queues.paperRead.push(reply());
+    queues.match.push(match());
+    const again = [byHand[1], byHand[0], byHand[2]];
+    const started = await papers.arrangePages(B, p.id, again, { checkAgain: true });
+    expect(started!.status === "reading", "'Save and check again' starts a new reading", started!.status);
+    err = "";
+    try { await papers.arrangePages(B, p.id, byHand); } catch (e: any) { err = e.message; }
+    expect(/is being checked/.test(err), "pages can't be moved while the sheet is being checked", err);
+    await engine.waitForIdle();
+    v = await viewOf(p.id);
+    expect(v.pages.map(x => x.id).join() === again.join() && pagesOf("2") === "1,2" && (v.reading as any).arranged === "manual", "an order chosen by hand is kept when the sheet is read again", (v.reading as any).arranged);
+
+    // A sheet checked before this feature: put in question order the first time it is opened.
+    const { arranged: _a, ...oldReading } = v.reading as any;
+    await db.update(schema.answerPapers).set({ reading: oldReading }).where(eq(schema.answerPapers.id, p.id));
+    const old = (await db.select().from(schema.answerPapers).where(eq(schema.answerPapers.id, p.id)))[0];
+    const opened = await Promise.all([papers.arrangeOnce(old), papers.arrangeOnce(old)]);
+    await engine.waitForIdle();
+    v = await viewOf(p.id);
+    expect(v.pages.map(x => x.id).join() === [again[2], again[1], again[0]].join() && pagesOf("1") === "1" && pagesOf("2") === "2,3", "an earlier sheet is arranged once, even when opened twice at the same time", v.checks.map(c => (c.reading as any).pages));
+    expect(opened.every(o => (o.reading as any).arranged === "auto"), "and is marked as arranged");
+  }
+
   console.log("Reading again, failures, deleting");
   {
     const before = await viewOf(paperId);

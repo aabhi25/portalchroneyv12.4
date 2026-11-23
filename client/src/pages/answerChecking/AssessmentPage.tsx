@@ -9,7 +9,9 @@ import { apiRequest } from "@/lib/queryClient";
 import { Panel, Stat } from "@/components/agency/agencyUi";
 import { SaBody, SaHeader } from "@/components/superadmin/SuperAdminFrame";
 import { SchemeEditor } from "./SchemeEditor";
+import { usePageViewer } from "./PageViewer";
 import { PictureStrip } from "./PictureStrip";
+import { SortableTiles } from "./SortableTiles";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
 import {
   API, ASSESS_PATH, KIND_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, fileToDataUrl, fmtCost, fmtMarks, paperRunning, scopeLabel,
@@ -73,9 +75,13 @@ export default function AssessmentPage({ assessmentId }: { assessmentId: string 
   );
 }
 
+/** Names each file added, so a tile stays the same tile while files are put in order. */
+let fileCount = 0;
+
 function UploadSheet({ assessmentId, disabled, onStarted, onSample }: { assessmentId: string; disabled: boolean; onStarted: (paperId: string) => void; onSample: () => void }) {
   const { toast } = useToast();
-  const [files, setFiles] = useState<Array<{ file: File; preview: string | null }>>([]);
+  const [files, setFiles] = useState<Array<{ id: string; file: File; preview: string | null }>>([]);
+  const { open, viewer } = usePageViewer();
   const [name, setName] = useState("");
   const [roll, setRoll] = useState("");
   const [busy, setBusy] = useState<"" | "check" | "sample">("");
@@ -87,7 +93,7 @@ function UploadSheet({ assessmentId, disabled, onStarted, onSample }: { assessme
     const next = [...files];
     for (const f of Array.from(list)) {
       if (!/^image\/(jpeg|png|webp)$/i.test(f.type) && f.type !== "application/pdf") { setError(`${f.name}: use photos (JPG, PNG) or a PDF.`); continue; }
-      next.push({ file: f, preview: f.type.startsWith("image/") ? URL.createObjectURL(f) : null });
+      next.push({ id: `file-${++fileCount}`, file: f, preview: f.type.startsWith("image/") ? URL.createObjectURL(f) : null });
     }
     setFiles(next.slice(0, 12));
   }
@@ -115,7 +121,7 @@ function UploadSheet({ assessmentId, disabled, onStarted, onSample }: { assessme
   }
 
   return (
-    <Panel title="Check a student's answer sheet" subtitle="Photos of every page (in order) or a PDF of the sheet. The AI teacher finds each question's answer, marks it, and sends unclear ones for human intervention.">
+    <Panel title="Check a student's answer sheet" subtitle="Photos of every page or a PDF of the sheet. The AI teacher finds each question's answer, arranges the pages by question, marks each answer, and sends unclear ones for human intervention.">
       <div className="space-y-3">
         <label
           className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-gray-300 bg-gray-50/60 px-6 py-8 text-center hover:border-violet-400 hover:bg-violet-50/40"
@@ -129,16 +135,18 @@ function UploadSheet({ assessmentId, disabled, onStarted, onSample }: { assessme
           <input type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={e => { add(e.target.files); e.target.value = ""; }} data-testid="sheet-input" />
         </label>
         {files.length > 0 && (
-          <div className="flex flex-wrap gap-2" data-testid="sheet-files">
-            {files.map((f, i) => (
-              <div key={i} className="relative">
+          <div>
+            {files.length > 1 && <p className="mb-2 text-[13px] text-gray-500">Drag to put the pages in the order they were written, if you know it. They are arranged by question after checking. Click a photo to open it.</p>}
+            <SortableTiles items={files} onChange={setFiles} className="flex flex-wrap gap-3" testId="sheet-files" render={(f, i) => (
+              <div className="relative">
                 {f.preview
-                  ? <img src={f.preview} alt={`Page ${i + 1}`} className="h-24 w-[70px] rounded-lg border object-cover" />
-                  : <div className="grid h-24 w-[70px] place-items-center rounded-lg border bg-white px-1 text-center text-[11px] text-gray-600">PDF<br />{f.file.name.slice(0, 18)}</div>}
+                  ? <button type="button" className="block" aria-label={`Open ${f.file.name}`} onClick={() => { const photos = files.filter(x => x.preview); open(photos.map(x => ({ src: x.preview!, label: `Page ${files.indexOf(x) + 1}` })), photos.indexOf(f)); }}><img src={f.preview} alt={`Page ${i + 1}`} draggable={false} className="h-32 w-24 rounded-lg border object-cover" /></button>
+                  : <div className="grid h-32 w-24 place-items-center rounded-lg border bg-white px-1 text-center text-[11px] text-gray-600">PDF<br />{f.file.name.slice(0, 18)}</div>}
                 <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[11px] text-white">{i + 1}</span>
                 <button type="button" onClick={() => setFiles(files.filter((_, j) => j !== i))} className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-gray-900 text-white" aria-label={`Remove ${f.file.name}`}><X className="h-3 w-3" /></button>
               </div>
-            ))}
+            )} />
+            {viewer}
           </div>
         )}
         <div className="flex flex-wrap items-end gap-3">
