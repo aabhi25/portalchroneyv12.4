@@ -11,7 +11,7 @@ import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
 import { usePageViewer } from "./PageViewer";
 import { SheetPages, questionsOnPage, viewerPages } from "./SheetPages";
 import { ASSESS_PATH,
-  API, LEVEL_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, STATUS_LABEL, STATUS_STYLE, fmtCost, fmtMarks, imageUrl, isRunning, paperRunning,
+  API, LEVEL_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, STATUS_LABEL, STATUS_STYLE, fmtMarks, imageUrl, isRunning, paperRunning,
   type CheckView, type PaperView,
 } from "./answerCheckApi";
 
@@ -107,12 +107,11 @@ function TeacherPaper({ p, off }: { p: PaperView; off: boolean }) {
       {p.reading?.blank && p.status !== "reading" && <p className="rounded-xl bg-amber-50 px-4 py-3 text-[14px] text-amber-900">The sheet looks blank — no answers were found.</p>}
 
       {p.checks.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="AI total" value={t.aiMarks === null ? "…" : `${fmtMarks(t.aiMarks)}/${fmtMarks(t.maxMarks)}`} />
           {p.source === "practice" ? <Stat label="Expected total" value={fmtMarks(t.expectedMarks)} /> : <Stat label="With teacher's marks" value={t.teacherMarks === null ? "—" : `${fmtMarks(t.teacherMarks)}/${fmtMarks(t.maxMarks)}`} />}
           <Stat label="Answered" value={`${t.answered} of ${p.questions.length}`} hint={t.notAttempted ? `${t.notAttempted} not attempted` : undefined} />
           <Stat label="Need a teacher" value={t.needsTeacher} />
-          <Stat label="AI cost" value={fmtCost(p.costUsd)} hint={p.durationMs ? `reading ${Math.round(p.durationMs / 1000)} s` : undefined} />
         </div>
       )}
 

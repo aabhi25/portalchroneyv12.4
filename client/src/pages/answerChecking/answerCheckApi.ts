@@ -199,12 +199,6 @@ export function fmtMarks(n: number | null | undefined): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, "");
 }
 
-/** USD with the rough rupee amount: "$0.012 (≈ ₹1.0)". */
-export function fmtCost(usd: number): string {
-  if (!usd) return "—";
-  return `$${usd < 0.1 ? usd.toFixed(3) : usd.toFixed(2)} (≈ ₹${(usd * 85).toFixed(usd * 85 < 10 ? 1 : 0)})`;
-}
-
 export const LEVEL_LABEL: Record<PracticeLevel, string> = {
   strong: "Strong",
   average: "Average",

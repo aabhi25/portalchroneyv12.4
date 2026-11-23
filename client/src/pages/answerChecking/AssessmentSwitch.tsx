@@ -17,7 +17,7 @@ export function useScopes(): { scopes: ScopesResponse["scopes"]; error: string |
 export function AssessmentOffBanner({ accountName }: { accountName?: string }) {
   return (
     <div className="rounded-xl bg-gray-100 px-4 py-3 text-[14px] text-gray-800" data-testid="assessment-off">
-      <b>AI assessment is switched off{accountName ? ` for ${accountName}` : ""}.</b> Nothing is checked and no AI cost is spent while it's off; earlier results stay here.
+      <b>AI assessment is switched off{accountName ? ` for ${accountName}` : ""}.</b> Nothing is checked while it's off; earlier results stay here.
       Switch it on in <b>Settings › Features</b> (AI assessment).
     </div>
   );

@@ -14,7 +14,7 @@ import { PictureStrip } from "./PictureStrip";
 import { SortableTiles } from "./SortableTiles";
 import { AssessmentOffBanner, useAssessmentOn } from "./AssessmentSwitch";
 import {
-  API, ASSESS_PATH, KIND_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, fileToDataUrl, fmtCost, fmtMarks, paperRunning, scopeLabel,
+  API, ASSESS_PATH, KIND_LABEL, PAPER_STATUS_LABEL, PAPER_STATUS_STYLE, fileToDataUrl, fmtMarks, paperRunning, scopeLabel,
   type AssessmentView, type PaperSummary,
 } from "./answerCheckApi";
 
@@ -196,7 +196,7 @@ function Results({ a }: { a: AssessmentView }) {
                     <td className="py-2.5 pr-3"><span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium ${PAPER_STATUS_STYLE[p.status]}`}>{paperRunning(p.status) && <Loader2 className="h-3 w-3 animate-spin" />}{PAPER_STATUS_LABEL[p.status]}</span></td>
                     <td className="py-2.5 pr-3 text-right font-semibold tabular-nums">{p.totals.aiMarks === null ? "—" : `${fmtMarks(p.totals.aiMarks)}/${fmtMarks(p.totals.maxMarks)}`}</td>
                     <td className="py-2.5 pr-3 text-right tabular-nums text-gray-600">{p.totals.teacherMarks === null ? "—" : fmtMarks(p.totals.teacherMarks)}</td>
-                    <td className="py-2.5 text-[13px] text-gray-500">{new Date(p.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })} · {fmtCost(p.costUsd)}</td>
+                    <td className="py-2.5 text-[13px] text-gray-500">{new Date(p.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</td>
                   </tr>
                 ))}
               </tbody>

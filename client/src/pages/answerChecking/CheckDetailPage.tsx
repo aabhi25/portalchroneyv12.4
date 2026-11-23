@@ -14,7 +14,7 @@ import { usePageViewer } from "./PageViewer";
 import { PictureStrip } from "./PictureStrip";
 import { viewerPages } from "./SheetPages";
 import { ASSESS_PATH,
-  AI_WRITTEN_LABEL, API, DRAWING_LABEL, KIND_LABEL, LEVEL_LABEL, STATUS_LABEL, STATUS_STYLE, fmtCost, fmtMarks, imageUrl, isRunning, scopeLabel,
+  AI_WRITTEN_LABEL, API, DRAWING_LABEL, KIND_LABEL, LEVEL_LABEL, STATUS_LABEL, STATUS_STYLE, fmtMarks, imageUrl, isRunning, scopeLabel,
   type CheckView,
 } from "./answerCheckApi";
 
@@ -273,7 +273,7 @@ function TeacherView({ c, onDeleted }: { c: CheckView; onDeleted: () => void }) 
           </Panel>
         )}
 
-        <p className="text-[12px] text-gray-400">{c.model ? `${c.model} · ` : ""}{c.durationMs ? `${Math.round(c.durationMs / 100) / 10} s · ` : ""}AI cost {fmtCost(c.costUsd)} · {new Date(c.createdAt).toLocaleString("en-IN")}</p>
+        <p className="text-[12px] text-gray-400">{c.model ? `${c.model} · ` : ""}{c.durationMs ? `${Math.round(c.durationMs / 100) / 10} s · ` : ""}{new Date(c.createdAt).toLocaleString("en-IN")}</p>
       </div>
     </div>
   );
