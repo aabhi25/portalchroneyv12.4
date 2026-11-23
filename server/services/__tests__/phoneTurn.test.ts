@@ -166,6 +166,16 @@ async function main() {
   expect(r4.speech === 'Marketing भी available है।', 'Hindi: "जी," twice in a row loses the second', r4);
   const r5 = trimRepeatedStart('Abhi जी, कल बात करते हैं।', { starter: null, usedName: true }, 'Abhi');
   expect(r5.speech === 'कल बात करते हैं।' && trimRepeatedStart('The course is two years.', r1, 'Abhi').speech === 'The course is two years.', 'the name with "जी" too; a reply with no opener is untouched', r5);
+  // Real call 2026-11-23: "…बाद में बात करते हैं, बाय।" got another question; "आपका नाम क्या है?" got "…की AI assistant".
+  const { saidGoodbye } = await import('../calling/phonePrompt');
+  expect(saidGoodbye('हाँ ठीक है, चलो यार बाद में बात करते हैं, बाय।') && saidGoodbye('Okay bye') && saidGoodbye('chalo, phone rakhta hoon') && !saidGoodbye('Call me tomorrow') && !saidGoodbye('बाद में बात करते हैं'), 'a goodbye is recognised; "later" alone is not one');
+  const byeHint = phoneTurnHints({ callerText: 'हाँ ठीक है, चलो यार बाद में बात करते हैं, बाय।', askedQuestions: ['कल दोपहर 2 बजे फिर call करूँ?'] }) || '';
+  expect(/They said goodbye/.test(byeHint) && /callback_requested with THAT time/.test(byeHint) && /Do not ask anything/.test(byeHint) && !/ALREADY asked/.test(byeHint), 'a goodbye: end the call, confirm the agreed time, no new question', byeHint);
+  const { buildIdentityBlock } = await import('../chatContext/identity');
+  const onCall = buildIdentityBlock('Symbiosis Online (Jaro)', 'Surbhi', 'female', { phoneCall: true });
+  expect(/"Surbhi here, from Symbiosis Online\."/.test(onCall) && !/\(Jaro\)/.test(onCall) && /only when they ask whether you are a real person/.test(onCall) && /FEMININE/.test(onCall), 'on a call: name + business (no bracketed label), an AI only when asked', onCall.slice(0, 400));
+  const inChat = buildIdentityBlock('Symbiosis Online (Jaro)', 'Surbhi', 'female');
+  expect(/Surbhi, Symbiosis Online \(Jaro\)'s AI assistant/.test(inChat) && buildIdentityBlock('Acme', null, null, { phoneCall: true }).includes("Acme's AI assistant"), 'chat and unnamed assistants are unchanged');
   const { isWrappingUp } = await import('../calling/phonePrompt');
   expect(['Okay, thank you.', 'Thanks a lot', "Theek hai, main soch ke batata hoon", 'ठीक है, थैंक यू', "That's all for now", 'धन्यवाद जी'].every((t) => isWrappingUp(t)), 'winding down is recognised');
   expect(!['Not interested, thanks.', 'Call me tomorrow, thank you', "Please don't call me again, thanks", 'Can I talk to a person? Thanks', 'Okay.', 'Tell me about the fees', 'नहीं चाहिए, धन्यवाद'].some((t) => isWrappingUp(t)), 'a no / busy / do-not-call / wants a person / a question is not a wrap-up');

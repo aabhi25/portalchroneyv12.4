@@ -75,5 +75,11 @@ const detail = (() => {
 expect(detail.length === 5 && detail[4] === "Shall I tell you about the fees?", "asked for details: a fuller answer is allowed", detail);
 expect(wantsDetail("Can you explain in detail?") && wantsDetail("थोड़ा विस्तार से बताइए") && wantsDetail("detail mein batao") && !wantsDetail("Fees kitni hai?") && !wantsDetail("Yes, I am."), "wantsDetail: explain / विस्तार से / detail mein, not an ordinary question");
 
+// Real call 2026-11-23: a question, then more, then a second question — nine seconds.
+const twoQuestions = shape("You asked about fees and placement support, right? I'll check the exact fees for you. Meanwhile, can you tell me what kind of growth or role you're looking for after the MBA?");
+expect(twoQuestions.spoken.join(" ") === "You asked about fees and placement support, right?" && twoQuestions.changed, "nothing is said after a question", twoQuestions.spoken);
+const reactionQuestion = shape("ठीक है। अगर अभी कुछ नहीं चाहिए तो मैं कल दोपहर 2 बजे फिर call करूँ? तब तक आप सोच लीजिए।");
+expect(reactionQuestion.spoken[reactionQuestion.spoken.length - 1].endsWith("call करूँ?") && !/सोच लीजिए/.test(reactionQuestion.spoken.join(" ")), "Hindi: the turn ends on its question", reactionQuestion.spoken);
+
 if (failed) { console.log(`\n${failed} check(s) failed`); process.exit(1); }
 console.log("\nAll phone answer checks passed.");

@@ -36,7 +36,7 @@ import { colloquialHindi, englishFromDevanagari } from './services/voice/colloqu
 import { aiPhoneOpener, dropEchoedClause, firstWord } from './services/voice/phoneOpener';
 import { isBareAcknowledgement } from './services/chatContext/smallTalk';
 import { PhoneAnswerShaper, callerAsked, wantsDetail } from './services/voice/phoneAnswerShaper';
-import { soundsUnfinished, declinedToTalk, isClosingTurn, isPromiseOnly, isUnsureCaller, isWrappingUp, heardUnclearly, isHindiSentence, phoneTurnHints, transcriptConfidence, trimRepeatedStart, questionsIn, repeatsAskedQuestion, stripContinuationStart } from './services/calling/phonePrompt';
+import { soundsUnfinished, declinedToTalk, isClosingTurn, isPromiseOnly, isUnsureCaller, isWrappingUp, heardUnclearly, isHindiSentence, phoneTurnHints, saidGoodbye, transcriptConfidence, trimRepeatedStart, questionsIn, repeatsAskedQuestion, stripContinuationStart } from './services/calling/phonePrompt';
 import { createOpenAiTtsProvider, OPENAI_TTS_MODEL, type OpenAiSpeechClient } from './services/voice/openaiTts';
 import type { AudioRoute, AvatarEndReason } from './services/avatar/types';
 import { getLanguagePolicy, policyFromSettings, type LanguagePolicy } from './services/language/languagePolicy';
@@ -4567,13 +4567,16 @@ export class RealtimeVoiceService {
   private holdPhoneReplyIfUnfinished(conversation: VoiceConversation, transcript: string, stoppedAt?: number, unclear = false): void {
     conversation.phoneHeldResponseId = undefined;
     // An unclear line is often the start of a sentence ("उम्म…" heard as a word): wait for the rest.
-    if (!soundsUnfinished(transcript) && !unclear) return;
+    // So is a bare "अच्छा।" / "Okay." when nothing was asked: they are usually about to say more
+    // (real call 2026-11-23: "अच्छा… और बताओ, सब बढ़िया?" was cut after "अच्छा" and got a "जी, तो…").
+    const listening = isBareAcknowledgement(transcript) && !endsWithQuestion(conversation.lastAssistantText);
+    if (!soundsUnfinished(transcript) && !unclear && !listening) return;
     const releaseAt = (stoppedAt ?? Date.now()) + PHONE_UNFINISHED_HOLD_MS;
     // The reply's responseId is assigned when it starts; hold whatever reply follows this turn.
     const turnSeq = conversation.k12TurnSeq;
     conversation.phoneHeldResponseId = '__pending__';
     this.sendToClient(conversation.clientWs, { type: 'duck', responseId: '__held__' });
-    console.log(`[VoiceTurn] Turn ${unclear ? 'was unclear' : 'sounds unfinished'} ("${transcript.slice(-30)}") — reply held until ${PHONE_UNFINISHED_HOLD_MS} ms more silence`);
+    console.log(`[VoiceTurn] Turn ${unclear ? 'was unclear' : listening ? 'is a bare acknowledgement' : 'sounds unfinished'} ("${transcript.slice(-30)}") — reply held until ${PHONE_UNFINISHED_HOLD_MS} ms more silence`);
     const check = () => {
       if (conversation.k12TurnSeq !== turnSeq) return; // a newer turn took over
       if (conversation.phoneCallerSpeaking || conversation.phoneSpeechDuringHold || conversation.bargeIn || Date.now() < releaseAt) {
@@ -5199,7 +5202,7 @@ Never infer intent from a single contained word. For example, "What is stop moti
     // A refusal / goodbye / do-not-call reply asks nothing (seen: "आपको किस तरह की insurance की
     // तलाश है?" after "interest nahi hai"); a call-back request may still ask for the time.
     // A "not now" to "is this a good time?" may ask when to call back.
-    const shaper = isPhone ? new PhoneAnswerShaper({ noQuestions: closingTurn && !declinedToTalk(userTranscript, turnStartAssistantText) && !/call|kal|baad|later|tomorrow|कॉल|कल|बाद/i.test(userTranscript), relaxed: wantsDetail(userTranscript), callerAsked: callerAsked(userTranscript) }) : null;
+    const shaper = isPhone ? new PhoneAnswerShaper({ noQuestions: closingTurn && !declinedToTalk(userTranscript, turnStartAssistantText) && (saidGoodbye(userTranscript) || !/call|kal|baad|later|tomorrow|कॉल|कल|बाद/i.test(userTranscript)), relaxed: wantsDetail(userTranscript), callerAsked: callerAsked(userTranscript) }) : null;
     const emitShaped = (segment: string) => {
       if (!shaper) { emitSegment(segment); return; }
       for (const s of shaper.push(segment)) emitSegment(s);

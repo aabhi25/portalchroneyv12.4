@@ -12,10 +12,21 @@ function clean(value: string | null | undefined, max = 80): string {
  * sees and hears (the video avatar's display name, or the name set for phone calls); without it the assistant is simply
  * "<Business>'s AI assistant" and a name given in the business's own instructions applies.
  */
-export function buildIdentityBlock(businessName: string | null | undefined, assistantName?: string | null, gender?: "female" | "male" | null): string {
+export function buildIdentityBlock(businessName: string | null | undefined, assistantName?: string | null, gender?: "female" | "male" | null, opts: { phoneCall?: boolean } = {}): string {
   const business = clean(businessName, 120);
   if (!business) return gender ? genderRules(gender) : "";
   const name = clean(assistantName);
+  // A phone call with a named assistant: she is "Surbhi from Symbiosis Online" — the business chose not
+  // to announce an AI on calls, and the account's bracketed label ("Symbiosis Online (Jaro)") is not
+  // said aloud (real call 2026-11-23: "आपका नाम क्या है?" → "मैं सुरभि हूँ, Symbiosis Online (Jaro) की AI assistant").
+  if (opts.phoneCall && name) {
+    const spoken = business.replace(/\s*\([^)]*\)\s*$/, "").trim() || business;
+    return `🪪 WHO YOU ARE:
+- You are ${name}, calling for ${spoken}. You work for ${spoken} and speak for it ("we", "our").
+- Your name is ${name} — the name you introduced yourself with on this phone call. Use it even if other instructions mention a different name.
+- Asked who you are, who is speaking or your name → "${name} here, from ${spoken}." (Hindi: "मैं ${name} बोल रही हूँ, ${spoken} से।" — in your own gender's form) and nothing more. Say that you are an AI assistant only when they ask whether you are a real person, a robot or an AI — then say so honestly in one short line. Do not name any software, platform or AI company.
+- Never call yourself "Chroney", "Hi Chroney" or "AI Chroney" — that is only the software you run on.${gender ? `\n${genderRules(gender)}` : ""}`;
+  }
   const who = name ? `${name}, ${business}'s AI assistant` : `${business}'s AI assistant`;
   const nameRule = name
     ? `- Your name is ${name} — the name the visitor sees on this video call, or that you introduced yourself with on this phone call. Use it even if other instructions mention a different name.`

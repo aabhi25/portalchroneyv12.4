@@ -478,8 +478,18 @@ export function isWrappingUp(callerText: string, lastAssistantText?: string | nu
  * again — live call 2026-10-17 asked "आपको किस प्रकार का insurance चाहिए?" four times), and what
  * to do when the caller is unsure.
  */
+const GOODBYE = /\b(bye+|bye[- ]bye|good ?bye|tata|see you|take care|rakhta hoon|rakhti hoon|rakhta hu|phone rakh)\b|बाय|बाई|अलविदा|रखता हूँ|रखती हूँ|फोन रख/i;
+/** The caller is saying goodbye ("चलो यार बाद में बात करते हैं, बाय"). */
+export function saidGoodbye(callerText: string): boolean {
+  return GOODBYE.test(String(callerText || "").replace(/[’']/g, "'"));
+}
+
 export function phoneTurnHints(input: { callerText: string; lastAssistantText?: string | null; askedQuestions?: string[]; wrappingUp?: boolean; unclear?: "first" | "again" | null }): string | null {
   const hints: string[] = [];
+  // Real call 2026-11-23: "हाँ ठीक है, चलो यार बाद में बात करते हैं, बाय।" (after "कल दोपहर 2 बजे फिर call करूँ?") got "फिर कब call करूँ आपको?".
+  if (!input.unclear && saidGoodbye(input.callerText)) {
+    return "THIS REPLY:\n- They said goodbye: the call ends now. Call end_call. If your last message proposed a time to call back and they agreed (\"haan theek hai\", \"okay\"), use outcome callback_requested with THAT time and say ONE short line that confirms it (\"ठीक है, कल दो बजे call करती हूँ। Bye!\"); otherwise use the outcome that fits and say ONE short warm goodbye. Do not ask anything and do not offer anything new.";
+  }
   // Speech-to-text was not sure of its own words (see heardUnclearly): the words above may be wrong.
   if (input.unclear === "first") {
     return "THIS REPLY:\n- The line was unclear and you probably did NOT hear their last words correctly — what is written above may be wrong. Do not answer it, do not guess and do not carry on with your own topic. Say in ONE short line, in the call's language, that you didn't catch that and ask them to say it once more (\"Sorry, I didn't catch that — could you say it again?\" / \"Sorry, आवाज़ कट गई — एक बार फिर बोलेंगे?\"). Nothing else.";

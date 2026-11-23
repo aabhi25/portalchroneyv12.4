@@ -4070,7 +4070,7 @@ Response:`;
       const assistantGender = context.assistantGender !== undefined
         ? context.assistantGender
         : textChatAssistantGender(businessAccount as any, widgetSettings as any);
-      const identityBlock = buildIdentityBlock(businessAccount?.name, context.assistantName, assistantGender);
+      const identityBlock = buildIdentityBlock(businessAccount?.name, context.assistantName, assistantGender, { phoneCall: !!context.phoneCall });
       // Per-turn status blocks go at the END in retrieval mode so the stable prefix
       // (instructions + business context) is identical across turns (prompt caching).
       const addTurnBlock = (block: string) => {

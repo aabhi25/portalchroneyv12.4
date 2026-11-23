@@ -14,7 +14,7 @@
  *     for what follows it, and when a question follows and all three would run long, the second
  *     sentence is the one left out (real call 2026-11-23: two sentences + a question = 49 words,
  *     19 seconds of talking) — unless the caller had asked something (`callerAsked`): then the
- *     answer is kept and the question is what goes. A bare reaction ("Great!", "अच्छा, ठीक है।") is not counted as a
+ *     answer is kept and the question is what goes. Nothing is said after a question. A bare reaction ("Great!", "अच्छा, ठीक है।") is not counted as a
  *     sentence. A caller who asks for details gets more room (`relaxed`).
  * The kept segments are also what is saved, so the conversation history matches what was said.
  */
@@ -155,6 +155,14 @@ export class PhoneAnswerShaper {
       return [];
     }
     const n = words(segment);
+    // A question has been asked: the turn is theirs now — nothing more is said after it (real call
+    // 2026-11-23: "You asked about fees and placement support, right? I'll check the exact fees for
+    // you. Meanwhile, can you tell me…" — three sentences, two questions, nine seconds).
+    if (!this.pendingOpen && !this.midSentence && this.kept.length && isQuestion(this.kept[this.kept.length - 1])) {
+      this.full = true;
+      this.changed = true;
+      return [];
+    }
     // The rest of the sentence that is waiting.
     if (this.pendingOpen) {
       this.pending.push(segment);
