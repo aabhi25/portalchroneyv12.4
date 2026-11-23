@@ -509,6 +509,8 @@ interface VoiceConversation {
   phoneHeldResponseId?: string;
   /** Phone: the caller spoke during that hold and their transcript is not handled yet. */
   phoneSpeechDuringHold?: boolean;
+  /** Phone: how sure speech-to-text was of this turn's words (transcriptConfidence), when known. */
+  phoneTurnConfidence?: number | null;
   /** Phone: when the caller's line last carried a voice while a reply was paused. */
   phoneLastVoicedAt?: number;
   /** Phone: how the last reply opened (see trimRepeatedStart). */
@@ -597,6 +599,8 @@ const PHONE_PENDING_AUDIO_MAX_BYTES = 24000 * 2 * 4;
  * off mid-question ("क्या तुम…") — the AI felt rushed; back to 800 ms like web voice.
  */
 const PHONE_END_OF_TURN_SILENCE_MS = 450;
+/** Phone: speech-to-text confidence above which one longer English sentence switches a Hindi call to English. */
+const PHONE_SURE_CONFIDENCE = 0.85;
 /** Phone: a sentence with no audio after this long is requested again (see createTtsProviders). */
 const PHONE_TTS_HEDGE_MS = 900;
 /**
@@ -4170,6 +4174,7 @@ export class RealtimeVoiceService {
       conversation.phoneUnclearTurn = unclear ? (conversation.phoneLastTurnUnclear ? 'again' : 'first') : null;
       conversation.phoneLastTurnUnclear = unclear;
       const confidence = transcriptConfidence(input.logprobs);
+      conversation.phoneTurnConfidence = confidence;
       if (confidence !== null) console.log(`[VoiceTurn] Heard with confidence ${confidence.toFixed(2)}${unclear ? ` — unclear (${conversation.phoneUnclearTurn})` : ''}: "${trimmedTranscript.slice(0, 60)}"`);
       this.holdPhoneReplyIfUnfinished(conversation, trimmedTranscript, stoppedAt, unclear);
     }
@@ -4893,8 +4898,12 @@ Never infer intent from a single contained word. For example, "What is stop moti
         // A full Hindi sentence on an English call is answered in Hindi at once (real calls,
         // 2026-10-24: a question asked in Hindi got its first answer in English); English still
         // needs two, because a misheard Hindi line usually comes out as an English sentence.
-        if (conversation.phoneLangSwitchVotes >= (fillerLang === 'hi' ? 1 : 2)) {
-          console.log(`[VoiceTurn] Call language → ${fillerLang} (${fillerLang === 'hi' ? 'a full Hindi sentence' : 'two sentences in a row'})`);
+        // …unless speech-to-text was sure of a longer one (real call 2026-11-23: "Just tell me more
+        // about MBA marketing first, then I'll make a decision." was answered in Hindi and the
+        // caller had to ask "Can you talk in English?").
+        const clearEnglish = fillerLang === 'en' && words >= 6 && (conversation.phoneTurnConfidence ?? 0) >= PHONE_SURE_CONFIDENCE;
+        if (conversation.phoneLangSwitchVotes >= (fillerLang === 'hi' || clearEnglish ? 1 : 2)) {
+          console.log(`[VoiceTurn] Call language → ${fillerLang} (${fillerLang === 'hi' ? 'a full Hindi sentence' : clearEnglish ? 'a clear English sentence' : 'two sentences in a row'})`);
           conversation.lastFillerLang = fillerLang;
           conversation.phoneLangSwitchVotes = 0;
         }

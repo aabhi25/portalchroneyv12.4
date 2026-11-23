@@ -443,8 +443,13 @@ export function declinedToTalk(callerText: string, lastAssistantText?: string | 
  * Seen live: the AI then read the same list of options a third time.
  */
 const UNSURE = /\b(i don'?t know|dunno|not sure|no idea|you (tell|suggest)|what do you suggest|pata nahi+n?|idea nahi+n?|malum nahi+n?|maloom nahi+n?|samajh nahi+n? aa|aap (batao|bataiye|suggest)|aap hi batao)\b|पता नहीं|आइडिया नहीं|आईडिया नहीं|मालूम नहीं|मालुम नहीं|समझ नहीं|आप बताइए|आप बताओ|आप ही बता/i;
+/** "…के बारे में बताओ" / "tell me (more) about …" / "what is …": they are asking for information. */
+const ASKS_ABOUT = /के बारे में|के बारे मे|ke baa?re (mein|me|mai)|\b(tell me (a bit |a little |more |something )?about|more about|what is|what are|explain|kitn[aie]|kya hai|kya hota hai)\b|क्या है|क्या होता है|कितन[ाीे]/i;
 export function isUnsureCaller(callerText: string): boolean {
-  return UNSURE.test(String(callerText || "").replace(/[’']/g, "'"));
+  const text = String(callerText || "").replace(/[’']/g, "'");
+  // "पता नहीं, थोड़ा बताओ मेरे को MBA के बारे में" asks to be told about it (real call 2026-11-23: it
+  // got "most people pick marketing" and a question instead of what the course is).
+  return UNSURE.test(text) && !ASKS_ABOUT.test(text);
 }
 
 /** The questions in a reply ("…हैं। आपको किस प्रकार का insurance चाहिए?" → that last sentence). */

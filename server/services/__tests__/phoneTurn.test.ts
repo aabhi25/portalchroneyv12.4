@@ -86,6 +86,8 @@ async function main() {
   expect(phoneToolsForTurn(phoneTools({ transferAvailable: true, leadCaptureOn: false }), 'नहीं।', opening).some((t: any) => t.function.name === 'end_call'), 'end_call is offered after the decline');
   expect(/NOT a good time/.test(phoneTurnHints({ callerText: 'नहीं।', lastAssistantText: opening }) || ''), 'the reply is told not to pitch');
   expect(['पता नहीं आईडिया नहीं है मेरे को।', "I don't know", 'aap hi batao', 'Not sure, honestly.'].every(isUnsureCaller) && !isUnsureCaller('Motor insurance chahiye'), 'unsure callers are recognised');
+  // Real call 2026-11-23: "पता नहीं। थोड़ा बताओ मेरे को MBA के बारे में।" is a request to be told, not an unsure caller.
+  expect(!isUnsureCaller('पता नहीं। थोड़ा बताओ मेरे को MBA के बारे में।') && !isUnsureCaller("I don't know, tell me more about the course") && !isUnsureCaller('Pata nahi, fees kitni hai?') && isUnsureCaller('पता नहीं, आप बताओ'), '"don\'t know, tell me about X" asks for information');
   const hint = phoneTurnHints({ callerText: 'पता नहीं आईडिया नहीं है मेरे को।', askedQuestions: ['आपको किस प्रकार का insurance चाहिए?'] }) || '';
   expect(/ALREADY asked/.test(hint) && /किस प्रकार का insurance/.test(hint) && /unsure/.test(hint), 'hints list the questions already asked and the unsure-caller rule', hint);
   expect(phoneTurnHints({ callerText: 'Motor insurance ke baare mein bataiye' }) === null, 'no hints on an ordinary turn');
