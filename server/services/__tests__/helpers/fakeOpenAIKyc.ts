@@ -9,6 +9,7 @@ import { verhoeffCheckDigit } from "@shared/aadhaar";
 export const VALID = (() => { const b = '23456789012'; return b + verhoeffCheckDigit(b); })();
 export const MISREAD = VALID.slice(0, 6) + ((Number(VALID[6]) + 1) % 10) + VALID.slice(7);
 export const VID = '9123456789012345';
+export const OTHER_VALID = (() => { const b = '87654321098'; return b + verhoeffCheckDigit(b); })();
 
 // Scripted answers per scenario: [mini answer, gpt-4o answer]. The scenario id
 // travels in the fake image data URL.
@@ -33,6 +34,13 @@ export const SCENARIOS: Record<string, { cls?: string; mini: Answer; gpt4o?: Ans
   misread_front: {
     mini: { data: { aadhaar_number: MISREAD, full_name: 'Asha Verma', address: null, dob: '01/02/1990', gender: 'Female', father_name: null }, confidence: 0.92, side: 'front' },
     gpt4o: { data: { aadhaar_number: VALID, full_name: 'Asha Verma', address: null, dob: '01/02/1990', gender: 'Female', father_name: null }, confidence: 0.97, side: 'front' },
+  },
+  front_side: {
+    mini: { data: { aadhaar_number: VALID, full_name: 'Asha Verma', address: null, dob: '01/02/1990', gender: 'Female', father_name: null }, confidence: 0.95, side: 'front' },
+  },
+  // The front of someone else's Aadhaar (another valid number).
+  other_front: {
+    mini: { data: { aadhaar_number: OTHER_VALID, full_name: 'Ravi Kumar', address: null, dob: '05/06/1985', gender: 'Male', father_name: null }, confidence: 0.95, side: 'front' },
   },
   masked: {
     mini: { data: { aadhaar_number: 'XXXX XXXX 1234', full_name: 'Asha Verma', address: '12 MG Road, Pune 411001', dob: null, gender: null, father_name: null }, confidence: 0.9, side: null },

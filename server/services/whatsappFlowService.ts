@@ -128,6 +128,23 @@ export function isRestartRequest(message: string): boolean {
   return new RegExp(`^${prefix}(?:${core})${suffix}$`).test(text);
 }
 
+/**
+ * Two photos can belong to one card: true unless both show a document number and the numbers
+ * differ by more than a couple of misread characters (masked digits don't count against it).
+ */
+export function sameDocumentNumber(a: string | undefined, b: string | undefined): boolean {
+  const norm = (s: string) => s.replace(/[\s\-\.\/]+/g, '').toUpperCase();
+  if (!a || !b) return true;
+  const x = norm(a), y = norm(b);
+  if (!x || !y) return true;
+  if (x.length !== y.length) return false;
+  let differ = 0;
+  for (let i = 0; i < x.length; i++) {
+    if (x[i] !== y[i] && x[i] !== 'X' && y[i] !== 'X') differ++;
+  }
+  return differ <= 2;
+}
+
 export class WhatsappFlowService {
   private readonly DEFAULT_SESSION_TIMEOUT_MINUTES = 30;
   private readonly UPLOAD_DEBOUNCE_MS = 4000;
@@ -3885,8 +3902,17 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     }
     collectedData._collectedDocuments = collectedDocs;
 
+    // Waiting for the customer to confirm this document: the extra side's details go into what
+    // they're asked to confirm, and the lead fields are filled when they confirm (not before).
+    const confirmState = collectedData._confirmationState as { docType?: string; pendingData?: Record<string, any> } | undefined;
+    const awaitingConfirmation = !!confirmState
+      && String(confirmState.docType || '').toLowerCase().replace(/_card$/, '') === normalizedDocType;
+    if (awaitingConfirmation) {
+      confirmState!.pendingData = { ...(confirmState!.pendingData || {}), ...existingMerged };
+    }
+
     // Re-apply lead field mappings from updated mergedData
-    if (businessAccountId) {
+    if (businessAccountId && !awaitingConfirmation) {
       try {
         const { documentTypeService: docTypeSvc } = await import('./documentTypeService');
         const config = await docTypeSvc.getDocumentTypeByKey(businessAccountId, normalizedDocType);
@@ -5281,6 +5307,95 @@ Return only JSON: {"optionId":"one configured id" | null}`,
     return undefined;
   }
 
+  /**
+   * A photo arrived while the customer is asked to confirm a document's details. When it is
+   * another photo of that same document (the other side of an Aadhaar, a second PAN photo), it is
+   * added to the document like any extra page, its new details join the ones to confirm, and the
+   * confirmation is shown again. 'other_document' → a different or unreadable document (the
+   * caller keeps asking to confirm first); 'no_longer_pending' → confirmed meanwhile.
+   */
+  private async addPhotoToPendingConfirmation(
+    businessAccountId: string,
+    senderPhone: string,
+    flowId: string,
+    imageUrl: string,
+    filename?: string,
+    preDownloadedBuffer?: Buffer
+  ): Promise<ProcessResult | 'other_document' | 'no_longer_pending'> {
+    const lockKey = `${businessAccountId}:${senderPhone}`;
+    return this.withUploadLock(lockKey, async () => {
+      const session = await this.getActiveSession(businessAccountId, senderPhone);
+      const collectedData = (session?.collectedData as Record<string, any>) || {};
+      const cs = collectedData._confirmationState as { phase: string; docType: string; pendingData: Record<string, any>; fieldEdits: Record<string, string>; fields: { key: string; label: string; value: string }[] } | undefined;
+      if (!session || !cs?.docType) return 'no_longer_pending';
+      const docType = String(cs.docType).toLowerCase().replace(/_card$/, '');
+      const docState = this.getDocumentState(collectedData)[docType];
+      if (!docState || docState.status !== 'complete') return 'other_document';
+
+      const buffer = preDownloadedBuffer || await this.downloadFile(imageUrl);
+      if (!buffer) return 'other_document';
+      const { buffer: jpeg, mimeType, conversionFailed } = await this.convertToJpegIfNeeded(buffer, imageUrl, filename);
+      if (conversionFailed) return 'other_document';
+
+      const steps = await this.getFlowSteps(flowId);
+      const step = steps.find(s => s.stepKey === (collectedData._adaptiveUploadStepKey || session.currentStepKey));
+      const stepDocTypes: any[] = (step?.options as FlowStepOptions | null)?.documentTypes || [];
+      const stepDoc = stepDocTypes.find((d: any) => String(d.docType || '').toLowerCase().replace(/_card$/, '') === docType);
+
+      const { documentIdentificationService } = await import("./documentIdentificationService");
+      const stopUpdates = this.startProcessingUpdates(businessAccountId, senderPhone, session.id);
+      let result: any;
+      try {
+        result = await documentIdentificationService.identifyDocument(
+          businessAccountId,
+          `data:${mimeType};base64,${jpeg.toString('base64')}`,
+          this.buildAadhaarSideHint(collectedData, senderPhone),
+          [stepDoc?.docType || cs.docType],
+        );
+      } catch (err) {
+        console.warn(`[WhatsApp Flow] Photo during ${docType} confirmation could not be read:`, (err as Error)?.message);
+        return 'other_document';
+      } finally {
+        stopUpdates();
+      }
+
+      const resultType = String(result?.documentType || 'unknown').toLowerCase().replace(/_card$/, '');
+      const hasAnyField = Object.values(result?.extractedData || {}).some((v: any) => v !== null && v !== undefined && String(v).trim() !== '');
+      if (resultType !== docType || !hasAnyField) {
+        console.log(`[WhatsApp Flow] Photo during ${docType} confirmation is ${resultType} — asking to confirm first`);
+        return 'other_document';
+      }
+      if (!sameDocumentNumber(this.docNumberOf(docState.mergedData), this.docNumberOf(result.extractedData))) {
+        console.log(`[WhatsApp Flow] Photo during ${docType} confirmation shows a different ${docType} number — asking to confirm first`);
+        return 'other_document';
+      }
+
+      console.log(`[WhatsApp Flow] Extra photo for ${docType} while its confirmation is pending (side: ${result.side || 'unknown'}) — keeping it with the document`);
+      await this.enrichCompletedDocumentFromExtraPage(session, docType, result, collectedData, businessAccountId, imageUrl);
+
+      const summary = await this.buildConfirmationSummary(businessAccountId, cs.docType, { ...cs.pendingData, ...(cs.fieldEdits || {}) });
+      cs.fields = summary.fields;
+      cs.phase = 'awaiting_action';
+      await this.updateSessionData(session.id, collectedData);
+
+      const label = stepDoc?.label || docType.replace(/_/g, ' ');
+      const side = result.side === 'front' || result.side === 'back' ? `*${result.side}* of your ${label}` : `other photo of your ${label}`;
+      return {
+        handled: true,
+        response: {
+          type: "buttons",
+          text: `Got the ${side} too — added it.\n\n${this.formatConfirmationMessage(summary)}`,
+          buttons: [
+            { id: "doc_confirm", title: "✅ Confirm" },
+            { id: "doc_update", title: "✏️ Update" },
+          ],
+        },
+        collectedData,
+        sessionId: session.id,
+      };
+    });
+  }
+
   async processImageUpload(
     businessAccountId: string,
     senderPhone: string,
@@ -5304,6 +5419,14 @@ Return only JSON: {"optionId":"one configured id" | null}`,
 
     const collectedDataForGuard = (session.collectedData as Record<string, any>) || {};
     if (collectedDataForGuard._confirmationState) {
+      // Another photo of the document waiting for confirmation (e.g. the Aadhaar's other side,
+      // sent a few seconds after the first) is kept with it instead of being turned away.
+      const isPdfUpload = this.isPdfFile(imageUrl) || !!filename?.toLowerCase().endsWith('.pdf');
+      if (!isPdfUpload && !this.isUpdateFlowStep(session.currentStepKey)) {
+        const extra = await this.addPhotoToPendingConfirmation(businessAccountId, senderPhone, activeFlow.id, imageUrl, filename, preDownloadedBuffer);
+        if (extra === 'no_longer_pending') return this.processImageUpload(businessAccountId, senderPhone, imageUrl, filename, preDownloadedBuffer);
+        if (extra !== 'other_document') return extra;
+      }
       const cs = collectedDataForGuard._confirmationState as { phase: string; docType: string; pendingData: Record<string, any>; fieldEdits: Record<string, string>; fields: { key: string; label: string; value: string }[] };
       console.log(`[WhatsApp Flow] New upload while confirmation pending for ${cs.docType} — reminding user to confirm first`);
       const summary = await this.buildConfirmationSummary(businessAccountId, cs.docType, { ...cs.pendingData, ...(cs.fieldEdits || {}) });
