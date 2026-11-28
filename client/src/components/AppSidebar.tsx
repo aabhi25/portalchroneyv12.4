@@ -325,8 +325,8 @@ export function AppSidebar({ user }: AppSidebarProps) {
                           gradient="bg-gradient-to-br from-pink-500 to-rose-600"
                         />
                       )}
-                      {/* AI assessment (pilot): super admins only, once switched on in Settings › Features. */}
-                      {isSuperAdminImpersonating && user?.businessAccount?.answerCheckingEnabled && (
+                      {/* AI assessment: the account's users and super admins, once switched on in Settings › Features. */}
+                      {user?.businessAccount?.answerCheckingEnabled && (
                         <NavItem
                           icon={FileCheck2}
                           label="Assessment"

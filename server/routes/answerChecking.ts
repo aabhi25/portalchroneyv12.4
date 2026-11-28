@@ -83,13 +83,17 @@ import { listQuestionPictures } from "../services/answerCheck/pictures";
 const router = Router();
 const BASE = "/api/answer-checking";
 
-/** A super admin viewing a business account (the account the pilot works on). */
+/**
+ * The account AI assessment works on: a business user's own account, or the account a super admin
+ * is viewing. Every query below is limited to it. Switching the feature on or off stays with super
+ * admins (Settings › Features); while it is off, anything that would call the AI is refused (requireOn).
+ */
 function requireViewedAccount(req: Request, res: Response, next: () => void) {
   if (!(req as any).user?.activeBusinessAccountId) return res.status(400).json({ error: "Open a business account first." });
   next();
 }
 
-const superAdmin = [requireAuth, requireRole("super_admin"), requireViewedAccount];
+const superAdmin = [requireAuth, requireRole("super_admin", "business_user"), requireViewedAccount];
 
 function accountId(req: Request): string {
   return (req as any).user.activeBusinessAccountId;

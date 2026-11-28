@@ -421,8 +421,8 @@ function AppContent({ currentUser }: { currentUser: MeResponseDto | null }) {
                 <Route path="/admin/topscholar/tester" component={TopScholarWidgetTester} />
                 <Route path="/admin/topscholar/analytics" component={TopScholarAnalytics} />
                 <Route path="/admin/topscholar/debug" component={TopScholarDebug} />
-                {/* AI assessment (pilot): super admins viewing an account with the feature switched on. */}
-                {isSuperAdminImpersonating && user?.businessAccount?.answerCheckingEnabled && (
+                {/* AI assessment: the account's users and super admins, once switched on in Settings › Features. */}
+                {user?.businessAccount?.answerCheckingEnabled && (
                   <>
                     <Route path="/admin/assessment">{() => billingPage(<AssessmentsHome />)}</Route>
                     <Route path="/admin/assessment/new">{() => billingPage(<AssessmentEditor />)}</Route>

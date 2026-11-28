@@ -422,7 +422,7 @@ export default function AccountFeaturesSettings({ businessAccountId }: { busines
           <Row
             icon={FileCheck2} tint="bg-orange-500" label="AI assessment (pilot)"
             description="The AI reads students' handwritten answers and marks them against a marking scheme"
-            below={<p className="mt-1 text-[12px] text-gray-500">Shows as Education › Assessment, only for super admins viewing this account. Off = nothing is checked and no AI cost is spent.</p>}
+            below={<p className="mt-1 text-[12px] text-gray-500">Shows as Education › Assessment for the account's own users and for super admins. Off = it is hidden from everyone, nothing is checked and no AI cost is spent.</p>}
           >
             {flagSwitch("answerCheckingEnabled", "AI assessment")}
           </Row>
